@@ -172,6 +172,7 @@ struct cipher_context {
 };
 
 struct tls_context {
+	__u16 context_copy_start[0];
 	union {
 		struct tls_crypto_info crypto_send;
 		struct tls12_crypto_info_aes_gcm_128 crypto_send_aes_gcm_128;
@@ -180,10 +181,10 @@ struct tls_context {
 		struct tls_crypto_info crypto_recv;
 		struct tls12_crypto_info_aes_gcm_128 crypto_recv_aes_gcm_128;
 	};
+	__u16 context_copy_end[0];
 
 	struct list_head list;
 	struct net_device *netdev;
-	refcount_t refcount;
 
 	void *priv_ctx_tx;
 	void *priv_ctx_rx;
@@ -237,7 +238,8 @@ int tls_sk_query(struct sock *sk, int optname, char __user *optval,
 int tls_sk_attach(struct sock *sk, int optname, char __user *optval,
 		  unsigned int optlen);
 
-int tls_set_sw_offload(struct sock *sk, struct tls_context *ctx, int tx);
+int tls_set_sw_offload(struct sock *sk, struct tls_context *ctx, int tx,
+		       bool override_cbs);
 int tls_sw_sendmsg(struct sock *sk, struct msghdr *msg, size_t size);
 int tls_sw_sendpage(struct sock *sk, struct page *page,
 		    int offset, size_t size, int flags);
@@ -396,6 +398,13 @@ static inline struct tls_context *tls_get_ctx(const struct sock *sk)
 	struct inet_connection_sock *icsk = inet_csk(sk);
 
 	return icsk->icsk_ulp_data;
+}
+
+static inline void tls_set_ctx(const struct sock *sk, struct tls_context *ctx)
+{
+	struct inet_connection_sock *icsk = inet_csk(sk);
+
+	icsk->icsk_ulp_data = ctx;
 }
 
 static inline struct tls_sw_context_rx *tls_sw_ctx_rx(

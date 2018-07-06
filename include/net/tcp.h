@@ -2048,9 +2048,8 @@ enum {
 struct tcp_ulp_ops {
 	struct list_head	list;
 
-	/* initialize ulp */
 	int (*init)(struct sock *sk);
-	/* cleanup ulp */
+	int (*clone)(struct sock *newsk, const struct sock *sk);
 	void (*release)(struct sock *sk);
 
 	int		uid;

@@ -1128,7 +1128,8 @@ void tls_sw_free_resources_rx(struct sock *sk)
 	kfree(ctx);
 }
 
-int tls_set_sw_offload(struct sock *sk, struct tls_context *ctx, int tx)
+int tls_set_sw_offload(struct sock *sk, struct tls_context *ctx, int tx,
+		       bool override_cbs)
 {
 	char keyval[TLS_CIPHER_AES_GCM_128_KEY_SIZE];
 	struct tls_crypto_info *crypto_info;
@@ -1278,12 +1279,13 @@ int tls_set_sw_offload(struct sock *sk, struct tls_context *ctx, int tx)
 
 		strp_init(&sw_ctx_rx->strp, sk, &cb);
 
-		write_lock_bh(&sk->sk_callback_lock);
-		sw_ctx_rx->saved_data_ready = sk->sk_data_ready;
-		sk->sk_data_ready = tls_data_ready;
-		write_unlock_bh(&sk->sk_callback_lock);
-
-		sw_ctx_rx->sk_poll = sk->sk_socket->ops->poll;
+		if (override_cbs) {
+			write_lock_bh(&sk->sk_callback_lock);
+			sw_ctx_rx->saved_data_ready = sk->sk_data_ready;
+			sw_ctx_rx->sk_poll = sk->sk_socket->ops->poll;
+			sk->sk_data_ready = tls_data_ready;
+			write_unlock_bh(&sk->sk_callback_lock);
+		}
 
 		strp_check_rcv(&sw_ctx_rx->strp);
 	}

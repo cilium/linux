@@ -789,6 +789,10 @@ struct sock *inet_csk_clone_lock(const struct sock *sk,
 		inet_sk_set_state(newsk, TCP_SYN_RECV);
 		newicsk->icsk_bind_hash = NULL;
 
+		/* bail out on error */
+		if (newicsk->icsk_ulp_ops && newicsk->icsk_ulp_ops->clone)
+			newicsk->icsk_ulp_ops->clone(newsk, sk);
+
 		inet_sk(newsk)->inet_dport = inet_rsk(req)->ir_rmt_port;
 		inet_sk(newsk)->inet_num = inet_rsk(req)->ir_num;
 		inet_sk(newsk)->inet_sport = htons(inet_rsk(req)->ir_num);

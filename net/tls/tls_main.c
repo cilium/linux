@@ -461,7 +461,7 @@ static int do_tls_setsockopt_conf(struct sock *sk, char __user *optval,
 #else
 		{
 #endif
-			rc = tls_set_sw_offload(sk, ctx, 1);
+			rc = tls_set_sw_offload(sk, ctx, 1, true);
 			conf = TLS_SW;
 		}
 	} else {
@@ -472,7 +472,7 @@ static int do_tls_setsockopt_conf(struct sock *sk, char __user *optval,
 #else
 		{
 #endif
-			rc = tls_set_sw_offload(sk, ctx, 0);
+			rc = tls_set_sw_offload(sk, ctx, 0, true);
 			conf = TLS_SW;
 		}
 	}
@@ -530,16 +530,13 @@ static int tls_setsockopt(struct sock *sk, int level, int optname,
 	return do_tls_setsockopt(sk, optname, optval, optlen);
 }
 
-static struct tls_context *create_ctx(struct sock *sk)
+static struct tls_context *tls_create_ctx(struct sock *sk)
 {
-	struct inet_connection_sock *icsk = inet_csk(sk);
 	struct tls_context *ctx;
 
 	ctx = kzalloc(sizeof(*ctx), GFP_KERNEL);
-	if (!ctx)
-		return NULL;
-
-	icsk->icsk_ulp_data = ctx;
+	/* In case of error we reset ulp data as well. */
+	tls_set_ctx(sk, ctx);
 	return ctx;
 }
 
@@ -552,7 +549,7 @@ static int tls_hw_prot(struct sock *sk)
 	mutex_lock(&device_mutex);
 	list_for_each_entry(dev, &device_list, dev_list) {
 		if (dev->feature && dev->feature(dev)) {
-			ctx = create_ctx(sk);
+			ctx = tls_create_ctx(sk);
 			if (!ctx)
 				goto out;
 
@@ -650,26 +647,14 @@ static int tls_init(struct sock *sk)
 {
 	int ip_ver = sk->sk_family == AF_INET6 ? TLSV6 : TLSV4;
 	struct tls_context *ctx;
-	int rc = 0;
 
 	if (tls_hw_prot(sk))
-		goto out;
+		return 0;
 
-	/* The TLS ulp is currently supported only for TCP sockets
-	 * in ESTABLISHED state.
-	 * Supporting sockets in LISTEN state will require us
-	 * to modify the accept implementation to clone rather then
-	 * share the ulp context.
-	 */
-	if (sk->sk_state != TCP_ESTABLISHED)
-		return -ENOTSUPP;
+	ctx = tls_create_ctx(sk);
+	if (!ctx)
+		return -ENOMEM;
 
-	/* allocate tls context */
-	ctx = create_ctx(sk);
-	if (!ctx) {
-		rc = -ENOMEM;
-		goto out;
-	}
 	ctx->setsockopt = sk->sk_prot->setsockopt;
 	ctx->getsockopt = sk->sk_prot->getsockopt;
 	ctx->sk_proto_close = sk->sk_prot->close;
@@ -687,9 +672,59 @@ static int tls_init(struct sock *sk)
 
 	ctx->tx_conf = TLS_BASE;
 	ctx->rx_conf = TLS_BASE;
+
 	update_sk_prot(sk, ctx);
-out:
-	return rc;
+	return 0;
+}
+
+static int tls_clone(struct sock *newsk, const struct sock *sk)
+{
+	struct tls_context *old = tls_get_ctx(sk);
+	struct tls_context *new;
+	struct tls_sw_context_rx *new_rx, *old_rx;
+	int ret;
+
+	if (!try_module_get(THIS_MODULE)) {
+		WARN_ON(1); // free ctx
+		return -EINVAL;
+	}
+
+	new = tls_create_ctx(newsk);
+	if (!new)
+		return -ENOMEM;
+
+	memcpy(&new->context_copy_start, &old->context_copy_start,
+	       offsetof(struct tls_context, context_copy_end) -
+	       offsetof(struct tls_context, context_copy_start));
+
+#ifdef CONFIG_TLS_DEVICE
+	if (old->tx_conf == TLS_HW)
+		ret = tls_set_device_offload(newsk, new);
+	else
+#endif
+		ret = tls_set_sw_offload(newsk, new, 1, false);
+	if (ret < 0) {
+		WARN_ON(1); // free ctx
+	}
+
+	ret = tls_set_sw_offload(newsk, new, 0, false);
+	if (ret < 0) {
+		WARN_ON(1); // free ctx
+	}
+
+	new_rx = tls_sw_ctx_rx(new);
+	old_rx = tls_sw_ctx_rx(old);
+	new_rx->saved_data_ready = old_rx->saved_data_ready;
+	new_rx->sk_poll = old_rx->sk_poll;
+
+	new->setsockopt = old->setsockopt;
+	new->getsockopt = old->getsockopt;
+	new->sk_proto_close = old->sk_proto_close;
+
+	new->tx_conf = old->tx_conf;
+	new->rx_conf = old->rx_conf;
+
+	return 0;
 }
 
 void tls_register_device(struct tls_device *device)
@@ -714,6 +749,7 @@ static struct tcp_ulp_ops tcp_tls_ulp_ops __read_mostly = {
 	.user_visible		= true,
 	.owner			= THIS_MODULE,
 	.init			= tls_init,
+	.clone			= tls_clone,
 };
 
 static int __init tls_register(void)
