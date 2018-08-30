@@ -20,6 +20,7 @@
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <linux/bpf.h>
+#include <linux/kcm.h>
 
 #include <bpf/bpf.h>
 #include <bpf/libbpf.h>
@@ -479,14 +480,16 @@ static void test_devmap(int task, void *data)
 #define SOCKMAP_PARSE_PROG "./sockmap_parse_prog.o"
 #define SOCKMAP_VERDICT_PROG "./sockmap_verdict_prog.o"
 #define SOCKMAP_TCP_MSG_PROG "./sockmap_tcp_msg_prog.o"
+#define KCM_PROG "./sockmap_kcm.o"
 static void test_sockmap(int tasks, void *data)
 {
 	struct bpf_map *bpf_map_rx, *bpf_map_tx, *bpf_map_msg, *bpf_map_break;
-	int map_fd_msg = 0, map_fd_rx = 0, map_fd_tx = 0, map_fd_break;
+	int map_fd_msg = 0, map_fd_rx = 0, map_fd_tx = 0, map_fd_break, kcm;
 	int ports[] = {50200, 50201, 50202, 50204};
 	int err, i, fd, udp, sfd[6] = {0xdeadbeef};
 	u8 buf[20] = {0x0, 0x5, 0x3, 0x2, 0x1, 0x0};
-	int parse_prog, verdict_prog, msg_prog;
+	int parse_prog, verdict_prog, msg_prog, kcm_prog;
+	struct kcm_attach attach_info;
 	struct sockaddr_in addr;
 	int one = 1, s, sc, rc;
 	struct bpf_object *obj;
@@ -740,6 +743,62 @@ static void test_sockmap(int tasks, void *data)
 		goto out_sockmap;
 	}
 
+	/* Test adding a KCM socket into map */
+#define AF_KCM 41
+	kcm = socket(AF_KCM, SOCK_DGRAM, KCMPROTO_CONNECTED);
+	if (kcm == -1) {
+		printf("Warning, KCM+Sockmap could not be tested.\n");
+		goto skip_kcm;
+	}
+
+	err = bpf_prog_load(KCM_PROG,
+			    BPF_PROG_TYPE_SOCKET_FILTER,
+			    &obj, &kcm_prog);
+	if (err) {
+		printf("Failed to load SK_SKB parse prog\n");
+		goto out_sockmap;
+	}
+
+	i = 2;
+	memset(&attach_info, 0, sizeof(attach_info));
+	attach_info.fd = sfd[i];
+	attach_info.bpf_fd = kcm_prog;
+	err = ioctl(kcm, SIOCKCMATTACH, &attach_info);
+	if (!err) {
+		perror("Failed KCM attached to sockmap fd: ");
+		goto out_sockmap;
+	}
+
+	err = bpf_map_delete_elem(fd, &i);
+	if (err) {
+		printf("Failed delete sockmap from empty map %i %i\n", err, errno);
+		goto out_sockmap;
+	}
+
+	err = ioctl(kcm, SIOCKCMATTACH, &attach_info);
+	if (err) {
+		perror("Failed KCM attach");
+		goto out_sockmap;
+	}
+
+	err = bpf_map_update_elem(fd, &i, &sfd[i], BPF_ANY);
+	if (!err) {
+		printf("Failed sockmap attached KCM sock!\n");
+		goto out_sockmap;
+	}
+	err = ioctl(kcm, SIOCKCMUNATTACH, &attach_info);
+	if (err) {
+		printf("Failed detattch KCM sock!\n");
+		goto out_sockmap;
+	}
+
+	err = bpf_map_update_elem(fd, &i, &sfd[i], BPF_ANY);
+	if (err) {
+		printf("Failed post-kcm update sockmap '%i:%i'\n",
+		       i, sfd[i]);
+		goto out_sockmap;
+	}
+
 	/* Test map update elem afterwards fd lives in fd and map_fd */
 	for (i = 0; i < 6; i++) {
 		err = bpf_map_update_elem(map_fd_rx, &i, &sfd[i], BPF_ANY);
@@ -772,6 +831,7 @@ static void test_sockmap(int tasks, void *data)
 		}
 	}
 
+skip_kcm:
 	/* Put sfd[2] (sending fd below) into msg map to test sendmsg bpf */
 	i = 0;
 	err = bpf_map_update_elem(map_fd_msg, &i, &sfd[2], BPF_ANY);
