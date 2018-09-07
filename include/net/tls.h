@@ -39,6 +39,8 @@
 #include <linux/crypto.h>
 #include <linux/socket.h>
 #include <linux/tcp.h>
+#include <linux/skmsg.h>
+
 #include <net/tcp.h>
 #include <net/strparser.h>
 
@@ -99,17 +101,12 @@ struct tls_sw_context_tx {
 
 	char aad_space[TLS_AAD_SPACE_SIZE];
 
-	unsigned int sg_plaintext_size;
-	int sg_plaintext_num_elem;
-	struct scatterlist sg_plaintext_data[MAX_SKB_FRAGS];
+	struct sk_msg msg_plaintext;
+	struct sk_msg msg_encrypted;
 
-	unsigned int sg_encrypted_size;
-	int sg_encrypted_num_elem;
-	struct scatterlist sg_encrypted_data[MAX_SKB_FRAGS];
-
-	/* AAD | sg_plaintext_data | sg_tag */
+	/* AAD | msg_plaintext.sg.data | sg_tag */
 	struct scatterlist sg_aead_in[2];
-	/* AAD | sg_encrypted_data (data contain overhead for hdr&iv&tag) */
+	/* AAD | msg_encrypted.sg.data (data contains overhead for hdr & iv & tag) */
 	struct scatterlist sg_aead_out[2];
 };
 
