@@ -156,7 +156,7 @@ static int sockmap_init_ktls(int verbose, int s)
 
 	err = setsockopt(s, 6, TCP_ULP, "tls", sizeof("tls"));
 	if (err) {
-		fprintf(stderr, "setsockopt: TCP_ULP(%s) failed with error %i\n", sock_to_string(s), err);
+		fprintf(stderr, "setsockopt: TCP_ULP(%s) failed with error %i:%i\n", sock_to_string(s), err, errno);
 		return -EINVAL;
 	}
 	err = setsockopt(s, SOL_TLS, TLS_TX, (void *)&tls_tx, sizeof(tls_tx));
@@ -393,6 +393,7 @@ static int msg_loop(int fd, int iov_count, int iov_length, int cnt,
 			int sent = sendmsg(fd, &msg, flags);
 
 			if (!drop && sent < 0) {
+				printf("%s: error %i errno %i\n", __func__, sent, errno);
 				perror("send loop error:");
 				goto out_errno;
 			} else if (drop && sent >= 0) {
@@ -428,7 +429,7 @@ static int msg_loop(int fd, int iov_count, int iov_length, int cnt,
 				timeout.tv_sec = 0;
 				timeout.tv_usec = 300000;
 			} else {
-				timeout.tv_sec = 1;
+				timeout.tv_sec = 3;
 				timeout.tv_usec = 0;
 			}
 
@@ -445,6 +446,7 @@ static int msg_loop(int fd, int iov_count, int iov_length, int cnt,
 				if (opt->verbose)
 					fprintf(stderr, "unexpected timeout\n");
 				errno = -EIO;
+				fprintf(stderr, "expected %f recv %i\n", total_bytes, s->bytes_recvd);
 				clock_gettime(CLOCK_MONOTONIC, &s->end);
 				goto out_errno;
 			}
@@ -556,8 +558,8 @@ static int sendmsg_test(struct sockmap_options *opt)
 			fprintf(stderr,
 				"msg_loop_rx: iov_count %i iov_buf %i cnt %i err %i\n",
 				iov_count, iov_buf, cnt, err);
-		shutdown(p2, SHUT_RDWR);
-		shutdown(p1, SHUT_RDWR);
+		//shutdown(p2, SHUT_RDWR);
+		//shutdown(p1, SHUT_RDWR);
 		if (s.end.tv_sec - s.start.tv_sec) {
 			sent_Bps = sentBps(s);
 			recvd_Bps = recvdBps(s);
@@ -587,7 +589,7 @@ static int sendmsg_test(struct sockmap_options *opt)
 			fprintf(stderr,
 				"msg_loop_tx: iov_count %i iov_buf %i cnt %i err %i\n",
 				iov_count, iov_buf, cnt, err);
-		shutdown(c1, SHUT_RDWR);
+		//shutdown(c1, SHUT_RDWR);
 		if (s.end.tv_sec - s.start.tv_sec) {
 			sent_Bps = sentBps(s);
 			recvd_Bps = recvdBps(s);
@@ -1147,7 +1149,7 @@ static int test_send(struct sockmap_options *opt, int cgrp)
 		goto out;
 
 	opt->iov_length = 256;
-	opt->iov_count = 1024;
+	opt->iov_count = 10;//24;
 	opt->rate = 2;
 	err = test_exec(cgrp, opt);
 	if (err)
@@ -1447,12 +1449,15 @@ static int __test_suite(char *bpf_file)
 		return err;
 	}
 
+#if 0
 	if (setup_cgroup_environment()) {
 		fprintf(stderr, "ERROR: cgroup env failed\n");
 		return -EINVAL;
 	}
 
 	cg_fd = create_and_get_cgroup(CG_PATH);
+#endif
+	cg_fd = open("/mnt/cgroup2/", O_DIRECTORY, O_RDONLY);
 	if (cg_fd < 0) {
 		fprintf(stderr,
 			"ERROR: (%i) open cg path failed: %s\n",
@@ -1460,19 +1465,21 @@ static int __test_suite(char *bpf_file)
 		return cg_fd;
 	}
 
+#if 0
 	if (join_cgroup(CG_PATH)) {
 		fprintf(stderr, "ERROR: failed to join cgroup\n");
 		return -EINVAL;
 	}
+#endif
 
 	/* Tests basic commands and APIs with range of iov values */
 	txmsg_start = txmsg_end = 0;
-	err = test_txmsg(cg_fd);
+	err = 0;//test_txmsg(cg_fd);
 	if (err)
 		goto out;
 
 	/* Tests interesting combinations of APIs used together */
-	err = test_mixed(cg_fd);
+	err = 0;//test_mixed(cg_fd);
 	if (err)
 		goto out;
 
@@ -1483,7 +1490,7 @@ static int __test_suite(char *bpf_file)
 
 out:
 	printf("Summary: %i PASSED %i FAILED\n", passed, failed);
-	cleanup_cgroup_environment();
+//	cleanup_cgroup_environment();
 	close(cg_fd);
 	return err;
 }
@@ -1492,6 +1499,7 @@ static int test_suite(void)
 {
 	int err;
 
+	ktls = 1;
 	err = __test_suite(BPF_SOCKMAP_FILENAME);
 	if (err)
 		goto out;

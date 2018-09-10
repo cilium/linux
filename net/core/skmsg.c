@@ -124,11 +124,7 @@ static int __sk_msg_free(struct sock *sk,
 {
 	struct scatterlist *sge = sk_msg_elem(msg, i);
 	int freed = 0;
-
-	/* sg_size is not always accurate in tcp_bpf.c on teardown
-	 * so using while(msg->sg.size will cause null ptr deref.
-	 */
-#if 0
+#if 0 // remove this, we need the while sge->length to catch wrap-around
 	while (i != msg->sg.end) {
 		freed += sk_msg_free_elem(sk, msg, i, charge);
 		sk_msg_iter_var(i);

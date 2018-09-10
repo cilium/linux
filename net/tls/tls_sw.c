@@ -254,7 +254,7 @@ out_req:
 	return rc;
 }
 
-static int bpf_exec_tx_verdict(struct sk_msg *m,
+static int bpf_exec_tx_verdict(struct sk_msg *m, // better func name
 			       struct sock *sk,
 			       unsigned char record_type,
 			       size_t *copied, int flags)
@@ -293,12 +293,13 @@ more_data:
 	case __SK_REDIRECT:
 		redir = psock->sk_redir;
 		memcpy(&mredir, m, sizeof(*m));
+		// tbd need two helpers sk_psock_apply_bytes and sk_msg_apply_bytes
 		if (m->apply_bytes < send)
 			m->apply_bytes = 0;
 		else
 			m->apply_bytes -= send;
 		sk_msg_return_zero(sk, m, send);
-		m->sg.size -= send;
+		m->sg.size -= send; // move sg.size dec into sk_msg_return_zero
 		release_sock(sk);
  		err = tcp_bpf_sendmsg_redir(redir, &mredir, send, flags);
  		lock_sock(sk);
@@ -318,7 +319,7 @@ more_data:
 		return -EACCES;
 	}
  	if (likely(!err)) {
-		if (!psock->apply_bytes) {// msg->apply_bytes
+		if (!m->apply_bytes) {
 			psock->eval = __SK_NONE;
 			if (psock->sk_redir) {
 				sock_put(psock->sk_redir);
