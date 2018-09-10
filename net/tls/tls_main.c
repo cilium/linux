@@ -614,12 +614,14 @@ static void build_protos(struct proto prot[TLS_NUM_CONFIG][TLS_NUM_CONFIG],
 	prot[TLS_SW][TLS_BASE].sendpage		= tls_sw_sendpage;
 
 	prot[TLS_BASE][TLS_SW] = prot[TLS_BASE][TLS_BASE];
-	prot[TLS_BASE][TLS_SW].recvmsg		= tls_sw_recvmsg;
-	prot[TLS_BASE][TLS_SW].close		= tls_sk_proto_close;
+	prot[TLS_BASE][TLS_SW].recvmsg		  = tls_sw_recvmsg;
+	prot[TLS_BASE][TLS_SW].stream_memory_read = tls_sw_stream_read;
+	prot[TLS_BASE][TLS_SW].close		  = tls_sk_proto_close;
 
 	prot[TLS_SW][TLS_SW] = prot[TLS_SW][TLS_BASE];
-	prot[TLS_SW][TLS_SW].recvmsg	= tls_sw_recvmsg;
-	prot[TLS_SW][TLS_SW].close	= tls_sk_proto_close;
+	prot[TLS_SW][TLS_SW].recvmsg		= tls_sw_recvmsg;
+	prot[TLS_SW][TLS_SW].stream_memory_read	= tls_sw_stream_read;
+	prot[TLS_SW][TLS_SW].close		= tls_sk_proto_close;
 
 #ifdef CONFIG_TLS_DEVICE
 	prot[TLS_HW][TLS_BASE] = prot[TLS_BASE][TLS_BASE];
@@ -715,7 +717,6 @@ static int tls_clone(struct sock *newsk, const struct sock *sk)
 	new_rx = tls_sw_ctx_rx(new);
 	old_rx = tls_sw_ctx_rx(old);
 	new_rx->saved_data_ready = old_rx->saved_data_ready;
-	new_rx->sk_poll = old_rx->sk_poll;
 
 	new->setsockopt = old->setsockopt;
 	new->getsockopt = old->getsockopt;
@@ -756,7 +757,6 @@ static int __init tls_register(void)
 	build_protos(tls_prots[TLSV4], &tcp_prot);
 
 	tls_sw_proto_ops = inet_stream_ops;
-	tls_sw_proto_ops.poll = tls_sw_poll;
 	tls_sw_proto_ops.splice_read = tls_sw_splice_read;
 
 #ifdef CONFIG_TLS_DEVICE
