@@ -176,13 +176,7 @@ static void __sk_msg_free_partial(struct sock *sk, struct sk_msg *msg, u32 bytes
 			break;
 		}
 
-		if (charge)
-			sk_mem_uncharge(sk, free);
-
 		msg->sg.size -= free;
-		sge->length = 0;//not needed
-		sge->offset = 0;//not needed
-
 		sk_msg_free_elem(sk, msg, i, charge);
 		bytes -= free;
 
