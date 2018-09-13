@@ -125,27 +125,12 @@ static int __sk_msg_free(struct sock *sk,
 	struct scatterlist *sge = sk_msg_elem(msg, i);
 	int freed = 0;
 
-	/* sg_size is not always accurate in tcp_bpf.c on teardown
-	 * so using while(msg->sg.size will cause null ptr deref.
-	 */
-#if 0
-	while (i != msg->sg.end) {
-		freed += sk_msg_free_elem(sk, msg, i, charge);
-		sk_msg_iter_var(i);
-	}
-#else
-	/* Check sg.size to account for encrypted ring where data
-	 * is in-flight so length is non-zero in scatterlist.
-	 */
-	if (!msg->sg.size)
-		return freed;
-
-	while (sge->length) {
+	while (msg->sg.size) {
 		freed += sk_msg_free_elem(sk, msg, i, charge);
 		sk_msg_iter_var(i);
 		sge = sk_msg_elem(msg, i);
 	}
-#endif
+
 	if (msg->skb)
 		consume_skb(msg->skb);
 	return freed;
