@@ -131,6 +131,11 @@ static inline void sk_msg_apply_bytes(struct sk_psock *psock, u32 bytes)
         }
 }
 
+static inline bool sk_msg_is_full(struct sk_msg *msg)
+{
+	return (msg->sg.end == msg->sg.start) && msg->sg.size;
+}
+
 #define sk_msg_iter_var_prev(var)			\
 	do {						\
 		if (var == 0)				\

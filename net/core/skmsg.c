@@ -28,10 +28,6 @@ int sk_msg_alloc(struct sock *sk, struct sk_msg *msg, int len,
 		if (!sk_wmem_schedule(sk, use))
 			return -ENOMEM;
 
-		sk_mem_charge(sk, use);
-		msg->sg.size += use;
-		pfrag->offset += use;
-
 		i = msg->sg.end;
 		sk_msg_iter_var_prev(i);
 		sge = &msg->sg.data[i];
@@ -46,8 +42,20 @@ int sk_msg_alloc(struct sock *sk, struct sk_msg *msg, int len,
 				msg->sg.curr = i;
 				msg->sg.copybreak = sge->length;
 			}
+			sk_mem_charge(sk, use);
+			msg->sg.size += use;
+			pfrag->offset += use;
 			sge->length += use;
 		} else {
+			if (sk_msg_is_full(msg)) {
+				ret = -ENOSPC;
+				break;
+			}
+
+			sk_mem_charge(sk, use);
+			msg->sg.size += use;
+			pfrag->offset += use;
+
 			sge = &msg->sg.data[msg->sg.end];
 			sg_unmark_end(sge);
 			sg_set_page(sge, pfrag->page, use, orig_offset);
