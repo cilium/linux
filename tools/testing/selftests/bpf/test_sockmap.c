@@ -428,7 +428,7 @@ static int msg_loop(int fd, int iov_count, int iov_length, int cnt,
 				timeout.tv_sec = 0;
 				timeout.tv_usec = 300000;
 			} else {
-				timeout.tv_sec = 1;
+				timeout.tv_sec = 3;
 				timeout.tv_usec = 0;
 			}
 
@@ -1464,6 +1464,7 @@ static int __test_suite(int cg_fd, char *bpf_file)
 		}
 	}
 
+	ktls = 0;
 	/* Tests basic commands and APIs with range of iov values */
 	txmsg_start = txmsg_end = 0;
 	err = test_txmsg(cg_fd);

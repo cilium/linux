@@ -178,9 +178,10 @@ static int bpf_tcp_ingress(struct sock *sk, struct sk_psock *psock,
 				break;
 		}
 	} while (i != msg->sg.end);
-	msg->sg.start = i;
 
 	if (!ret) {
+		msg->sg.start = i;
+		msg->sg.size -= apply_bytes;
 		sk_psock_queue_msg(psock, tmp);
 		sk->sk_data_ready(sk);
 	} else {
@@ -215,6 +216,7 @@ retry:
 			return ret;
 		if (apply)
 			apply_bytes -= ret;
+		msg->sg.size -= ret;
 		sge->offset += ret;
 		sge->length -= ret;
 		if (uncharge)
@@ -282,8 +284,8 @@ more_data:
 		psock->eval = sk_psock_msg_verdict(sk, psock, msg);
 
 	if (msg->cork_bytes &&
-	    msg->cork_bytes > /*msg->sg.size*/ psock->sg_size && !enospc) {
-		psock->cork_bytes = msg->cork_bytes - /*msg->sg.size*/ psock->sg_size;
+	    msg->cork_bytes > msg->sg.size && !enospc) {
+		psock->cork_bytes = msg->cork_bytes - msg->sg.size;
 		if (!psock->cork) {
 			psock->cork = kzalloc(sizeof(*psock->cork),
 					      GFP_ATOMIC | __GFP_NOWARN);
@@ -294,7 +296,7 @@ more_data:
 		return 0;
 	}
 
-	tosend = psock->sg_size;//msg->sg.size;
+	tosend = msg->sg.size;
 	if (psock->apply_bytes && psock->apply_bytes < tosend)
 		tosend = psock->apply_bytes;
 
@@ -307,7 +309,6 @@ more_data:
 			break;
 		}
 		sk_msg_apply_bytes(psock, tosend);
-		psock->sg_size -= tosend;
 		break;
 	case __SK_REDIRECT:
 		sk_redir = psock->sk_redir;
@@ -325,13 +326,9 @@ more_data:
 
 			if (!cork)
 				*copied -= free;
-			psock->sg_size = 0;
-		} else {
-			psock->sg_size -= tosend;
 		}
 		if (cork) {
 			sk_msg_free(sk, msg);
-			psock->sg_size = 0;
 			kfree(msg);
 			msg = NULL;
 			ret = 0;
@@ -339,7 +336,6 @@ more_data:
 		break;
 	case __SK_DROP:
 	default:
-		psock->sg_size -= tosend;
 		sk_msg_free_partial(sk, msg, tosend);
 		sk_msg_apply_bytes(psock, tosend);
 		*copied -= tosend;
@@ -411,7 +407,6 @@ static int tcp_bpf_sendmsg(struct sock *sk, struct msghdr *msg, size_t size)
 			goto out_err;
 		}
 
-		psock->sg_size += copy; /* TODO */
 		copied += copy;
 		if (psock->cork_bytes) {
 			if (size > psock->cork_bytes)
@@ -468,19 +463,14 @@ static int tcp_bpf_sendpage(struct sock *sk, struct page *page, int offset,
 	}
 
 	/* Catch case where ring is full and sendpage is stalled. */
-	if (unlikely(msg->sg.end == msg->sg.start &&
-		     msg->sg.data[msg->sg.end].length))
+	if (unlikely(sk_msg_is_full(msg)))
 		goto out_err;
 
-	psock->sg_size += size; /* TODO: use msg->sg.size */
 	sk_msg_page_add(msg, page, size, offset);
 	sk_mem_charge(sk, size);
-
 	copied = size;
-	if (msg->sg.end == MAX_SKB_FRAGS)
-		msg->sg.end = 0;
 	/* TODO: check whether we leak the page ref on error? */
-	if (msg->sg.end == msg->sg.start)
+	if (sk_msg_is_full(msg))
 		enospc = true;
 	if (psock->cork_bytes) {
 		if (size > psock->cork_bytes)

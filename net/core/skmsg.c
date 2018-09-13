@@ -134,6 +134,7 @@ static int __sk_msg_free(struct sock *sk,
 	int freed = 0;
 
 	while (msg->sg.size) {
+		msg->sg.size -= sge->length;
 		freed += sk_msg_free_elem(sk, msg, i, charge);
 		sk_msg_iter_var(i);
 		sge = sk_msg_elem(msg, i);
