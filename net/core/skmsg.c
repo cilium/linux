@@ -34,14 +34,6 @@ int sk_msg_alloc(struct sock *sk, struct sk_msg *msg, int len,
 		if (msg->sg.end > elem_first_coalesce &&
 		    sg_page(sge) == pfrag->page &&
 		    sge->offset + sge->length == orig_offset) {
-			/* If coalescing we should also update current pointer
-			 * to inform sk_msg_*copy* it is free to use this space
-			 * as well.
-			 */
-			if (i < msg->sg.curr) {
-				msg->sg.curr = i;
-				msg->sg.copybreak = sge->length;
-			}
 			sk_mem_charge(sk, use);
 			msg->sg.size += use;
 			pfrag->offset += use;
@@ -61,10 +53,6 @@ int sk_msg_alloc(struct sock *sk, struct sk_msg *msg, int len,
 			sg_set_page(sge, pfrag->page, use, orig_offset);
 			get_page(pfrag->page);
 			sk_msg_iter(msg, end);
-			if (msg->sg.end == msg->sg.start) {
-				ret = -ENOSPC;
-				break;
-			}
 		}
 
 		len -= use;
@@ -160,6 +148,7 @@ int sk_msg_free(struct sock *sk, struct sk_msg *msg)
 }
 EXPORT_SYMBOL_GPL(sk_msg_free);
 
+/* tbd: review only free curr + copybreak, bug in original code perhaps? */
 void sk_msg_free_curr(struct sock *sk, struct sk_msg *msg)
 {
 	__sk_msg_free(sk, msg, msg->sg.curr, true);
@@ -231,17 +220,17 @@ void sk_msg_trim(struct sock *sk, struct sk_msg *msg, int len)
 	msg->sg.data[i].length -= trim;
 	sk_mem_uncharge(sk, trim);
 out:
-	sk_msg_iter_var(i);
-	msg->sg.end = i;
 	/* If we trim data before curr pointer update copybreak and current
 	 * so that any future copy operations start at new copy location.
 	 * However trimed data that has not yet been used in a copy op
 	 * does not require an update.
 	 */
-	if (msg->sg.end < msg->sg.curr) {
-		msg->sg.curr = msg->sg.end;
-		msg->sg.copybreak = 0;
+	if (msg->sg.curr >= i) {
+		msg->sg.curr = i;//msg->sg.end;
+		msg->sg.copybreak = msg->sg.data[i].length;
 	}
+	sk_msg_iter_var(i);
+	msg->sg.end = i;
 }
 EXPORT_SYMBOL_GPL(sk_msg_trim);
 
@@ -276,9 +265,6 @@ int sk_msg_zerocopy_from_iter(struct sock *sk, struct iov_iter *from,
 
 		while (copied) {
 			use = min_t(int, copied, PAGE_SIZE - offset);
-			// tbd can this be confused if end/curr are mixed here?
-			// it seems not to happen but might be best to improve
-			// the API so this can happen.
 			sg_set_page(&msg->sg.data[msg->sg.end],
 				    pages[i], use, offset);
 			sg_unmark_end(&msg->sg.data[msg->sg.end]);
@@ -315,7 +301,6 @@ int sk_msg_memcopy_from_iter(struct sock *sk, struct iov_iter *from,
 	u32 copy, buf_size;
 	void *to;
 
-	WARN_ON(msg->sg.curr == msg->sg.end);
 	do {
 		sge = sk_msg_elem(msg, i);
 		/* This is possible if a trim operation shrunk the buffer */
@@ -338,7 +323,6 @@ int sk_msg_memcopy_from_iter(struct sock *sk, struct iov_iter *from,
 			ret = -EFAULT;
 			goto out;
 		}
-
 		bytes -= copy;
 		if (!bytes)
 			break;
