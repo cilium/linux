@@ -224,6 +224,14 @@ static void tls_trim_both_msgs(struct sock *sk, int target_size)
 	sk_msg_trim(sk, &ctx->msg_encrypted, target_size);
 }
 
+static int tls_free_encrypted_msg(struct sock *sk)
+{
+	struct tls_context *tls_ctx = tls_get_ctx(sk);
+	struct tls_sw_context_tx *ctx = tls_sw_ctx_tx(tls_ctx);
+
+	return sk_msg_free(sk, &ctx->msg_encrypted);
+}
+
 static int tls_alloc_encrypted_msg(struct sock *sk, int len)
 {
 	struct tls_context *tls_ctx = tls_get_ctx(sk);
@@ -402,7 +410,7 @@ out_req:
 }
 
 static int bpf_exec_tx_verdict(struct sk_msg *m,
-			       struct sock *sk,
+			       struct sock *sk, bool full_record,
 			       unsigned char record_type,
 			       size_t *copied, int flags)
 {
@@ -420,7 +428,7 @@ more_data:
 	enospc = (m->sg.start == m->sg.end);
  	if (psock->eval == __SK_NONE)
 		psock->eval = sk_psock_msg_verdict(sk, psock, m);
- 	if (m->cork_bytes && m->cork_bytes > m->sg.size && !enospc) {
+	if (m->cork_bytes && m->cork_bytes > m->sg.size && !enospc && !full_record) {
 		err = -ENOSPC;
 		goto out_err;
 	}
@@ -478,6 +486,22 @@ more_data:
 			err = tls_alloc_encrypted_msg(sk, m->sg.size + tls_ctx->tx.overhead_size);
 			if (likely(!err))
 				goto more_data;
+			/* Its possible a user, through a combination of small
+			 * zerocopy sends, cork'd data, and redirects can get
+			 * into a condition where msg_pl is full of small byte
+			 * sized buffers that are empty. So lets give the user
+			 * the benefit of the doubt and flush the outstanding
+			 * msg_en scatterlist and build a maximal one. This is
+			 * already in the unlikely path and we believe preferd
+			 * to returning ENOSPC to the user. If we failed again
+			 * return EAGAIN to user.
+			 */
+			// tbd lets push this change as separate needs more review
+			tls_free_encrypted_msg(sk);
+			err = tls_alloc_encrypted_msg(sk, m->sg.size + tls_ctx->tx.overhead_size);
+			if (likely(!err))
+				goto more_data;
+			err = -EAGAIN;
 			*copied -= sk_msg_free(sk, m);
 		}
 	}
@@ -505,7 +529,7 @@ static int tls_sw_push_pending_record(struct sock *sk, int flags)
 	if (!msg_pl->sg.size)
 		return 0;
 
-	return bpf_exec_tx_verdict(msg_pl, sk, TLS_RECORD_TYPE_DATA, &copied, flags);
+	return bpf_exec_tx_verdict(msg_pl, sk, true, TLS_RECORD_TYPE_DATA, &copied, flags);
 }
 
 int tls_sw_sendmsg(struct sock *sk, struct msghdr *msg, size_t size)
@@ -580,7 +604,8 @@ alloc_encrypted:
 
 			copied += try_to_copy;
 			sk_msg_sg_copy_set(msg_pl, first);
-			ret = bpf_exec_tx_verdict(msg_pl, sk, record_type,
+			ret = bpf_exec_tx_verdict(msg_pl, sk,
+						  full_record, record_type,
 						  &copied,
 						  msg->msg_flags);
 			if (!ret)
@@ -626,7 +651,8 @@ alloc_plaintext:
 		copied += try_to_copy;
 		if (full_record || eor) {
 push_record:
-			ret = bpf_exec_tx_verdict(msg_pl, sk, record_type,
+			ret = bpf_exec_tx_verdict(msg_pl, sk, full_record,
+						  record_type,
 						  &copied,
 						  msg->msg_flags);
 			if (ret) {
@@ -735,11 +761,10 @@ alloc_payload:
 		size -= copy;
 		copied += copy;
 
-		// TBD: needs to be distance not end :/
-		//tls_ctx->pending_open_record_frags = msg_pl->sg.end;
 		if (full_record || eor || sk_msg_full(msg_pl)) {
 push_record:
-			ret = bpf_exec_tx_verdict(msg_pl, sk, record_type,
+			ret = bpf_exec_tx_verdict(msg_pl, sk, full_record,
+						  record_type,
 						  &copied,
 						  flags);
 			if (ret) {
