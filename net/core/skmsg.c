@@ -339,7 +339,7 @@ int sk_msg_memcopy_from_iter(struct sock *sk, struct iov_iter *from,
 		}
 
 		buf_size = sge->length - msg->sg.copybreak;
-		copy = (buf_size > bytes) ? buf_size : bytes;
+		copy = (buf_size > bytes) ? bytes : buf_size;
 		to = sg_virt(sge) + msg->sg.copybreak;
 		msg->sg.copybreak += copy;
 		if (sk->sk_route_caps & NETIF_F_NOCACHE_COPY)
