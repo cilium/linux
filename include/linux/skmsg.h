@@ -114,7 +114,6 @@ int sk_msg_free_nocharge(struct sock *sk, struct sk_msg *msg);
 void sk_msg_free_partial(struct sock *sk, struct sk_msg *msg, u32 bytes);
 void sk_msg_free_partial_nocharge(struct sock *sk, struct sk_msg *msg,
 				  u32 bytes);
-void sk_msg_free_curr(struct sock *sk, struct sk_msg *msg);
 int sk_msg_zerocopy_from_iter(struct sock *sk, struct iov_iter *from,
 			      struct sk_msg *msg, u32 bytes);
 int sk_msg_memcopy_from_iter(struct sock *sk, struct iov_iter *from,

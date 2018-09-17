@@ -148,13 +148,6 @@ int sk_msg_free(struct sock *sk, struct sk_msg *msg)
 }
 EXPORT_SYMBOL_GPL(sk_msg_free);
 
-/* tbd: review only free curr + copybreak, bug in original code perhaps? */
-void sk_msg_free_curr(struct sock *sk, struct sk_msg *msg)
-{
-	__sk_msg_free(sk, msg, msg->sg.curr, true);
-}
-EXPORT_SYMBOL_GPL(sk_msg_free_curr);
-
 static void __sk_msg_free_partial(struct sock *sk, struct sk_msg *msg, u32 bytes, bool charge)
 {
 	u32 i = msg->sg.start, free;

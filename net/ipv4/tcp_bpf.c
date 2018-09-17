@@ -403,12 +403,7 @@ static int tcp_bpf_sendmsg(struct sock *sk, struct msghdr *msg, size_t size)
 		err = sk_msg_memcopy_from_iter(sk, &msg->msg_iter, msg_tx,
 					       copy);
 		if (err < 0) {
-			/* Use sk_msg_trim here instead of sk_msg_free_curr otherwise
-			 * copybreak could be incorrectly freed in corner case of cork.
-			 * ... I think. Plus then we can drop sk_msg_free_curr and
-			 * patterns in tls_sw and tcp_bpf look more similar.
-			 */
-			sk_msg_free_curr(sk, msg_tx);
+			sk_msg_trim(sk, msg_tx, osize);
 			goto out_err;
 		}
 

@@ -1464,7 +1464,7 @@ static int __test_suite(int cg_fd, char *bpf_file)
 		}
 	}
 
-	ktls = 0;
+	ktls = 1;
 	/* Tests basic commands and APIs with range of iov values */
 	txmsg_start = txmsg_end = 0;
 	err = test_txmsg(cg_fd);
