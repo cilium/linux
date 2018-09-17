@@ -524,7 +524,8 @@ EXPORT_SYMBOL_GPL(sk_psock_destroy);
 void sk_psock_drop(struct sock *sk, struct sk_psock *psock)
 {
 	rcu_assign_sk_user_data(sk, NULL);
-	tcp_bpf_release(sk);
+	sk_psock_cork_free(psock);
+	sk_psock_restore_proto(sk, psock);
 	write_lock_bh(&sk->sk_callback_lock);
 	if (psock->progs.skb_parser) {
 		sk_psock_stop_strp(sk, psock);

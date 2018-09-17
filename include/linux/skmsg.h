@@ -93,6 +93,7 @@ struct sk_psock {
 	struct list_head		link;
 	spinlock_t			link_lock;
 	refcount_t			refcnt;
+	void (*saved_unhash)(struct sock *sk);
 	void (*saved_close)(struct sock *sk, long timeout);
 	void (*saved_write_space)(struct sock *sk);
 	struct proto			*sk_proto;
@@ -303,6 +304,18 @@ static inline void sk_psock_cork_free(struct sk_psock *psock)
 	}
 }
 
+static inline void sk_psock_unhash(struct sock *sk, struct sk_psock *psock)
+{
+	struct sk_psock_link *link;
+
+	sk_psock_cork_free(psock);
+	__sk_psock_purge_ingress_msg(psock);
+	while ((link = sk_psock_link_pop(psock))) {
+		sk_psock_unlink(sk, link);
+		sk_psock_free_link(link);
+	}
+}
+
 static inline void sk_psock_update_proto(struct sock *sk,
 					 struct sk_psock *psock,
 					 struct proto *ops)
@@ -312,6 +325,7 @@ static inline void sk_psock_update_proto(struct sock *sk,
 	 * the sock_lock
 	 */
 	write_lock_bh(&sk->sk_callback_lock);
+	psock->saved_unhash = sk->sk_prot->unhash;
 	psock->saved_close = sk->sk_prot->close;
 	psock->saved_write_space = sk->sk_write_space;
 	write_unlock_bh(&sk->sk_callback_lock);

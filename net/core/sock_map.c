@@ -395,7 +395,8 @@ static int sock_map_update_elem(struct bpf_map *map,
 		ret = -EINVAL;
 		goto out;
 	}
-	if (!sock_map_sk_is_suitable(sk)) {
+	if (!sock_map_sk_is_suitable(sk) ||
+	    sk->sk_state != TCP_ESTABLISHED) {
 		ret = -EOPNOTSUPP;
 		goto out;
         }
@@ -408,12 +409,20 @@ out:
 	return ret;
 }
 
+static bool bpf_is_valid_sock_op(struct bpf_sock_ops_kern *ops)
+{
+	return ops->op == BPF_SOCK_OPS_PASSIVE_ESTABLISHED_CB ||
+	       ops->op == BPF_SOCK_OPS_ACTIVE_ESTABLISHED_CB;
+
+}
+
 BPF_CALL_4(bpf_sock_map_update, struct bpf_sock_ops_kern *, sops,
 	   struct bpf_map *, map, void *, key, u64, flags)
 {
 	WARN_ON_ONCE(!rcu_read_lock_held());
 
-	if (likely(sock_map_sk_is_suitable(sops->sk)))
+	if (likely(bpf_is_valid_sock_op(sops) &&
+		   sock_map_sk_is_suitable(sops->sk)))
 		return sock_map_update_common(map, *(u32 *)key, sops->sk,
 					      flags);
 	return -EOPNOTSUPP;
@@ -711,7 +720,8 @@ static int sock_hash_update_elem(struct bpf_map *map,
 		ret = -EINVAL;
 		goto out;
 	}
-	if (!sock_map_sk_is_suitable(sk)) {
+	if (!sock_map_sk_is_suitable(sk) ||
+	    sk->sk_state != TCP_ESTABLISHED) {
 		ret = -EOPNOTSUPP;
 		goto out;
 	}
@@ -856,7 +866,8 @@ BPF_CALL_4(bpf_sock_hash_update, struct bpf_sock_ops_kern *, sops,
 {
 	WARN_ON_ONCE(!rcu_read_lock_held());
 
-	if (likely(sock_map_sk_is_suitable(sops->sk)))
+	if (likely(bpf_is_valid_sock_op(sops) &&
+		   sock_map_sk_is_suitable(sops->sk)))
 		return sock_hash_update_common(map, key, sops->sk, flags);
 	return -EOPNOTSUPP;
 }

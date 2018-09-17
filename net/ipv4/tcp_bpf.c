@@ -491,10 +491,28 @@ out_err:
 	return copied ? copied : err;
 }
 
+static void tcp_bpf_unhash(struct sock *sk)
+{
+	void (*saved_unhash)(struct sock *sk);
+	struct sk_psock *psock;
+
+	rcu_read_lock();
+	psock = sk_psock(sk);
+	if (unlikely(!psock)) {
+		rcu_read_unlock();
+		if (sk->sk_prot->unhash)
+			return sk->sk_prot->unhash(sk);
+		return;
+	}
+	saved_unhash = psock->saved_unhash;
+	sk_psock_unhash(sk, psock);
+	rcu_read_unlock();
+	saved_unhash(sk);
+}
+
 static void tcp_bpf_close(struct sock *sk, long timeout)
 {
 	void (*saved_close)(struct sock *sk, long timeout);
-	struct sk_psock_link *link;
 	struct sk_psock *psock;
 
 	sk_psock_lock(sk);
@@ -503,15 +521,8 @@ static void tcp_bpf_close(struct sock *sk, long timeout)
 		sk_psock_unlock(sk);
 		return sk->sk_prot->close(sk, timeout);
 	}
-
 	saved_close = psock->saved_close;
-	sk_psock_cork_free(psock);
-	__sk_psock_purge_ingress_msg(psock);
-	while ((link = sk_psock_link_pop(psock))) {
-		sk_psock_unlink(sk, link);
-		sk_psock_free_link(link);
-	}
-
+	sk_psock_unhash(sk, psock);
 	sk_psock_unlock(sk);
 	saved_close(sk, timeout);
 }
@@ -536,6 +547,7 @@ static void tcp_bpf_rebuild_protos(struct proto prot[TCP_BPF_NUM_CFGS],
 				   struct proto *base)
 {
 	prot[TCP_BPF_BASE]			= *base;
+	prot[TCP_BPF_BASE].unhash		= tcp_bpf_unhash;
 	prot[TCP_BPF_BASE].close		= tcp_bpf_close;
 	prot[TCP_BPF_BASE].recvmsg		= tcp_bpf_recvmsg;
 	prot[TCP_BPF_BASE].stream_memory_read	= tcp_bpf_stream_read;
@@ -602,17 +614,4 @@ int tcp_bpf_init(struct sock *sk)
 	tcp_bpf_update_sk_prot(sk, psock);
 	rcu_read_unlock();
 	return 0;
-}
-
-void tcp_bpf_release(struct sock *sk)
-{
-	struct sk_psock *psock;
-
-	rcu_read_lock();
-	psock = sk_psock(sk);
-	if (likely(psock)) {
-		sk_psock_cork_free(psock);
-		sk_psock_restore_proto(sk, psock);
-	}
-	rcu_read_unlock();
 }
