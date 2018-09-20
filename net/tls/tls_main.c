@@ -467,6 +467,7 @@ static int do_tls_setsockopt_conf(struct sock *sk, char __user *optval,
 		{
 #endif
 			rc = tls_set_sw_offload(sk, ctx, 1);
+			printk("%s: tls_set_sw_offload = %i\n", __func__, rc);
 			conf = TLS_SW;
 		}
 	} else {

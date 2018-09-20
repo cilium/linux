@@ -1138,7 +1138,25 @@ bpf_object__create_maps(struct bpf_object *obj)
 			create_attr.btf_value_type_id = map->btf_value_type_id;
 		}
 
-		*pfd = bpf_create_map_xattr(&create_attr);
+		if (def->pinned == PIN_GLOBAL_NS) {
+			const char *mnt = BPF_DIR_MNT;
+			char pathname[PATH_MAX] = {};
+			struct statfs st_fs;
+			int len = PATH_MAX;
+ 			if (statfs(mnt, &st_fs) < 0)
+				return -ENOENT;
+			if ((unsigned long)st_fs.f_type != BPF_FS_MAGIC)
+				return -ENOENT;
+ 			snprintf(pathname, len, "%s/%s/%s", mnt, BPF_DIR_GLOBALS, bpf_map__name(&obj->maps[i]));
+			*pfd = bpf_obj_get(pathname);
+			printf("%s: pin @ %s %i\n", __func__, pathname, *pfd);
+		} 
+
+		if (*pfd < 0) {
+			*pfd = bpf_create_map_xattr(&create_attr);
+			pr_warning("create map pfd: %i errno %i\n", *pfd, errno);
+		}
+
 		if (*pfd < 0 && create_attr.btf_key_type_id) {
 			cp = strerror_r(errno, errmsg, sizeof(errmsg));
 			pr_warning("Error in bpf_create_map_xattr(%s):%s(%d). Retrying without BTF.\n",
