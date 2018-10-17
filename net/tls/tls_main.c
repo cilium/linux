@@ -669,6 +669,17 @@ static int tls_init(struct sock *sk)
 	if (sk->sk_state != TCP_ESTABLISHED)
 		return -ENOTSUPP;
 
+	/* Stream parsers use a custom sk_data_ready callback to drive
+	 * when to call read_sock. However we can not stack strp users
+	 * yet so this check ensures that the sk_data_ready hook is
+	 * still using the default sock_def_readable indicating that
+	 * no other users have instantiated a stream parser.
+	 */
+	if (!sk_has_def_readable(sk)) {
+		rc = -ENOTSUPP;
+		goto out;
+	}
+
 	/* allocate tls context */
 	ctx = create_ctx(sk);
 	if (!ctx) {

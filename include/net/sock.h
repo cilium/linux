@@ -1595,6 +1595,7 @@ void *sock_kmalloc(struct sock *sk, int size, gfp_t priority);
 void sock_kfree_s(struct sock *sk, void *mem, int size);
 void sock_kzfree_s(struct sock *sk, void *mem, int size);
 void sk_send_sigurg(struct sock *sk);
+bool sk_has_def_readable(struct sock *sk);
 
 struct sockcm_cookie {
 	u64 transmit_time;

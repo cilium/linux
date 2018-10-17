@@ -2665,6 +2665,12 @@ static void sock_def_destruct(struct sock *sk)
 {
 }
 
+bool sk_has_def_readable(struct sock *sk)
+{
+	return sk->sk_data_ready == sock_def_readable;
+}
+EXPORT_SYMBOL(sk_has_def_readable);
+
 void sk_send_sigurg(struct sock *sk)
 {
 	if (sk->sk_socket && sk->sk_socket->file)

@@ -1371,6 +1371,7 @@ static int kcm_attach(struct socket *sock, struct socket *csock,
 		      struct bpf_prog *prog)
 {
 	struct kcm_sock *kcm = kcm_sk(sock->sk);
+	struct inet_connection_sock *icsk;
 	struct kcm_mux *mux = kcm->mux;
 	struct sock *csk;
 	struct kcm_psock *psock = NULL, *tpsock;
@@ -1398,6 +1399,13 @@ static int kcm_attach(struct socket *sock, struct socket *csock,
 
 	/* Don't allow listeners or closed sockets */
 	if (csk->sk_state == TCP_LISTEN || csk->sk_state == TCP_CLOSE) {
+		err = -EOPNOTSUPP;
+		goto out;
+	}
+
+	/* Don't allow attaching TLS socket which uses stream parser */
+	icsk = inet_csk(csk);
+	if (icsk->icsk_ulp_ops) {
 		err = -EOPNOTSUPP;
 		goto out;
 	}
