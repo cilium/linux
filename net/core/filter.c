@@ -2424,6 +2424,175 @@ static const struct bpf_func_proto bpf_msg_push_data_proto = {
 	.arg4_type	= ARG_ANYTHING,
 };
 
+static void sk_msg_shift_left(struct sk_msg *msg, int i)
+{
+	struct scatterlist *sge;
+	int prev;
+
+	do {
+		prev = i;
+		sk_msg_iter_var_next(i);
+		msg->sg.data[prev] = msg->sg.data[i];
+	} while (i != msg->sg.end);
+
+	sk_msg_iter_prev(msg, end);
+}
+
+static void sk_msg_shift_right(struct sk_msg *msg, int i)
+{
+	struct scatterlist tmp, sge;
+
+	sk_msg_iter_next(msg, end);
+	sge = sk_msg_elem_cpy(msg, i);
+	sk_msg_iter_var_next(i);
+	tmp = sk_msg_elem_cpy(msg, i);
+
+	while (i != msg->sg.end) {
+		msg->sg.data[i] = sge;
+		sk_msg_iter_var_next(i);
+		sge = tmp;
+		tmp = sk_msg_elem_cpy(msg, i);
+	}
+}
+
+BPF_CALL_4(bpf_msg_cut_data, struct sk_msg *, msg, u32, start,
+	   u32, len, u64, flags)
+{
+	u32 i = 0, l, space, offset = 0;
+	int C;
+
+	if (unlikely(flags))
+		return -EINVAL;
+
+	/* First find the starting scatterlist element */
+	i = msg->sg.start;
+	do {
+		l = sk_msg_elem(msg, i)->length;
+
+		if (start < offset + l)
+			break;
+		offset += l;
+		sk_msg_iter_var_next(i);
+	} while (i != msg->sg.end);
+
+	/* Bounds checks: start and cut must be inside message */
+	if (start >= offset + l || start + len >= msg->sg.size)
+		return -EINVAL;
+
+	space = MAX_MSG_FRAGS - sk_msg_elem_used(msg);
+
+	C = len;
+	/* --------------| offset
+         * -| start      |------- len ------|
+         *
+         *  |----- A ----|-------- C -------|----- B ----|
+	 *  |____________________________________________| length
+	 *
+	 *
+	 * A: region at front of scatter element to save
+	 * B: region at back of scatter element to save when length > A + C
+	 * C: region to cut from element, same as input 'cut' here will be
+	 *    decremented below per iteration.
+	 *
+	 * Two top-level cases to handle when start != offset, first B is non
+	 * zero and second B is zero corresponding to when a cut includes more
+	 * than one element.
+	 *
+	 * Then if B is non-zero AND there is no space allocate space and
+	 * compact A, B regions into page. If there is space shift ring to
+	 * the rigth free'ing the next element in ring to place B, leaving
+	 * A untouched except to reduce length.
+	 */
+	if (start != offset) {
+		struct scatterlist *nsge, *sge = sk_msg_elem(msg, i);
+		int A = start;
+		int B = sge->length - C - A;
+
+		sk_msg_iter_var_next(i);
+
+		if (C < sge->length - A) {
+			if (space) {
+				sge->length = A;
+				sk_msg_shift_right(msg, i);
+				nsge = sk_msg_elem(msg, i);
+				get_page(sg_page(sge));
+				sg_set_page(nsge, sg_page(sge), B, offset+C);
+			} else {
+				struct page *page, *orig;
+				u8 *to, *from;
+
+				page = alloc_pages(__GFP_NOWARN |
+						   __GFP_COMP   | GFP_ATOMIC,
+						   get_order(A+B));
+				if (unlikely(!page))
+					return -ENOMEM;
+
+				sge->length = A;
+				orig = sg_page(sge);
+				from = sg_virt(sge);
+				to = page_address(page);
+				memcpy(to, from, A);
+				memcpy(to + A, from + A + C, B);
+				sg_set_page(sge, page, A + B, 0);
+				put_page(orig);
+			}
+			C = 0;
+		} else if (C >= sge->length - A) {
+			sge->length = A;
+			C -= (sge->length - A);
+		} else {
+			BUG_ON(1);
+		}
+	}
+
+	/* From above the current layout _must_ be as follows,
+	 *
+	 * -| offset
+         * -| start
+         *
+         *  |----- C ----|---------------- B ------------|
+	 *  |____________________________________________| length
+	 *
+	 * Offset and start of the current msg elem are equal because in the
+	 * previous case we handled offset != start and either consumed the
+	 * entire element and advanced to the next element OR C == 0.
+	 *
+	 * Two cases to handle here are first C is less than the length
+	 * leaving some remainder B above. Simply adjust the element's layout
+	 * in this case. Or C >= length of the element so that B = 0. In this
+	 * case advance to next element decrementing C.
+	 */
+	while (C) {
+		struct scatterlist *sge = sk_msg_elem(msg, i);
+
+		if (C < sge->length) {
+			sge->length -= C;
+			sge->offset += C;
+			C = 0;
+		} else {
+			C -= sge->length;
+			sk_msg_shift_left(msg, i);
+		}
+		sk_msg_iter_var_next(i);
+	}
+
+	sk_mem_uncharge(msg->sk, len - C);
+	msg->sg.size -= (len - C);
+	sk_msg_compute_data_pointers(msg);
+	return 0;
+}
+
+
+static const struct bpf_func_proto bpf_msg_cut_data_proto = {
+	.func		= bpf_msg_cut_data,
+	.gpl_only	= false,
+	.ret_type	= RET_INTEGER,
+	.arg1_type	= ARG_PTR_TO_CTX,
+	.arg2_type	= ARG_ANYTHING,
+	.arg3_type	= ARG_ANYTHING,
+	.arg4_type	= ARG_ANYTHING,
+};
+
 BPF_CALL_1(bpf_get_cgroup_classid, const struct sk_buff *, skb)
 {
 	return task_get_classid(skb);
@@ -5260,6 +5429,8 @@ sk_msg_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
 		return &bpf_msg_pull_data_proto;
 	case BPF_FUNC_msg_push_data:
 		return &bpf_msg_push_data_proto;
+	case BPF_FUNC_msg_cut_data:
+		return &bpf_msg_cut_data_proto;
 	default:
 		return bpf_base_func_proto(func_id);
 	}
