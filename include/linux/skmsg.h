@@ -46,6 +46,7 @@ struct sk_msg {
 	u32				apply_bytes;
 	u32				cork_bytes;
 	u32				flags;
+	u32				mark;
 	struct sk_buff			*skb;
 	struct sock			*sk_redir;
 	struct sock			*sk;

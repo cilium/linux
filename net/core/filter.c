@@ -6305,8 +6305,14 @@ static bool sk_msg_is_valid_access(int off, int size,
 				   const struct bpf_prog *prog,
 				   struct bpf_insn_access_aux *info)
 {
-	if (type == BPF_WRITE)
-		return false;
+	if (type == BPF_WRITE) {
+		switch (off) {
+		case bpf_ctx_range(struct sk_msg_md, mark):
+			break;
+		default:
+			return false;
+		}
+	}
 
 	switch (off) {
 	case offsetof(struct sk_msg_md, data):
@@ -7518,6 +7524,12 @@ static u32 sk_msg_convert_ctx_access(enum bpf_access_type type,
 		*insn++ = BPF_LDX_MEM(BPF_FIELD_SIZEOF(struct sk_msg_sg, size),
 				      si->dst_reg, si->src_reg,
 				      offsetof(struct sk_msg_sg, size));
+		break;
+
+	case offsetof(struct sk_msg_md, mark):
+		*insn++ = BPF_LDX_MEM(BPF_FIELD_SIZEOF(struct sk_msg, mark),
+				      si->dst_reg, si->src_reg,
+				      offsetof(struct sk_msg, mark));
 		break;
 	}
 
