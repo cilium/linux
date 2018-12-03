@@ -669,6 +669,14 @@ static void sk_psock_verdict_apply(struct sk_psock *psock,
 	bool ingress;
 
 	switch (verdict) {
+	case __SK_PASS:
+		ingress = true;
+		if (atomic_read(&sk_other->sk_rmem_alloc) <=
+		     sk_other->sk_rcvbuf) {
+			skb_queue_tail(&psock_other->ingress_skb, skb);
+			schedule_work(&psock->work)
+		}
+		break;
 	case __SK_REDIRECT:
 		sk_other = tcp_skb_bpf_redirect_fetch(skb);
 		if (unlikely(!sk_other))
