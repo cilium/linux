@@ -435,4 +435,9 @@ static inline void psock_progs_drop(struct sk_psock_progs *progs)
 	psock_set_prog(&progs->skb_verdict, NULL);
 }
 
+int sk_psock_map_verd(int verdict, bool redir);
+int sk_psock_bpf_run(struct sk_psock *psock, struct bpf_prog *prog,
+		     struct sk_buff *skb);
+void sk_psock_verdict_apply(struct sk_psock *psock,
+			    struct sk_buff *skb, int verdict);
 #endif /* _LINUX_SKMSG_H */

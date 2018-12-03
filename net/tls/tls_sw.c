@@ -1380,7 +1380,8 @@ fallback_to_reg_recv:
 	return err;
 }
 
-static int decrypt_skb_update(struct sock *sk, struct sk_buff *skb,
+static int decrypt_skb_update(struct sock *sk,
+			      struct sk_buff *skb,
 			      struct iov_iter *dest, int *chunk, bool *zc)
 {
 	struct tls_context *tls_ctx = tls_get_ctx(sk);
@@ -1518,8 +1519,9 @@ int tls_sw_recvmsg(struct sock *sk,
 
 		if (!ctx->decrypted) {
 			int to_copy = rxm->full_len - tls_ctx->rx.overhead_size;
+			bool bpf = READ_ONCE(psock->progs.skb_verdict);
 
-			if (!is_kvec && to_copy <= len &&
+			if (!is_kvec && !bpf && to_copy <= len &&
 			    likely(!(flags & MSG_PEEK)))
 				zc = true;
 
@@ -1541,6 +1543,27 @@ int tls_sw_recvmsg(struct sock *sk,
 
 		if (!zc) {
 			chunk = min_t(unsigned int, rxm->full_len, len);
+
+			if (psock) {
+				struct bpf_prog *prog;
+				int ret = __SK_DROP;
+
+				rcu_read_lock();
+				prog = READ_ONCE(psock->progs.skb_verdict);
+				if (prog) {
+					tcp_skb_bpf_redirect_clear(skb);
+					ret = sk_psock_bpf_run(psock, prog, skb);
+					ret = sk_psock_map_verd(ret,
+						tcp_skb_bpf_redirect_fetch(skb));
+
+				}
+				rcu_read_unlock();
+				sk_psock_verdict_apply(psock, skb, ret);
+				if (ret != __SK_PASS && ctx->recv_pkt)
+					continue;
+				else if (ret != __SK_PASS)
+					goto recv_end;
+			}
 
 			err = skb_copy_datagram_msg(skb, rxm->offset, msg,
 						    chunk);

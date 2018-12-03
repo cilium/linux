@@ -584,7 +584,7 @@ void sk_psock_drop(struct sock *sk, struct sk_psock *psock)
 }
 EXPORT_SYMBOL_GPL(sk_psock_drop);
 
-static int sk_psock_map_verd(int verdict, bool redir)
+int sk_psock_map_verd(int verdict, bool redir)
 {
 	switch (verdict) {
 	case SK_PASS:
@@ -596,6 +596,7 @@ static int sk_psock_map_verd(int verdict, bool redir)
 
 	return __SK_DROP;
 }
+EXPORT_SYMBOL_GPL(sk_psock_map_verd); // todo: roll this up into function to avoid all these new exports
 
 int sk_psock_msg_verdict(struct sock *sk, struct sk_psock *psock,
 			 struct sk_msg *msg)
@@ -633,8 +634,8 @@ out:
 }
 EXPORT_SYMBOL_GPL(sk_psock_msg_verdict);
 
-static int sk_psock_bpf_run(struct sk_psock *psock, struct bpf_prog *prog,
-			    struct sk_buff *skb)
+int sk_psock_bpf_run(struct sk_psock *psock, struct bpf_prog *prog,
+		     struct sk_buff *skb)
 {
 	int ret;
 
@@ -652,6 +653,7 @@ static int sk_psock_bpf_run(struct sk_psock *psock, struct bpf_prog *prog,
 	skb->sk = NULL;
 	return ret;
 }
+EXPORT_SYMBOL_GPL(sk_psock_bpf_run);
 
 static struct sk_psock *sk_psock_from_strp(struct strparser *strp)
 {
@@ -661,8 +663,8 @@ static struct sk_psock *sk_psock_from_strp(struct strparser *strp)
 	return container_of(parser, struct sk_psock, parser);
 }
 
-static void sk_psock_verdict_apply(struct sk_psock *psock,
-				   struct sk_buff *skb, int verdict)
+void sk_psock_verdict_apply(struct sk_psock *psock,
+			    struct sk_buff *skb, int verdict)
 {
 	struct sk_psock *psock_other;
 	struct sock *sk_other;
@@ -670,14 +672,9 @@ static void sk_psock_verdict_apply(struct sk_psock *psock,
 
 	switch (verdict) {
 	case __SK_PASS:
-		ingress = true;
-		if (atomic_read(&sk_other->sk_rmem_alloc) <=
-		     sk_other->sk_rcvbuf) {
-			skb_queue_tail(&psock_other->ingress_skb, skb);
-			schedule_work(&psock->work)
-		}
 		break;
 	case __SK_REDIRECT:
+		skb_orphan(skb); // can we really move orphan here?
 		sk_other = tcp_skb_bpf_redirect_fetch(skb);
 		if (unlikely(!sk_other))
 			goto out_free;
@@ -696,14 +693,17 @@ static void sk_psock_verdict_apply(struct sk_psock *psock,
 			schedule_work(&psock_other->work);
 			break;
 		}
-		/* fall-through */
+		kfree_skb(skb);
+		break;
 	case __SK_DROP:
 		/* fall-through */
+		skb_orphan(skb);
 	default:
 out_free:
 		kfree_skb(skb);
 	}
 }
+EXPORT_SYMBOL_GPL(sk_psock_verdict_apply);
 
 static void sk_psock_strp_read(struct strparser *strp, struct sk_buff *skb)
 {
