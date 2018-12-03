@@ -5603,6 +5603,8 @@ sk_skb_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
 	case BPF_FUNC_sk_release:
 		return &bpf_sk_release_proto;
 #endif
+	case BPF_FUNC_skb_adjust_room:
+		return &bpf_skb_adjust_room_proto;
 	default:
 		return bpf_base_func_proto(func_id);
 	}
