@@ -23,14 +23,14 @@ static bool tcp_bpf_stream_read(const struct sock *sk)
 }
 
 static int tcp_bpf_wait_data(struct sock *sk, struct sk_psock *psock,
-			     int flags, long timeo, int *err)
+			     int flags, long *timeo, int *err)
 {
 	DEFINE_WAIT_FUNC(wait, woken_wake_function);
 	int ret;
 
 	add_wait_queue(sk_sleep(sk), &wait);
 	sk_set_bit(SOCKWQ_ASYNC_WAITDATA, sk);
-	ret = sk_wait_event(sk, &timeo,
+	ret = sk_wait_event(sk, timeo,
 			    !list_empty(&psock->ingress_msg) ||
 			    !skb_queue_empty(&sk->sk_receive_queue), &wait);
 	sk_clear_bit(SOCKWQ_ASYNC_WAITDATA, sk);
@@ -72,6 +72,7 @@ int __tcp_bpf_recvmsg(struct sock *sk, struct sk_psock *psock,
 			}
 
 			copied += copy;
+			tcp_rcv_space_adjust(sk);
 			if (likely(!peek)) {
 				sge->offset += copy;
 				sge->length -= copy;
@@ -106,7 +107,7 @@ int __tcp_bpf_recvmsg(struct sock *sk, struct sk_psock *psock,
 		msg_rx = list_first_entry_or_null(&psock->ingress_msg,
 						  struct sk_msg, list);
 	}
-
+	tcp_cleanup_rbuf(sk, copied);
 	return copied;
 }
 EXPORT_SYMBOL_GPL(__tcp_bpf_recvmsg);
@@ -115,7 +116,8 @@ int tcp_bpf_recvmsg(struct sock *sk, struct msghdr *msg, size_t len,
 		    int nonblock, int flags, int *addr_len)
 {
 	struct sk_psock *psock;
-	int copied, ret;
+	int copied, ret = 0;
+	long timeo;
 
 	if (unlikely(flags & MSG_ERRQUEUE))
 		return inet_recv_error(sk, msg, len, addr_len);
@@ -125,15 +127,15 @@ int tcp_bpf_recvmsg(struct sock *sk, struct msghdr *msg, size_t len,
 	psock = sk_psock_get(sk);
 	if (unlikely(!psock))
 		return tcp_recvmsg(sk, msg, len, nonblock, flags, addr_len);
+
+	timeo = sock_rcvtimeo(sk, nonblock);
 	lock_sock(sk);
 msg_bytes_ready:
 	copied = __tcp_bpf_recvmsg(sk, psock, msg, len, flags);
-	if (!copied) {
+	if (!copied && timeo) {
 		int data, err = 0;
-		long timeo;
 
-		timeo = sock_rcvtimeo(sk, nonblock);
-		data = tcp_bpf_wait_data(sk, psock, flags, timeo, &err);
+		data = tcp_bpf_wait_data(sk, psock, flags, &timeo, &err);
 		if (data) {
 			if (skb_queue_empty(&sk->sk_receive_queue))
 				goto msg_bytes_ready;
@@ -145,9 +147,7 @@ msg_bytes_ready:
 			ret = err;
 			goto out;
 		}
-		copied = -EAGAIN;
 	}
-	ret = copied;
 out:
 	release_sock(sk);
 	sk_psock_put(sk, psock);
