@@ -1930,6 +1930,7 @@ int tls_set_sw_offload(struct sock *sk, struct tls_context *ctx, int tx)
 	}
 
 	if (tx) {
+		printk("%s: tx setup\n", __func__);
 		crypto_init_wait(&sw_ctx_tx->async_wait);
 		crypto_info = &ctx->crypto_send.info;
 		cctx = &ctx->tx;
@@ -2021,6 +2022,7 @@ int tls_set_sw_offload(struct sock *sk, struct tls_context *ctx, int tx)
 		write_unlock_bh(&sk->sk_callback_lock);
 
 		strp_check_rcv(&sw_ctx_rx->strp);
+		printk("%s: sw_ctx_rx setup\n", __func__);
 	}
 
 	goto out;

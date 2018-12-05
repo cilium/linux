@@ -72,6 +72,7 @@ int __tcp_bpf_recvmsg(struct sock *sk, struct sk_psock *psock,
 			}
 
 			copied += copy;
+			tcp_rcv_space_adjust(sk);
 			if (likely(!peek)) {
 				sge->offset += copy;
 				sge->length -= copy;
@@ -106,7 +107,7 @@ int __tcp_bpf_recvmsg(struct sock *sk, struct sk_psock *psock,
 		msg_rx = list_first_entry_or_null(&psock->ingress_msg,
 						  struct sk_msg, list);
 	}
-
+	tcp_cleanup_rbuf(sk, copied);
 	return copied;
 }
 EXPORT_SYMBOL_GPL(__tcp_bpf_recvmsg);
@@ -115,7 +116,8 @@ int tcp_bpf_recvmsg(struct sock *sk, struct msghdr *msg, size_t len,
 		    int nonblock, int flags, int *addr_len)
 {
 	struct sk_psock *psock;
-	int copied, ret;
+	int copied, ret = 0;
+	long timeo;
 
 	if (unlikely(flags & MSG_ERRQUEUE))
 		return inet_recv_error(sk, msg, len, addr_len);
@@ -125,12 +127,13 @@ int tcp_bpf_recvmsg(struct sock *sk, struct msghdr *msg, size_t len,
 	psock = sk_psock_get(sk);
 	if (unlikely(!psock))
 		return tcp_recvmsg(sk, msg, len, nonblock, flags, addr_len);
+
 	lock_sock(sk);
 msg_bytes_ready:
 	copied = __tcp_bpf_recvmsg(sk, psock, msg, len, flags);
-	if (!copied) {
-		int data, err = 0;
+	if (!copied) {// && timeo) {
 		long timeo;
+		int data, err = 0;
 
 		timeo = sock_rcvtimeo(sk, nonblock);
 		data = tcp_bpf_wait_data(sk, psock, flags, timeo, &err);
@@ -198,7 +201,10 @@ static int bpf_tcp_ingress(struct sock *sk, struct sk_psock *psock,
 		msg->sg.start = i;
 		msg->sg.size -= apply_bytes;
 		sk_psock_queue_msg(psock, tmp);
-		sk->sk_data_ready(sk);
+		if (psock->parser.enabled)
+			psock->parser.saved_data_ready(sk);
+		else
+			sk->sk_data_ready(sk);
 	} else {
 		sk_msg_free(sk, tmp);
 		kfree(tmp);

@@ -403,7 +403,11 @@ static int sk_psock_skb_ingress(struct sk_psock *psock, struct sk_buff *skb)
 	msg->skb = skb;
 
 	sk_psock_queue_msg(psock, msg);
-	sk->sk_data_ready(sk);
+	if (psock->parser.enabled)
+		psock->parser.saved_data_ready(sk);
+	else
+		sk->sk_data_ready(sk);
+
 	return copied;
 }
 
@@ -672,6 +676,19 @@ void sk_psock_verdict_apply(struct sk_psock *psock,
 
 	switch (verdict) {
 	case __SK_PASS:
+#if 0
+		skb_orphan(skb);
+		sk_other = psock->sk;
+		BUG_ON(!sk_other);
+		if (sock_flag(sk_other, SOCK_DEAD) ||
+		    !sk_psock_test_state(psock, SK_PSOCK_TX_ENABLED))
+			goto out_free;
+		if (atomic_read(&sk_other->sk_rmem_alloc) <=
+		    sk_other->sk_rcvbuf) {
+			skb_queue_tail(&psock->ingress_skb, skb);
+			schedule_work(&psock->work);
+		}
+#endif
 		break;
 	case __SK_REDIRECT:
 		skb_orphan(skb); // can we really move orphan here?
