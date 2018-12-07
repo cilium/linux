@@ -403,10 +403,15 @@ static int sk_psock_skb_ingress(struct sk_psock *psock, struct sk_buff *skb)
 	msg->skb = skb;
 
 	sk_psock_queue_msg(psock, msg);
-	if (psock->parser.enabled)
+	if (psock->parser.enabled) {
+		printk("%s: sk psock queue %p msg len %u saved_Data_Ready\n",
+			__func__, psock->sk, skb->len);
 		psock->parser.saved_data_ready(sk);
-	else
+	} else {
+		printk("%s: sk psock queue %p msg len %u orig sk_Data\n",
+			__func__, psock->sk, skb->len);
 		sk->sk_data_ready(sk);
+	}
 
 	return copied;
 }
@@ -676,15 +681,19 @@ void sk_psock_verdict_apply(struct sk_psock *psock,
 
 	switch (verdict) {
 	case __SK_PASS:
-#if 0
+#if 1
 		skb_orphan(skb);
 		sk_other = psock->sk;
 		BUG_ON(!sk_other);
 		if (sock_flag(sk_other, SOCK_DEAD) ||
-		    !sk_psock_test_state(psock, SK_PSOCK_TX_ENABLED))
+		    !sk_psock_test_state(psock, SK_PSOCK_TX_ENABLED)) {
 			goto out_free;
+		}
 		if (atomic_read(&sk_other->sk_rmem_alloc) <=
 		    sk_other->sk_rcvbuf) {
+			struct tcp_skb_cb *tcp = TCP_SKB_CB(skb);
+
+			tcp->bpf.flags |= BPF_F_INGRESS;
 			skb_queue_tail(&psock->ingress_skb, skb);
 			schedule_work(&psock->work);
 		}

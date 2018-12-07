@@ -224,6 +224,8 @@ static int tcp_bpf_push(struct sock *sk, struct sk_msg *msg, u32 apply_bytes,
 	u32 off;
 
 	while (1) {
+		bool has_ulp;
+
 		sge = sk_msg_elem(msg, msg->sg.start);
 		size = (apply && apply_bytes < sge->length) ?
 			apply_bytes : sge->length;
@@ -231,8 +233,12 @@ static int tcp_bpf_push(struct sock *sk, struct sk_msg *msg, u32 apply_bytes,
 		page = sg_page(sge);
 
 		tcp_rate_check_app_limited(sk);
+		has_ulp = tcp_has_ulp(sk);
+		if (has_ulp)
+			flags |= MSG_SENDPAGE_NOPOLICY;
 retry:
-		ret = do_tcp_sendpages(sk, page, off, size, flags);
+		ret = kernel_sendpage_locked(sk, page, off, size, flags);
+
 		if (ret <= 0)
 			return ret;
 		if (apply)
