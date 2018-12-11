@@ -692,9 +692,13 @@ static int bpf_exec_tx_verdict(struct sk_msg *msg, struct sock *sk,
 
 	policy = !(flags & MSG_SENDPAGE_NOPOLICY);
 	psock = sk_psock_get(sk);
-	if (!psock || !policy)
+	printk("%s: %p : flags %08X - policy %i psock %p\n", __func__, sk, flags, policy, psock);
+	if (!psock)
 		return tls_push_record(sk, flags, record_type);
 more_data:
+ 	if (!policy)
+		psock->eval = __SK_PASS;
+
 	enospc = sk_msg_full(msg);
 	if (psock->eval == __SK_NONE) {
 		delta = msg->sg.size;
@@ -795,6 +799,7 @@ static int tls_sw_push_pending_record(struct sock *sk, int flags)
 	if (!copied)
 		return 0;
 
+	printk("%s: push pending record %zu\n", __func__, copied);
 	return bpf_exec_tx_verdict(msg_pl, sk, true, TLS_RECORD_TYPE_DATA,
 				   &copied, flags);
 }
@@ -819,6 +824,8 @@ int tls_sw_sendmsg(struct sock *sk, struct msghdr *msg, size_t size)
 	int num_zc = 0;
 	int orig_size;
 	int ret = 0;
+
+	printk("%s: tls sendmsg %zu\n", __func__, size);
 
 	if (msg->msg_flags & ~(MSG_MORE | MSG_DONTWAIT | MSG_NOSIGNAL))
 		return -ENOTSUPP;
@@ -903,9 +910,11 @@ alloc_encrypted:
 			copied += try_to_copy;
 
 			sk_msg_sg_copy_set(msg_pl, first);
+			printk("%s tlx bpf tx verdict %zu\n", __func__, copied);
 			ret = bpf_exec_tx_verdict(msg_pl, sk, full_record,
 						  record_type, &copied,
 						  msg->msg_flags);
+			printk("%s tlx bpf tx verdict %zu <- %i\n", __func__, copied, ret);
 			if (ret) {
 				if (ret == -EINPROGRESS)
 					num_async++;
@@ -954,9 +963,11 @@ fallback_to_reg_send:
 		tls_ctx->pending_open_record_frags = true;
 		copied += try_to_copy;
 		if (full_record || eor) {
+			printk("%s tlx bpf tx verdict %zu\n", __func__, copied);
 			ret = bpf_exec_tx_verdict(msg_pl, sk, full_record,
 						  record_type, &copied,
 						  msg->msg_flags);
+			printk("%s tlx bpf tx verdict %zu <- %i\n", __func__, copied, ret);
 			if (ret) {
 				if (ret == -EINPROGRESS)
 					num_async++;
@@ -1034,6 +1045,7 @@ int tls_sw_do_sendpage(struct sock *sk, struct page *page,
 	int ret = 0;
 	bool eor;
 
+	printk("%s: %p size %zu\n", __func__, sk, size);
 	eor = !(flags & (MSG_MORE | MSG_SENDPAGE_NOTLAST));
 	sk_clear_bit(SOCKWQ_ASYNC_NOSPACE, sk);
 
@@ -1102,8 +1114,10 @@ alloc_payload:
 		tls_ctx->pending_open_record_frags = true;
 		if (full_record || eor || sk_msg_full(msg_pl)) {
 			rec->inplace_crypto = 0;
+			printk("%s tlx bpf tx verdict %zu\n", __func__, copied);
 			ret = bpf_exec_tx_verdict(msg_pl, sk, full_record,
 						  record_type, &copied, flags);
+			printk("%s tlx bpf tx verdict %zu <- %i\n", __func__, copied, ret);
 			if (ret) {
 				if (ret == -EINPROGRESS)
 					num_async++;
@@ -1149,6 +1163,7 @@ int tls_sw_sendpage_locked(struct sock *sk, struct page *page,
 		      MSG_SENDPAGE_NOTLAST | MSG_SENDPAGE_NOPOLICY))
 		return -ENOTSUPP;
 
+	printk("%s: %p tls_sw_do_sendpage locked: %8X\n", __func__, sk, flags);
 	return tls_sw_do_sendpage(sk, page, offset, size, flags);
 }
 
@@ -1486,6 +1501,7 @@ int tls_sw_recvmsg(struct sock *sk,
 	bool is_kvec = iov_iter_is_kvec(&msg->msg_iter);
 	int num_async = 0;
 
+	printk("%s: %p recvmsg %zu\n", __func__, sk, len);
 	flags |= nonblock;
 
 	if (unlikely(flags & MSG_ERRQUEUE))
@@ -1539,6 +1555,7 @@ int tls_sw_recvmsg(struct sock *sk,
 			int to_copy = rxm->full_len - tls_ctx->rx.overhead_size;
 			bool bpf = READ_ONCE(psock->progs.skb_verdict);
 
+			printk("%s: recv bpf %i\n", __func__, bpf);
 			if (!is_kvec && !bpf && to_copy <= len &&
 			    likely(!(flags & MSG_PEEK)))
 				zc = true;
@@ -1644,6 +1661,7 @@ recv_end:
 	release_sock(sk);
 	if (psock)
 		sk_psock_put(sk, psock);
+	printk("%s: %p copied %zu err %i\n", __func__, sk, copied, err);
 	return copied ? : err;
 }
 
@@ -1915,6 +1933,7 @@ int tls_set_sw_offload(struct sock *sk, struct tls_context *ctx, int tx)
 	u16 nonce_size, tag_size, iv_size, rec_seq_size;
 	char *iv, *rec_seq;
 	int rc = 0;
+	printk("%s: ...\n", __func__);
 
 	if (!ctx) {
 		rc = -EINVAL;
@@ -1957,6 +1976,7 @@ int tls_set_sw_offload(struct sock *sk, struct tls_context *ctx, int tx)
 		INIT_DELAYED_WORK(&sw_ctx_tx->tx_work.work, tx_work_handler);
 		sw_ctx_tx->tx_work.sk = sk;
 	} else {
+		printk("%s: rx setup\n", __func__);
 		crypto_init_wait(&sw_ctx_rx->async_wait);
 		crypto_info = &ctx->crypto_recv.info;
 		cctx = &ctx->rx;

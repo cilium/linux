@@ -16,8 +16,9 @@ static bool tcp_bpf_stream_read(const struct sock *sk)
 
 	rcu_read_lock();
 	psock = sk_psock(sk);
-	if (likely(psock))
+	if (likely(psock)) {
 		empty = list_empty(&psock->ingress_msg);
+	}
 	rcu_read_unlock();
 	return !empty;
 }
@@ -26,16 +27,41 @@ static int tcp_bpf_wait_data(struct sock *sk, struct sk_psock *psock,
 			     int flags, long timeo, int *err)
 {
 	DEFINE_WAIT_FUNC(wait, woken_wake_function);
-	int ret;
+	int ret = 0;
 
-	add_wait_queue(sk_sleep(sk), &wait);
-	sk_set_bit(SOCKWQ_ASYNC_WAITDATA, sk);
-	ret = sk_wait_event(sk, &timeo,
-			    !list_empty(&psock->ingress_msg) ||
-			    !skb_queue_empty(&sk->sk_receive_queue), &wait);
-	sk_clear_bit(SOCKWQ_ASYNC_WAITDATA, sk);
-	remove_wait_queue(sk_sleep(sk), &wait);
-	return ret;
+	while (list_empty(&psock->ingress_msg) &&
+	       skb_queue_empty(&sk->sk_receive_queue)) {
+		//printk("%s: ingress msg empty %p\n", __func__, sk);
+		if (sk->sk_err) {
+			*err = sock_error(sk);
+			return 0;
+		}
+
+		if (sk->sk_shutdown & RCV_SHUTDOWN)
+			return 0;
+
+		if (sock_flag(sk, SOCK_DONE))
+			return 0;
+
+		if ((flags & MSG_DONTWAIT) || !timeo) {
+			*err = -EAGAIN;
+			return 0;
+		}
+
+		add_wait_queue(sk_sleep(sk), &wait);
+		sk_set_bit(SOCKWQ_ASYNC_WAITDATA, sk);
+		ret = sk_wait_event(sk, &timeo,
+				    !list_empty(&psock->ingress_msg) ||
+				    !skb_queue_empty(&sk->sk_receive_queue), &wait);
+		sk_clear_bit(SOCKWQ_ASYNC_WAITDATA, sk);
+		remove_wait_queue(sk_sleep(sk), &wait);
+
+		if (signal_pending(current)) {
+			*err = sock_intr_errno(timeo);
+			return 0;
+		}
+	}
+	return 1;
 }
 
 int __tcp_bpf_recvmsg(struct sock *sk, struct sk_psock *psock,
@@ -119,15 +145,22 @@ int tcp_bpf_recvmsg(struct sock *sk, struct msghdr *msg, size_t len,
 	int copied, ret = 0;
 	long timeo;
 
-	if (unlikely(flags & MSG_ERRQUEUE))
+	if (unlikely(flags & MSG_ERRQUEUE)) {
+		printk("%s: %p msg errqueue\n", __func__, sk);
 		return inet_recv_error(sk, msg, len, addr_len);
-	if (!skb_queue_empty(&sk->sk_receive_queue))
+	}
+	if (!skb_queue_empty(&sk->sk_receive_queue)) {
+		printk("%s: %p sk receive queu\n", __func__, sk);
 		return tcp_recvmsg(sk, msg, len, nonblock, flags, addr_len);
+	}
 
 	psock = sk_psock_get(sk);
-	if (unlikely(!psock))
+	if (unlikely(!psock)) {
+		printk("%s: %p 1psock recmsg\n", __func__, sk);
 		return tcp_recvmsg(sk, msg, len, nonblock, flags, addr_len);
+	}
 
+	//flags |= nonblock;
 	lock_sock(sk);
 msg_bytes_ready:
 	copied = __tcp_bpf_recvmsg(sk, psock, msg, len, flags);
@@ -136,10 +169,12 @@ msg_bytes_ready:
 		int data, err = 0;
 
 		timeo = sock_rcvtimeo(sk, nonblock);
+		//timeo = sock_rcvtimeo(sk, flags & MSG_DONTWAIT);
 		data = tcp_bpf_wait_data(sk, psock, flags, timeo, &err);
 		if (data) {
-			if (skb_queue_empty(&sk->sk_receive_queue))
+			if (skb_queue_empty(&sk->sk_receive_queue)) {
 				goto msg_bytes_ready;
+			}
 			release_sock(sk);
 			sk_psock_put(sk, psock);
 			return tcp_recvmsg(sk, msg, len, nonblock, flags, addr_len);
@@ -152,6 +187,7 @@ msg_bytes_ready:
 	}
 	ret = copied;
 out:
+	//printk("%s: %p len %zu copied %zu ret %i\n", __func__, sk, len, copied, ret);
 	release_sock(sk);
 	sk_psock_put(sk, psock);
 	return ret;
@@ -197,14 +233,17 @@ static int bpf_tcp_ingress(struct sock *sk, struct sk_psock *psock,
 		}
 	} while (i != msg->sg.end);
 
+	if (psock->parser.enabled) {
+		psock->parser.saved_data_ready(sk);
+	} else {
+		sk->sk_data_ready(sk);
+	}
+
 	if (!ret) {
 		msg->sg.start = i;
 		msg->sg.size -= apply_bytes;
+		//printk("%s: %p: queue %iB\n", __func__, sk, msg->sg.size);
 		sk_psock_queue_msg(psock, tmp);
-		if (psock->parser.enabled)
-			psock->parser.saved_data_ready(sk);
-		else
-			sk->sk_data_ready(sk);
 	} else {
 		sk_msg_free(sk, tmp);
 		kfree(tmp);
@@ -233,11 +272,15 @@ static int tcp_bpf_push(struct sock *sk, struct sk_msg *msg, u32 apply_bytes,
 		page = sg_page(sge);
 
 		tcp_rate_check_app_limited(sk);
-		has_ulp = tcp_has_ulp(sk);
-		if (has_ulp)
-			flags |= MSG_SENDPAGE_NOPOLICY;
 retry:
-		ret = kernel_sendpage_locked(sk, page, off, size, flags);
+		has_ulp = tls_tx_sw_enabled(sk);
+		if (has_ulp) {
+			printk("%s: %p has_ulp nopolicy\n", __func__, sk);
+			flags |= MSG_SENDPAGE_NOPOLICY;
+			ret = kernel_sendpage_locked(sk, page, off, size, flags);
+		} else {
+			ret = do_tcp_sendpages(sk, page, off, size, flags);
+		}
 
 		if (ret <= 0)
 			return ret;
@@ -401,9 +444,11 @@ static int tcp_bpf_sendmsg(struct sock *sk, struct msghdr *msg, size_t size)
 	struct sk_psock *psock;
 	long timeo;
 
+	//printk("%s: %p send %zu\n", __func__, sk, size);
 	psock = sk_psock_get(sk);
-	if (unlikely(!psock))
+	if (unlikely(!psock)) {
 		return tcp_sendmsg(sk, msg, size);
+	}
 
 	lock_sock(sk);
 	timeo = sock_sndtimeo(sk, msg->msg_flags & MSG_DONTWAIT);
@@ -417,8 +462,9 @@ static int tcp_bpf_sendmsg(struct sock *sk, struct msghdr *msg, size_t size)
 		}
 
 		copy = msg_data_left(msg);
-		if (!sk_stream_memory_free(sk))
+		if (!sk_stream_memory_free(sk)) {
 			goto wait_for_sndbuf;
+		}
 		if (psock->cork) {
 			msg_tx = psock->cork;
 		} else {
@@ -429,8 +475,9 @@ static int tcp_bpf_sendmsg(struct sock *sk, struct msghdr *msg, size_t size)
 		osize = msg_tx->sg.size;
 		err = sk_msg_alloc(sk, msg_tx, msg_tx->sg.size + copy, msg_tx->sg.end - 1);
 		if (err) {
-			if (err != -ENOSPC)
+			if (err != -ENOSPC) {
 				goto wait_for_memory;
+			}
 			enospc = true;
 			copy = msg_tx->sg.size - osize;
 		}
@@ -456,8 +503,9 @@ static int tcp_bpf_sendmsg(struct sock *sk, struct msghdr *msg, size_t size)
 		}
 
 		err = tcp_bpf_send_verdict(sk, psock, msg_tx, &copied, flags);
-		if (unlikely(err < 0))
+		if (unlikely(err < 0)) {
 			goto out_err;
+		}
 		continue;
 wait_for_sndbuf:
 		set_bit(SOCK_NOSPACE, &sk->sk_socket->flags);
@@ -470,10 +518,12 @@ wait_for_memory:
 		}
 	}
 out_err:
-	if (err < 0)
+	if (err < 0) {
 		err = sk_stream_error(sk, msg->msg_flags, err);
+	}
 	release_sock(sk);
 	sk_psock_put(sk, psock);
+	sk->sk_write_space(sk);
 	return copied ? copied : err;
 }
 
@@ -485,6 +535,7 @@ static int tcp_bpf_sendpage(struct sock *sk, struct page *page, int offset,
 	struct sk_psock *psock;
 	bool enospc = false;
 
+	//printk("%s: %p senpage %zu\n", __func__, sk, size);
 	psock = sk_psock_get(sk);
 	if (unlikely(!psock))
 		return tcp_sendpage(sk, page, offset, size, flags);

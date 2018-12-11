@@ -64,6 +64,8 @@ static void update_sk_prot(struct sock *sk, struct tls_context *ctx)
 {
 	int ip_ver = sk->sk_family == AF_INET6 ? TLSV6 : TLSV4;
 
+	printk("%s: %p, update sk protocols ip_ver %i tc conf %i rx_conf %i\n",
+			__func__, sk, ip_ver, ctx->tx_conf, ctx->rx_conf);
 	sk->sk_prot = &tls_prots[ip_ver][ctx->tx_conf][ctx->rx_conf];
 }
 
@@ -410,10 +412,12 @@ static int do_tls_setsockopt_conf(struct sock *sk, char __user *optval,
 	int conf;
 
 	if (!optval || (optlen < sizeof(*crypto_info))) {
+		printk("%s; optval -einval\n", __func__);
 		rc = -EINVAL;
 		goto out;
 	}
 
+	printk("%s: iwth tx %i\n", __func__ ,tx);
 	if (tx)
 		crypto_info = &ctx->crypto_send.info;
 	else
@@ -452,11 +456,13 @@ static int do_tls_setsockopt_conf(struct sock *sk, char __user *optval,
 		break;
 	}
 	default:
+		printk("%s: invalid version\n", __func__);
 		rc = -EINVAL;
 		goto err_crypto_info;
 	}
 
 	if (tx) {
+		printk("%s: tx opts\n", __func__);
 #ifdef CONFIG_TLS_DEVICE
 		rc = tls_set_device_offload(sk, ctx);
 		conf = TLS_HW;
@@ -468,6 +474,7 @@ static int do_tls_setsockopt_conf(struct sock *sk, char __user *optval,
 			conf = TLS_SW;
 		}
 	} else {
+		printk("%s: rx opts\n", __func__);
 #ifdef CONFIG_TLS_DEVICE
 		rc = tls_set_device_offload_rx(sk, ctx);
 		conf = TLS_HW;
@@ -489,9 +496,11 @@ static int do_tls_setsockopt_conf(struct sock *sk, char __user *optval,
 		ctx->rx_conf = conf;
 	update_sk_prot(sk, ctx);
 	if (tx) {
+		printk("%s: tx write space fixup\n", __func__);
 		ctx->sk_write_space = sk->sk_write_space;
 		sk->sk_write_space = tls_write_space;
 	} else {
+		printk("%s: rx write proto ops\n", __func__);
 		sk->sk_socket->ops = &tls_sw_proto_ops;
 	}
 	goto out;
@@ -499,6 +508,7 @@ static int do_tls_setsockopt_conf(struct sock *sk, char __user *optval,
 err_crypto_info:
 	memzero_explicit(crypto_info, sizeof(union tls_crypto_context));
 out:
+	printk("%s: %s proto ops enabled %i\n", __func__, tx ? "tx" : "rx", rc);
 	return rc;
 }
 
@@ -507,9 +517,11 @@ static int do_tls_setsockopt(struct sock *sk, int optname,
 {
 	int rc = 0;
 
+	printk("%s: optname %i\n", __func__, optname);
 	switch (optname) {
 	case TLS_TX:
 	case TLS_RX:
+		printk("%s: opt tx or rx\n", __func__);
 		lock_sock(sk);
 		rc = do_tls_setsockopt_conf(sk, optval, optlen,
 					    optname == TLS_TX);
@@ -529,6 +541,7 @@ static int tls_setsockopt(struct sock *sk, int level, int optname,
 
 	if (level != SOL_TLS)
 		return ctx->setsockopt(sk, level, optname, optval, optlen);
+	printk("%s: %i\n", __func__, optname);
 
 	return do_tls_setsockopt(sk, optname, optval, optlen);
 }
@@ -688,11 +701,14 @@ static int tls_init(struct sock *sk)
 			smp_store_release(&saved_tcpv6_prot, sk->sk_prot);
 		}
 		mutex_unlock(&tcpv6_prot_mutex);
+	} else {
+		build_protos(tls_prots[TLSV4], sk->sk_prot);
 	}
 
 	ctx->tx_conf = TLS_BASE;
 	ctx->rx_conf = TLS_BASE;
 	update_sk_prot(sk, ctx);
+	printk("%s update sk proto\n", __func__);
 out:
 	return rc;
 }

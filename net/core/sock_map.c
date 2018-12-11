@@ -382,7 +382,8 @@ out_free:
 
 static bool sock_map_op_okay(const struct bpf_sock_ops_kern *ops)
 {
-	return ops->op == BPF_SOCK_OPS_PASSIVE_ESTABLISHED_CB ||
+	return ops->op == BPF_SOCK_OPS_TCP_CONNECT_CB ||
+	       ops->op == BPF_SOCK_OPS_PASSIVE_ESTABLISHED_CB ||
 	       ops->op == BPF_SOCK_OPS_ACTIVE_ESTABLISHED_CB;
 }
 

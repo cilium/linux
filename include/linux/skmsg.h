@@ -440,4 +440,6 @@ int sk_psock_bpf_run(struct sk_psock *psock, struct bpf_prog *prog,
 		     struct sk_buff *skb);
 void sk_psock_verdict_apply(struct sk_psock *psock,
 			    struct sk_buff *skb, int verdict);
+
+bool tls_tx_sw_enabled(struct sock *sk);
 #endif /* _LINUX_SKMSG_H */

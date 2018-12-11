@@ -2075,12 +2075,6 @@ void tcp_unregister_ulp(struct tcp_ulp_ops *type);
 int tcp_set_ulp(struct sock *sk, const char *name);
 void tcp_get_available_ulp(char *buf, size_t len);
 void tcp_cleanup_ulp(struct sock *sk);
-static inline bool tcp_has_ulp(struct sock *sk)
-{
-	struct inet_connection_sock *icsk = inet_csk(sk);
-
-	return !!icsk->icsk_ulp_ops;
-}
 
 #define MODULE_ALIAS_TCP_ULP(name)				\
 	__MODULE_INFO(alias, alias_userspace, name);		\

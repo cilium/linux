@@ -2,11 +2,21 @@
 /* Copyright (c) 2017 - 2018 Covalent IO, Inc. http://covalent.io */
 
 #include <linux/skmsg.h>
+#include <net/tls.h>
 #include <linux/skbuff.h>
 #include <linux/scatterlist.h>
 
 #include <net/sock.h>
 #include <net/tcp.h>
+
+bool tls_tx_sw_enabled(struct sock *sk)
+{
+	struct tls_context *ctx = tls_get_ctx(sk);
+
+	if (!ctx)
+		return false;
+	return ctx->tx_conf == TLS_SW;
+}
 
 static bool sk_msg_try_coalesce_ok(struct sk_msg *msg, int elem_first_coalesce)
 {
@@ -403,15 +413,10 @@ static int sk_psock_skb_ingress(struct sk_psock *psock, struct sk_buff *skb)
 	msg->skb = skb;
 
 	sk_psock_queue_msg(psock, msg);
-	if (psock->parser.enabled) {
-		printk("%s: sk psock queue %p msg len %u saved_Data_Ready\n",
-			__func__, psock->sk, skb->len);
+	if (psock->parser.enabled) 
 		psock->parser.saved_data_ready(sk);
-	} else {
-		printk("%s: sk psock queue %p msg len %u orig sk_Data\n",
-			__func__, psock->sk, skb->len);
+	else
 		sk->sk_data_ready(sk);
-	}
 
 	return copied;
 }

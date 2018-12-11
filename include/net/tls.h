@@ -491,4 +491,6 @@ int tls_set_device_offload_rx(struct sock *sk, struct tls_context *ctx);
 void tls_device_offload_cleanup_rx(struct sock *sk);
 void handle_device_resync(struct sock *sk, u32 seq, u64 rcd_sn);
 
+bool tls_tx_enabled(struct sock *sk);
+
 #endif /* _TLS_OFFLOAD_H */
