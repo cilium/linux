@@ -264,7 +264,8 @@ static int tls_push_record(struct sock *sk,
 	list_add_tail(&record->list, &offload_ctx->records_list);
 	spin_unlock_irq(&offload_ctx->lock);
 	offload_ctx->open_record = NULL;
-	tls_advance_record_sn(sk, &ctx->tx, ctx->crypto_send.info.version);
+	tls_advance_record_sn(sk, prot, &ctx->tx,
+			      ctx->crypto_send.info.version);
 
 	for (i = 0; i < record->num_frags; i++) {
 		frag = &record->frags[i];
@@ -531,7 +532,8 @@ struct tls_record_info *tls_get_record(struct tls_offload_context_tx *context,
 }
 EXPORT_SYMBOL(tls_get_record);
 
-static int tls_device_push_pending_record(struct sock *sk, int flags)
+static int tls_device_push_pending_record(struct sock *sk,
+					  struct tls_context *ctx, int flags)
 {
 	struct iov_iter	msg_iter;
 
@@ -913,7 +915,7 @@ int tls_set_device_offload_rx(struct sock *sk, struct tls_context *ctx)
 
 free_sw_resources:
 	up_read(&device_offload_lock);
-	tls_sw_free_resources_rx(sk);
+	tls_sw_free_resources_rx(sk, ctx);
 	down_read(&device_offload_lock);
 release_ctx:
 	ctx->priv_ctx_rx = NULL;
@@ -949,7 +951,7 @@ void tls_device_offload_cleanup_rx(struct sock *sk)
 	}
 out:
 	up_read(&device_offload_lock);
-	tls_sw_release_resources_rx(sk);
+	tls_sw_release_resources_rx(sk, tls_ctx);
 }
 
 static int tls_device_down(struct net_device *netdev)
