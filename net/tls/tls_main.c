@@ -251,6 +251,32 @@ static void tls_write_space(struct sock *sk)
 	ctx->sk_write_space(sk);
 }
 
+static void tls_ctx_free_deferred(struct work_struct *gc)
+{
+	struct tls_context *ctx = container_of(gc, struct tls_context, gc);
+
+	if (ctx->rx_conf == TLS_SW)
+		tls_sw_release_strp_rx(ctx);
+
+	/* Ensure any remaining work items are completed. The sk will
+	 * already have lost its tls_ctx reference by the time we get
+	 * here so no xmit operation will actually be performed.
+	 */
+	tls_sw_cancel_work_tx(ctx);
+	kfree(ctx);
+}
+
+static void tls_ctx_free_wq(struct tls_context *ctx)
+{
+	if (!ctx)
+		return;
+
+	memzero_explicit(&ctx->crypto_send, sizeof(ctx->crypto_send));
+	memzero_explicit(&ctx->crypto_recv, sizeof(ctx->crypto_recv));
+	INIT_WORK(&ctx->gc, tls_ctx_free_deferred);
+	schedule_work(&ctx->gc);
+}
+
 static void tls_ctx_free(struct tls_context *ctx)
 {
 	if (!ctx)
@@ -289,6 +315,20 @@ static void tls_sk_proto_cleanup(struct sock *sk,
 #endif
 }
 
+static void tls_sk_proto_unhash(struct sock *sk)
+{
+	struct tls_context *ctx = tls_get_ctx(sk);
+	void (*sk_proto_unhash)(struct sock *sk);
+	long timeo = sock_sndtimeo(sk, 0);
+
+	sk->sk_prot = ctx->sk_proto;
+	sk_proto_unhash = ctx->unhash;
+	tls_sk_proto_cleanup(sk, ctx, timeo);
+	tls_ctx_free_wq(ctx);
+	if (sk_proto_unhash)
+		sk_proto_unhash(sk);
+}
+
 static void tls_sk_proto_close(struct sock *sk, long timeout)
 {
 	struct tls_context *ctx = tls_get_ctx(sk);
@@ -307,6 +347,7 @@ static void tls_sk_proto_close(struct sock *sk, long timeout)
 	if (ctx->tx_conf == TLS_BASE && ctx->rx_conf == TLS_BASE)
 		goto skip_tx_cleanup;
 
+	sk->sk_prot = ctx->sk_proto;
 	tls_sk_proto_cleanup(sk, ctx, timeo);
 
 skip_tx_cleanup:
@@ -731,20 +772,24 @@ static void build_protos(struct proto prot[TLS_NUM_CONFIG][TLS_NUM_CONFIG],
 	prot[TLS_BASE][TLS_BASE].setsockopt	= tls_setsockopt;
 	prot[TLS_BASE][TLS_BASE].getsockopt	= tls_getsockopt;
 	prot[TLS_BASE][TLS_BASE].close		= tls_sk_proto_close;
+	prot[TLS_BASE][TLS_BASE].unhash		= tls_sk_proto_unhash;
 
 	prot[TLS_SW][TLS_BASE] = prot[TLS_BASE][TLS_BASE];
 	prot[TLS_SW][TLS_BASE].sendmsg		= tls_sw_sendmsg;
 	prot[TLS_SW][TLS_BASE].sendpage		= tls_sw_sendpage;
+	prot[TLS_SW][TLS_BASE].unhash		= tls_sk_proto_unhash;
 
 	prot[TLS_BASE][TLS_SW] = prot[TLS_BASE][TLS_BASE];
 	prot[TLS_BASE][TLS_SW].recvmsg		  = tls_sw_recvmsg;
 	prot[TLS_BASE][TLS_SW].stream_memory_read = tls_sw_stream_read;
 	prot[TLS_BASE][TLS_SW].close		  = tls_sk_proto_close;
+	prot[TLS_BASE][TLS_SW].unhash		  = tls_sk_proto_unhash;
 
 	prot[TLS_SW][TLS_SW] = prot[TLS_SW][TLS_BASE];
 	prot[TLS_SW][TLS_SW].recvmsg		= tls_sw_recvmsg;
 	prot[TLS_SW][TLS_SW].stream_memory_read	= tls_sw_stream_read;
 	prot[TLS_SW][TLS_SW].close		= tls_sk_proto_close;
+	prot[TLS_SW][TLS_SW].unhash		= tls_sk_proto_unhash;
 
 #ifdef CONFIG_TLS_DEVICE
 	prot[TLS_HW][TLS_BASE] = prot[TLS_BASE][TLS_BASE];
@@ -795,6 +840,7 @@ static int tls_init(struct sock *sk)
 	tls_build_proto(sk);
 	ctx->tx_conf = TLS_BASE;
 	ctx->rx_conf = TLS_BASE;
+	ctx->sk_proto = sk->sk_prot;
 	update_sk_prot(sk, ctx);
 out:
 	return rc;
