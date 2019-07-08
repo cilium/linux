@@ -317,29 +317,40 @@ static void tls_sk_proto_cleanup(struct sock *sk,
 
 static void tls_sk_proto_unhash(struct sock *sk)
 {
-	struct tls_context *ctx = tls_get_ctx(sk);
-	void (*sk_proto_unhash)(struct sock *sk);
+	struct inet_connection_sock *icsk = inet_csk(sk);
+	struct tls_context *ctx;
 	long timeo = sock_sndtimeo(sk, 0);
 
-	sk->sk_prot = ctx->sk_proto;
-	sk_proto_unhash = ctx->unhash;
-	tls_sk_proto_cleanup(sk, ctx, timeo);
+	if (!icsk->icsk_ulp_data) {
+		if (sk->sk_prot->unhash)
+			sk->sk_prot->unhash(sk);
+	}
+
+	ctx = tls_get_ctx(sk);
+	if (ctx->tx_conf == TLS_SW || ctx->rx_conf == TLS_SW)
+		tls_sk_proto_cleanup(sk, ctx, timeo);
+	icsk->icsk_ulp_data = NULL;
 	tls_ctx_free_wq(ctx);
-	if (sk_proto_unhash)
-		sk_proto_unhash(sk);
+
+	if (ctx->unhash)
+		ctx->unhash(sk);
+	return;
 }
 
 static void tls_sk_proto_close(struct sock *sk, long timeout)
 {
+	struct inet_connection_sock *icsk = inet_csk(sk);
 	struct tls_context *ctx = tls_get_ctx(sk);
 	long timeo = sock_sndtimeo(sk, 0);
 	void (*sk_proto_close)(struct sock *sk, long timeout);
+
+	if (unlikely(!ctx))
+		return;
 
 	if (ctx->tx_conf == TLS_SW)
 		tls_sw_cancel_work_tx(ctx);
 
 	lock_sock(sk);
-	sk_proto_close = ctx->sk_proto_close;
 
 	if (ctx->tx_conf == TLS_HW_RECORD && ctx->rx_conf == TLS_HW_RECORD)
 		goto skip_tx_cleanup;
@@ -347,15 +358,18 @@ static void tls_sk_proto_close(struct sock *sk, long timeout)
 	if (ctx->tx_conf == TLS_BASE && ctx->rx_conf == TLS_BASE)
 		goto skip_tx_cleanup;
 
-	sk->sk_prot = ctx->sk_proto;
 	tls_sk_proto_cleanup(sk, ctx, timeo);
 
 skip_tx_cleanup:
+	write_lock_bh(&sk->sk_callback_lock);
+	icsk->icsk_ulp_data = NULL;
+	if (sk->sk_prot->close == tls_sk_proto_close)
+		sk->sk_prot = ctx->sk_proto;
+	write_unlock_bh(&sk->sk_callback_lock);
 	release_sock(sk);
 	if (ctx->rx_conf == TLS_SW)
 		tls_sw_release_strp_rx(ctx);
-	sk_proto_close(sk, timeout);
-
+	ctx->sk_proto_close(sk, timeout);
 	if (ctx->tx_conf != TLS_HW && ctx->rx_conf != TLS_HW &&
 	    ctx->tx_conf != TLS_HW_RECORD && ctx->rx_conf != TLS_HW_RECORD)
 		tls_ctx_free(ctx);
@@ -649,6 +663,7 @@ static struct tls_context *create_ctx(struct sock *sk)
 	ctx->setsockopt = sk->sk_prot->setsockopt;
 	ctx->getsockopt = sk->sk_prot->getsockopt;
 	ctx->sk_proto_close = sk->sk_prot->close;
+	ctx->unhash = sk->sk_prot->unhash;
 	return ctx;
 }
 
@@ -830,20 +845,45 @@ static int tls_init(struct sock *sk)
 	if (sk->sk_state != TCP_ESTABLISHED)
 		return -ENOTSUPP;
 
+	tls_build_proto(sk);
+
 	/* allocate tls context */
+	write_lock_bh(&sk->sk_callback_lock);
 	ctx = create_ctx(sk);
 	if (!ctx) {
 		rc = -ENOMEM;
 		goto out;
 	}
 
-	tls_build_proto(sk);
 	ctx->tx_conf = TLS_BASE;
 	ctx->rx_conf = TLS_BASE;
 	ctx->sk_proto = sk->sk_prot;
 	update_sk_prot(sk, ctx);
 out:
+	write_unlock_bh(&sk->sk_callback_lock);
 	return rc;
+}
+
+static void tls_update(struct sock *sk, struct proto *p)
+{
+	struct tls_context *ctx;
+
+	ctx = tls_get_ctx(sk);
+	if (likely(ctx)) {
+		ctx->sk_proto_close = p->close;
+		ctx->unhash = p->unhash;
+		ctx->sk_proto = p;
+	} else {
+	/* If tearing TLS sock down AND bpf map free also calls update_ulp
+	 * when psock is destroyed AND tcp_update_ulp was called with ulp
+	 * available AND then we NULL'd it before getting lock above we get
+	 * here. Set the proto ops because there is no one left to do it. If
+	 * we don't set it tls_close() will call ctx->sk_proto_close() but
+	 * no psock exists so sk->proto->close() is used but without below
+	 * that would still point at tcp_bpf_close().
+	 */
+		sk->sk_prot = p;
+	}
 }
 
 void tls_register_device(struct tls_device *device)
@@ -866,6 +906,7 @@ static struct tcp_ulp_ops tcp_tls_ulp_ops __read_mostly = {
 	.name			= "tls",
 	.owner			= THIS_MODULE,
 	.init			= tls_init,
+	.update			= tls_update,
 };
 
 static int __init tls_register(void)
