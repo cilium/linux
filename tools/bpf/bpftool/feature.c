@@ -436,24 +436,26 @@ end_parse:
 	}
 }
 
-static bool probe_bpf_syscall(const char *define_prefix)
+static bool
+probe_bpf_syscall(bool print_syscall_config, const char *define_prefix)
 {
 	bool res;
 
 	bpf_load_program(BPF_PROG_TYPE_UNSPEC, NULL, 0, NULL, 0, NULL, 0);
 	res = (errno != ENOSYS);
 
-	print_bool_feature("have_bpf_syscall",
-			   "bpf() syscall",
-			   "BPF_SYSCALL",
-			   res, define_prefix);
+	if (print_syscall_config)
+		print_bool_feature("have_bpf_syscall",
+				   "bpf() syscall",
+				   "BPF_SYSCALL",
+				   res, define_prefix);
 
 	return res;
 }
 
 static void
-probe_prog_type(enum bpf_prog_type prog_type, bool *supported_types,
-		const char *define_prefix, __u32 ifindex)
+probe_prog_type(bool print_program_types, enum bpf_prog_type prog_type,
+		bool *supported_types, const char *define_prefix, __u32 ifindex)
 {
 	char feat_name[128], plain_desc[128], define_name[128];
 	const char *plain_comment = "eBPF program_type ";
@@ -484,8 +486,10 @@ probe_prog_type(enum bpf_prog_type prog_type, bool *supported_types,
 	sprintf(define_name, "%s_prog_type", prog_type_name[prog_type]);
 	uppercase(define_name, sizeof(define_name));
 	sprintf(plain_desc, "%s%s", plain_comment, prog_type_name[prog_type]);
-	print_bool_feature(feat_name, plain_desc, define_name, res,
-			   define_prefix);
+
+	if (print_program_types)
+		print_bool_feature(feat_name, plain_desc, define_name, res,
+				   define_prefix);
 }
 
 static void
@@ -608,35 +612,41 @@ section_system_config(enum probe_component target, const char *define_prefix)
 	}
 }
 
-static bool section_syscall_config(const char *define_prefix)
+static bool
+section_syscall_config(bool print_syscall_config, const char *define_prefix)
 {
 	bool res;
 
-	print_start_section("syscall_config",
-			    "Scanning system call availability...",
-			    "/*** System call availability ***/",
-			    define_prefix);
-	res = probe_bpf_syscall(define_prefix);
-	print_end_section();
+	if (print_syscall_config)
+		print_start_section("syscall_config",
+				    "Scanning system call availability...",
+				    "/*** System call availability ***/",
+				    define_prefix);
+	res = probe_bpf_syscall(print_syscall_config, define_prefix);
+	if (print_syscall_config)
+		print_end_section();
 
 	return res;
 }
 
 static void
-section_program_types(bool *supported_types, const char *define_prefix,
-		      __u32 ifindex)
+section_program_types(bool print_program_types, bool *supported_types,
+		      const char *define_prefix, __u32 ifindex)
 {
 	unsigned int i;
 
-	print_start_section("program_types",
-			    "Scanning eBPF program types...",
-			    "/*** eBPF program types ***/",
-			    define_prefix);
+	if (print_program_types)
+		print_start_section("program_types",
+				    "Scanning eBPF program types...",
+				    "/*** eBPF program types ***/",
+				    define_prefix);
 
 	for (i = BPF_PROG_TYPE_UNSPEC + 1; i < ARRAY_SIZE(prog_type_name); i++)
-		probe_prog_type(i, supported_types, define_prefix, ifindex);
+		probe_prog_type(print_program_types, i, supported_types,
+				define_prefix, ifindex);
 
-	print_end_section();
+	if (print_program_types)
+		print_end_section();
 }
 
 static void section_map_types(const char *define_prefix, __u32 ifindex)
@@ -699,8 +709,25 @@ static void section_misc(const char *define_prefix, __u32 ifindex)
 static int do_probe(int argc, char **argv)
 {
 	enum probe_component target = COMPONENT_UNSPEC;
+	/* Syscall probe is always performed, because performing any other
+	 * checks without bpf() syscall does not make sense and the program
+	 * should exit.
+	 */
+	bool print_syscall_config = false;
 	const char *define_prefix = NULL;
+	bool check_system_config = false;
+	/* Program types probes are needed if helper probes are going to be
+	 * performed. Therefore we should differentiate between checking and
+	 * printing supported program types. If only helper checks were
+	 * requested, program types probes will be performed, but not printed.
+	 */
+	bool check_program_types = false;
+	bool print_program_types = false;
 	bool supported_types[128] = {};
+	bool check_map_types = false;
+	bool check_helpers = false;
+	bool check_section = false;
+	bool check_misc = false;
 	__u32 ifindex = 0;
 	char *ifname;
 
@@ -740,6 +767,32 @@ static int do_probe(int argc, char **argv)
 				      strerror(errno));
 				return -1;
 			}
+		} else if (is_prefix(*argv, "section")) {
+			check_section = true;
+			NEXT_ARG();
+			if (is_prefix(*argv, "system_config")) {
+				check_system_config = true;
+			} else if (is_prefix(*argv, "syscall_config")) {
+				print_syscall_config = true;
+			} else if (is_prefix(*argv, "program_types")) {
+				check_program_types = true;
+				print_program_types = true;
+			} else if (is_prefix(*argv, "map_types")) {
+				check_map_types = true;
+			} else if (is_prefix(*argv, "helpers")) {
+				/* When helpers probes are requested, program
+				 * types probes have to be performed, but they
+				 * may not be printed.
+				 */
+				check_program_types = true;
+				check_helpers = true;
+			} else if (is_prefix(*argv, "misc")) {
+				check_misc = true;
+			} else {
+				p_err("unrecognized section '%s'", *argv);
+				return -1;
+			}
+			NEXT_ARG();
 		} else if (is_prefix(*argv, "macros") && !define_prefix) {
 			define_prefix = "";
 			NEXT_ARG();
@@ -764,19 +817,36 @@ static int do_probe(int argc, char **argv)
 		}
 	}
 
+	/* Perform all checks if specific section check was not requested. */
+	if (!check_section) {
+		print_syscall_config = true;
+		check_system_config = true;
+		check_program_types = true;
+		print_program_types = true;
+		check_map_types = true;
+		check_helpers = true;
+		check_misc = true;
+	}
+
 	if (json_output) {
 		define_prefix = NULL;
 		jsonw_start_object(json_wtr);
 	}
 
-	section_system_config(target, define_prefix);
-	if (!section_syscall_config(define_prefix))
+	if (check_system_config)
+		section_system_config(target, define_prefix);
+	if (!section_syscall_config(print_syscall_config, define_prefix))
 		/* bpf() syscall unavailable, don't probe other BPF features */
 		goto exit_close_json;
-	section_program_types(supported_types, define_prefix, ifindex);
-	section_map_types(define_prefix, ifindex);
-	section_helpers(supported_types, define_prefix, ifindex);
-	section_misc(define_prefix, ifindex);
+	if (check_program_types)
+		section_program_types(print_program_types, supported_types,
+				      define_prefix, ifindex);
+	if (check_map_types)
+		section_map_types(define_prefix, ifindex);
+	if (check_helpers)
+		section_helpers(supported_types, define_prefix, ifindex);
+	if (check_misc)
+		section_misc(define_prefix, ifindex);
 
 exit_close_json:
 	if (json_output)
