@@ -19,18 +19,41 @@ SYNOPSIS
 FEATURE COMMANDS
 ================
 
-|	**bpftool** **feature probe** [*COMPONENT*] [**macros** [**prefix** *PREFIX*]]
+|	**bpftool** **feature probe** [*COMPONENT*] [**section** [*SECTION*]] [**filter_in** *PATTERN*] [**filter_out** *PATTERN*] [**macros** [**prefix** *PREFIX*]]
 |	**bpftool** **feature help**
 |
 |	*COMPONENT* := { **kernel** | **dev** *NAME* }
+|	*SECTION* := { **system_config** | **syscall_config** | **program_types** | **map_types** | **helpers** | **misc** }
 
 DESCRIPTION
 ===========
-	**bpftool feature probe** [**kernel**] [**macros** [**prefix** *PREFIX*]]
+	**bpftool feature probe** [**kernel**] [**section** [*SECTION*]] [**filter_in** *PATTERN*] [**filter_out** *PATTERN*] [**macros** [**prefix** *PREFIX*]]
 		  Probe the running kernel and dump a number of eBPF-related
 		  parameters, such as availability of the **bpf()** system call,
 		  JIT status, eBPF program types availability, eBPF helper
 		  functions availability, and more.
+
+		  If the **section** keyword is passed, only the specified
+		  probes section will be checked and printed. The only section
+		  which is always going to be probed is **syscall_config**,
+		  but if the other section was provided as an argument,
+		  **syscall_config** check will perform silently without
+		  printing the result and bpftool will exit if the bpf()
+		  syscall is not abailable (because in that case performing
+		  other checks relying on the bpf() system call does not make
+		  sense).
+
+		  If the **filter_in** keyword is passed, only checks with
+		  names matching the given *PATTERN* are going the be printed
+		  and performed.
+
+		  If the **filter_out** keyword is passed, checks with names
+		  matching the given *PATTERN* are not going to be printed and
+		  performed.
+
+		  **filter_in** is executed before **filter_out** which means
+		  that **filter_out** is always applied only on probes
+		  selected by **filter_in** if both arguments are used together.
 
 		  If the **macros** keyword (but not the **-j** option) is
 		  passed, a subset of the output is dumped as a list of
@@ -48,12 +71,13 @@ DESCRIPTION
 		  **bpf_trace_printk**\ () or **bpf_probe_write_user**\ ()) may
 		  print warnings to kernel logs.
 
-	**bpftool feature probe dev** *NAME* [**macros** [**prefix** *PREFIX*]]
+	**bpftool feature probe dev** *NAME* [**section** [*SECTION*]] [**filter_in** *PATTERN*] [**filter_out** *PATTERN*] [**macros** [**prefix** *PREFIX*]]
 		  Probe network device for supported eBPF features and dump
 		  results to the console.
 
-		  The two keywords **macros** and **prefix** have the same
-		  role as when probing the kernel.
+		  The keywords **section**, **filter_in**, **filter_out**,
+		  **macros** and **prefix** have the same role as when probing
+		  the kernel.
 
 	**bpftool feature help**
 		  Print short help message.
