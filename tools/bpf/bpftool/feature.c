@@ -602,6 +602,42 @@ probe_large_insn_limit(const char *define_prefix, __u32 ifindex)
 }
 
 static void
+probe_prog_name(const char *define_prefix)
+{
+	bool res;
+
+	res = bpf_probe_prog_name();
+	print_bool_feature("have_prog_names",
+			   "Name for programs",
+			   "PROG_NAMES",
+			   res, define_prefix);
+}
+
+static void
+probe_global_data(const char *define_prefix, __u32 ifindex)
+{
+	bool res;
+
+	res = bpf_probe_global_data(ifindex);
+	print_bool_feature("have_global_data",
+			   "Global data in maps",
+			   "GLOBAL_DATA",
+			   res, define_prefix);
+}
+
+static void
+probe_array_mmap(const char *define_prefix)
+{
+	bool res;
+
+	res = bpf_probe_prog_name();
+	print_bool_feature("have_array_mmap",
+			   "mmap() for array maps",
+			   "ARRAY_MMAP",
+			   res, define_prefix);
+}
+
+static void
 section_system_config(enum probe_component target, const char *define_prefix)
 {
 	switch (target) {
@@ -717,6 +753,9 @@ static void section_misc(const char *define_prefix, __u32 ifindex)
 			    "/*** eBPF misc features ***/",
 			    define_prefix);
 	probe_large_insn_limit(define_prefix, ifindex);
+	probe_prog_name(define_prefix);
+	probe_global_data(define_prefix, ifindex);
+	probe_array_mmap(define_prefix);
 	print_end_section();
 }
 
