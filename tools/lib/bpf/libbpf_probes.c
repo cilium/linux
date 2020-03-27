@@ -372,7 +372,7 @@ bool bpf_probe_large_insn_limit(__u32 ifindex)
 	return errno != E2BIG && errno != EINVAL;
 }
 
-bool bpf_probe_name(void)
+bool bpf_probe_prog_name(void)
 {
 	return bpf_probe_prog_type_with_name(BPF_PROG_TYPE_SOCKET_FILTER,
 					     "libbpf_probe", 0);

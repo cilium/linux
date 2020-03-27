@@ -243,5 +243,8 @@ LIBBPF_0.0.8 {
 		bpf_link__pin;
 		bpf_link__pin_path;
 		bpf_link__unpin;
+		bpf_probe_array_mmap;
+		bpf_probe_global_data;
+		bpf_probe_prog_name;
 		bpf_program__set_attach_target;
 } LIBBPF_0.0.7;

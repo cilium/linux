@@ -3140,7 +3140,7 @@ static bool bpf_object__probe_name(struct bpf_object *obj)
 	}
 
 	/* now try the same program, but with the name */
-	res = bpf_probe_name();
+	res = bpf_probe_prog_name();
 	if (res)
 		obj->caps.name = 1;
 

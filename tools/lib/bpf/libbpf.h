@@ -540,6 +540,9 @@ LIBBPF_API bool bpf_probe_map_type(enum bpf_map_type map_type, __u32 ifindex);
 LIBBPF_API bool bpf_probe_helper(enum bpf_func_id id,
 				 enum bpf_prog_type prog_type, __u32 ifindex);
 LIBBPF_API bool bpf_probe_large_insn_limit(__u32 ifindex);
+LIBBPF_API bool bpf_probe_prog_name(void);
+LIBBPF_API bool bpf_probe_global_data(__u32 ifindex);
+LIBBPF_API bool bpf_probe_array_mmap(void);
 
 /*
  * Get bpf_prog_info in continuous memory
