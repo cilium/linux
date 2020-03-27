@@ -11,6 +11,8 @@
 
 #include "libbpf.h"
 
+#define STRERR_BUFSIZE  128
+
 #define BTF_INFO_ENC(kind, kind_flag, vlen) \
 	((!!(kind_flag) << 31) | ((kind) << 24) | ((vlen) & BTF_MAX_VLEN))
 #define BTF_TYPE_ENC(name, info, size_or_type) (name), (info), (size_or_type)
@@ -232,5 +234,9 @@ struct bpf_field_reloc {
 	__u32   access_str_off;
 	enum bpf_field_info_kind kind;
 };
+
+bool bpf_probe_name(void);
+bool bpf_probe_global_data(void);
+bool bpf_probe_array_mmap(void);
 
 #endif /* __LIBBPF_LIBBPF_INTERNAL_H */

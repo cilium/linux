@@ -16,6 +16,7 @@
 #include "bpf.h"
 #include "libbpf.h"
 #include "libbpf_internal.h"
+#include "str_error.h"
 
 /* make sure libbpf doesn't use kernel-only integer typedefs */
 #pragma GCC poison u8 u16 u32 u64 s8 s16 s32 s64
@@ -347,4 +348,104 @@ bool bpf_probe_large_insn_limit(__u32 ifindex)
 		   ifindex);
 
 	return errno != E2BIG && errno != EINVAL;
+}
+
+bool bpf_probe_name(void)
+{
+	struct bpf_load_program_attr attr;
+	char *cp, errmsg[STRERR_BUFSIZE];
+	struct bpf_insn insns[] = {
+		BPF_MOV64_IMM(BPF_REG_0, 0),
+		BPF_EXIT_INSN(),
+	};
+	int ret;
+
+	/* make sure basic loading works */
+
+	memset(&attr, 0, sizeof(attr));
+	attr.prog_type = BPF_PROG_TYPE_SOCKET_FILTER;
+	attr.insns = insns;
+	attr.insns_cnt = ARRAY_SIZE(insns);
+	attr.license = "GPL";
+
+	ret = bpf_load_program_xattr(&attr, NULL, 0);
+	if (ret < 0) {
+		cp = libbpf_strerror_r(errno, errmsg, sizeof(errmsg));
+		pr_warn("Error in %s():%s(%d). Couldn't load basic 'r0 = 0' BPF program.\n",
+			__func__, cp, errno);
+		return false;
+	}
+	close(ret);
+
+	/* now try the same program, but with the name */
+
+	attr.name = "test";
+	ret = bpf_load_program_xattr(&attr, NULL, 0);
+	if (ret >= 0) {
+		close(ret);
+		return true;
+	}
+	return false;
+}
+
+bool bpf_probe_global_data(void)
+{
+	struct bpf_load_program_attr prg_attr;
+	struct bpf_create_map_attr map_attr;
+	char *cp, errmsg[STRERR_BUFSIZE];
+	struct bpf_insn insns[] = {
+		BPF_LD_MAP_VALUE(BPF_REG_1, 0, 16),
+		BPF_ST_MEM(BPF_DW, BPF_REG_1, 0, 42),
+		BPF_MOV64_IMM(BPF_REG_0, 0),
+		BPF_EXIT_INSN(),
+	};
+	int ret, map;
+
+	memset(&map_attr, 0, sizeof(map_attr));
+	map_attr.map_type = BPF_MAP_TYPE_ARRAY;
+	map_attr.key_size = sizeof(int);
+	map_attr.value_size = 32;
+	map_attr.max_entries = 1;
+
+	map = bpf_create_map_xattr(&map_attr);
+	if (map < 0) {
+		cp = libbpf_strerror_r(errno, errmsg, sizeof(errmsg));
+		pr_warn("Error in %s():%s(%d). Couldn't create simple array map.\n",
+			__func__, cp, errno);
+		return false;
+	}
+
+	insns[0].imm = map;
+
+	memset(&prg_attr, 0, sizeof(prg_attr));
+	prg_attr.prog_type = BPF_PROG_TYPE_SOCKET_FILTER;
+	prg_attr.insns = insns;
+	prg_attr.insns_cnt = ARRAY_SIZE(insns);
+	prg_attr.license = "GPL";
+
+	ret = bpf_load_program_xattr(&prg_attr, NULL, 0);
+	if (ret >= 0)
+		close(ret);
+	close(map);
+
+	return ret;
+}
+
+bool bpf_probe_array_mmap(void)
+{
+	struct bpf_create_map_attr attr = {
+		.map_type = BPF_MAP_TYPE_ARRAY,
+		.map_flags = BPF_F_MMAPABLE,
+		.key_size = sizeof(int),
+		.value_size = sizeof(int),
+		.max_entries = 1,
+	};
+	int fd;
+
+	fd = bpf_create_map_xattr(&attr);
+	if (fd >= 0) {
+		close(fd);
+		return true;
+	}
+	return false;
 }

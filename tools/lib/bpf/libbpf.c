@@ -138,8 +138,6 @@ static void pr_perm_msg(int err)
 		buf);
 }
 
-#define STRERR_BUFSIZE  128
-
 /* Copied from tools/perf/util/util.h */
 #ifndef zfree
 # define zfree(ptr) ({ free(*ptr); *ptr = NULL; })
@@ -3128,93 +3126,29 @@ int bpf_map__resize(struct bpf_map *map, __u32 max_entries)
 	return 0;
 }
 
-static int
-bpf_object__probe_name(struct bpf_object *obj)
+static bool bpf_object__probe_name(struct bpf_object *obj)
 {
-	struct bpf_load_program_attr attr;
-	char *cp, errmsg[STRERR_BUFSIZE];
-	struct bpf_insn insns[] = {
-		BPF_MOV64_IMM(BPF_REG_0, 0),
-		BPF_EXIT_INSN(),
-	};
-	int ret;
+	bool res;
 
-	/* make sure basic loading works */
-
-	memset(&attr, 0, sizeof(attr));
-	attr.prog_type = BPF_PROG_TYPE_SOCKET_FILTER;
-	attr.insns = insns;
-	attr.insns_cnt = ARRAY_SIZE(insns);
-	attr.license = "GPL";
-
-	ret = bpf_load_program_xattr(&attr, NULL, 0);
-	if (ret < 0) {
-		cp = libbpf_strerror_r(errno, errmsg, sizeof(errmsg));
-		pr_warn("Error in %s():%s(%d). Couldn't load basic 'r0 = 0' BPF program.\n",
-			__func__, cp, errno);
-		return -errno;
-	}
-	close(ret);
-
-	/* now try the same program, but with the name */
-
-	attr.name = "test";
-	ret = bpf_load_program_xattr(&attr, NULL, 0);
-	if (ret >= 0) {
+	res = bpf_probe_name();
+	if (res)
 		obj->caps.name = 1;
-		close(ret);
-	}
 
-	return 0;
+	return res;
 }
 
-static int
-bpf_object__probe_global_data(struct bpf_object *obj)
+static bool bpf_object__probe_global_data(struct bpf_object *obj)
 {
-	struct bpf_load_program_attr prg_attr;
-	struct bpf_create_map_attr map_attr;
-	char *cp, errmsg[STRERR_BUFSIZE];
-	struct bpf_insn insns[] = {
-		BPF_LD_MAP_VALUE(BPF_REG_1, 0, 16),
-		BPF_ST_MEM(BPF_DW, BPF_REG_1, 0, 42),
-		BPF_MOV64_IMM(BPF_REG_0, 0),
-		BPF_EXIT_INSN(),
-	};
-	int ret, map;
+	bool res;
 
-	memset(&map_attr, 0, sizeof(map_attr));
-	map_attr.map_type = BPF_MAP_TYPE_ARRAY;
-	map_attr.key_size = sizeof(int);
-	map_attr.value_size = 32;
-	map_attr.max_entries = 1;
-
-	map = bpf_create_map_xattr(&map_attr);
-	if (map < 0) {
-		cp = libbpf_strerror_r(errno, errmsg, sizeof(errmsg));
-		pr_warn("Error in %s():%s(%d). Couldn't create simple array map.\n",
-			__func__, cp, errno);
-		return -errno;
-	}
-
-	insns[0].imm = map;
-
-	memset(&prg_attr, 0, sizeof(prg_attr));
-	prg_attr.prog_type = BPF_PROG_TYPE_SOCKET_FILTER;
-	prg_attr.insns = insns;
-	prg_attr.insns_cnt = ARRAY_SIZE(insns);
-	prg_attr.license = "GPL";
-
-	ret = bpf_load_program_xattr(&prg_attr, NULL, 0);
-	if (ret >= 0) {
+	res = bpf_probe_global_data();
+	if (res)
 		obj->caps.global_data = 1;
-		close(ret);
-	}
 
-	close(map);
-	return 0;
+	return res;
 }
 
-static int bpf_object__probe_btf_func(struct bpf_object *obj)
+static bool bpf_object__probe_btf_func(struct bpf_object *obj)
 {
 	static const char strs[] = "\0int\0x\0a";
 	/* void x(int a) {} */
@@ -3234,13 +3168,13 @@ static int bpf_object__probe_btf_func(struct bpf_object *obj)
 	if (btf_fd >= 0) {
 		obj->caps.btf_func = 1;
 		close(btf_fd);
-		return 1;
+		return true;
 	}
 
-	return 0;
+	return false;
 }
 
-static int bpf_object__probe_btf_func_global(struct bpf_object *obj)
+static bool bpf_object__probe_btf_func_global(struct bpf_object *obj)
 {
 	static const char strs[] = "\0int\0x\0a";
 	/* static void x(int a) {} */
@@ -3260,13 +3194,13 @@ static int bpf_object__probe_btf_func_global(struct bpf_object *obj)
 	if (btf_fd >= 0) {
 		obj->caps.btf_func_global = 1;
 		close(btf_fd);
-		return 1;
+		return true;
 	}
 
-	return 0;
+	return false;
 }
 
-static int bpf_object__probe_btf_datasec(struct bpf_object *obj)
+static bool bpf_object__probe_btf_datasec(struct bpf_object *obj)
 {
 	static const char strs[] = "\0x\0.data";
 	/* static int a; */
@@ -3287,37 +3221,27 @@ static int bpf_object__probe_btf_datasec(struct bpf_object *obj)
 	if (btf_fd >= 0) {
 		obj->caps.btf_datasec = 1;
 		close(btf_fd);
-		return 1;
+		return true;
 	}
 
-	return 0;
+	return false;
 }
 
-static int bpf_object__probe_array_mmap(struct bpf_object *obj)
+static bool bpf_object__probe_array_mmap(struct bpf_object *obj)
 {
-	struct bpf_create_map_attr attr = {
-		.map_type = BPF_MAP_TYPE_ARRAY,
-		.map_flags = BPF_F_MMAPABLE,
-		.key_size = sizeof(int),
-		.value_size = sizeof(int),
-		.max_entries = 1,
-	};
-	int fd;
+	bool res;
 
-	fd = bpf_create_map_xattr(&attr);
-	if (fd >= 0) {
+	res = bpf_probe_array_mmap();
+	if (res)
 		obj->caps.array_mmap = 1;
-		close(fd);
-		return 1;
-	}
 
-	return 0;
+	return res;
 }
 
 static int
 bpf_object__probe_caps(struct bpf_object *obj)
 {
-	int (*probe_fn[])(struct bpf_object *obj) = {
+	bool (*probe_fn[])(struct bpf_object *obj) = {
 		bpf_object__probe_name,
 		bpf_object__probe_global_data,
 		bpf_object__probe_btf_func,
@@ -3325,12 +3249,13 @@ bpf_object__probe_caps(struct bpf_object *obj)
 		bpf_object__probe_btf_datasec,
 		bpf_object__probe_array_mmap,
 	};
-	int i, ret;
+	bool ret;
+	int i;
 
 	for (i = 0; i < ARRAY_SIZE(probe_fn); i++) {
 		ret = probe_fn[i](obj);
-		if (ret < 0)
-			pr_debug("Probe #%d failed with %d.\n", i, ret);
+		if (!ret)
+			pr_debug("Probe #%d failed with %d.\n", i, errno);
 	}
 
 	return 0;
