@@ -378,7 +378,7 @@ bool bpf_probe_name(void)
 					     "libbpf_probe", 0);
 }
 
-bool bpf_probe_global_data_from_fd(int map)
+bool bpf_probe_global_data_from_fd(int map, __u32 ifindex)
 {
 	struct bpf_load_program_attr prg_attr;
 	struct bpf_insn insns[] = {
@@ -397,20 +397,21 @@ bool bpf_probe_global_data_from_fd(int map)
 	prg_attr.insns_cnt = ARRAY_SIZE(insns);
 	prg_attr.license = "GPL";
 
-	ret = bpf_load_program_xattr(&prg_attr, NULL, 0);
+	ret = bpf_load_program_xattr(&prg_attr, NULL, ifindex);
 	if (ret >= 0)
 		close(ret);
 
 	return ret;
 }
 
-bool bpf_probe_global_data(void)
+bool bpf_probe_global_data(__u32 ifindex)
 {
 	int map, btf_fd, ret;
 
-	ret = bpf_probe_map_type_get_fds(BPF_MAP_TYPE_ARRAY, &map, &btf_fd, 0);
+	ret = bpf_probe_map_type_get_fds(BPF_MAP_TYPE_ARRAY, &map, &btf_fd,
+					 ifindex);
 	if (ret)
-		ret = bpf_probe_global_data_from_fd(map);
+		ret = bpf_probe_global_data_from_fd(map, ifindex);
 
 	if (map >= 0)
 		close(map);

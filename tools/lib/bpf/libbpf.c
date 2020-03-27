@@ -3154,7 +3154,7 @@ static bool bpf_object__probe_global_data(struct bpf_object *obj)
 
 	res = bpf_probe_map_type_get_fds(BPF_MAP_TYPE_ARRAY, &map, &btf_fd, 0);
 	if (res && map >= 0) {
-		res = bpf_probe_global_data_from_fd(map);
+		res = bpf_probe_global_data_from_fd(map, 0);
 		if (res)
 			obj->caps.global_data = 1;
 		close(map);
