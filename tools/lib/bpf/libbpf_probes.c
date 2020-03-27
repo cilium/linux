@@ -16,7 +16,6 @@
 #include "bpf.h"
 #include "libbpf.h"
 #include "libbpf_internal.h"
-#include "str_error.h"
 
 /* make sure libbpf doesn't use kernel-only integer typedefs */
 #pragma GCC poison u8 u16 u32 u64 s8 s16 s32 s64
@@ -206,9 +205,8 @@ static int load_sk_storage_btf(void)
 				     strs, sizeof(strs));
 }
 
-static bool
-bpf_probe_map_type_get_fds(enum bpf_map_type map_type, int *fd, int *btf_fd,
-			   __u32 ifindex)
+bool bpf_probe_map_type_get_fds(enum bpf_map_type map_type, int *fd,
+				int *btf_fd, __u32 ifindex)
 {
 	int key_size, value_size, max_entries, map_flags;
 	__u32 btf_key_type_id = 0, btf_value_type_id = 0;
@@ -376,43 +374,20 @@ bool bpf_probe_large_insn_limit(__u32 ifindex)
 
 bool bpf_probe_name(void)
 {
-	char *cp, errmsg[STRERR_BUFSIZE];
-
-	/* make sure basic loading works */
-	if (!bpf_probe_prog_type(BPF_PROG_TYPE_SOCKET_FILTER, 0)) {
-		cp = libbpf_strerror_r(errno, errmsg, sizeof(errmsg));
-		pr_warn("Error in %s():%s(%d). Couldn't load basic 'r0 = 0' BPF program.\n",
-			__func__, cp, errno);
-		return false;
-	}
-
-	/* now try the same program, but with the name */
 	return bpf_probe_prog_type_with_name(BPF_PROG_TYPE_SOCKET_FILTER,
 					     "libbpf_probe", 0);
 }
 
-bool bpf_probe_global_data(void)
+bool bpf_probe_global_data_from_fd(int map)
 {
 	struct bpf_load_program_attr prg_attr;
-	char *cp, errmsg[STRERR_BUFSIZE];
 	struct bpf_insn insns[] = {
 		BPF_LD_MAP_VALUE(BPF_REG_1, 0, 16),
 		BPF_ST_MEM(BPF_DW, BPF_REG_1, 0, 42),
 		BPF_MOV64_IMM(BPF_REG_0, 0),
 		BPF_EXIT_INSN(),
 	};
-	int ret, map, btf_fd;
-
-	ret = !bpf_probe_map_type_get_fds(BPF_MAP_TYPE_ARRAY, &map, &btf_fd, 0);
-	if (!ret || map < 0) {
-		cp = libbpf_strerror_r(errno, errmsg, sizeof(errmsg));
-		pr_warn("Error in %s():%s(%d). Couldn't create simple array map.\n",
-			__func__, cp, errno);
-
-		if (btf_fd >= 0)
-			close(btf_fd);
-		return false;
-	}
+	int ret;
 
 	insns[0].imm = map;
 
@@ -425,9 +400,22 @@ bool bpf_probe_global_data(void)
 	ret = bpf_load_program_xattr(&prg_attr, NULL, 0);
 	if (ret >= 0)
 		close(ret);
+
+	return ret;
+}
+
+bool bpf_probe_global_data(void)
+{
+	int map, btf_fd, ret;
+
+	ret = bpf_probe_map_type_get_fds(BPF_MAP_TYPE_ARRAY, &map, &btf_fd, 0);
+	if (ret)
+		ret = bpf_probe_global_data_from_fd(map);
+
+	if (map >= 0)
+		close(map);
 	if (btf_fd >= 0)
 		close(btf_fd);
-	close(map);
 
 	return ret;
 }

@@ -237,6 +237,9 @@ struct bpf_field_reloc {
 
 bool bpf_probe_name(void);
 bool bpf_probe_global_data(void);
+bool bpf_probe_global_data_from_fd(int map);
 bool bpf_probe_array_mmap(void);
+bool bpf_probe_map_type_get_fds(enum bpf_map_type map_type, int *fd,
+				int *btf_fd, __u32 ifindex);
 
 #endif /* __LIBBPF_LIBBPF_INTERNAL_H */

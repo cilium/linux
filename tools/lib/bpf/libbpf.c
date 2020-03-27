@@ -3128,8 +3128,18 @@ int bpf_map__resize(struct bpf_map *map, __u32 max_entries)
 
 static bool bpf_object__probe_name(struct bpf_object *obj)
 {
+	char *cp, errmsg[STRERR_BUFSIZE];
 	bool res;
 
+	/* make sure basic loading works */
+	if (!bpf_probe_prog_type(BPF_PROG_TYPE_SOCKET_FILTER, 0)) {
+		cp = libbpf_strerror_r(errno, errmsg, sizeof(errmsg));
+		pr_warn("Error in %s():%s(%d). Couldn't load basic 'r0 = 0' BPF program.\n",
+			__func__, cp, errno);
+		return false;
+	}
+
+	/* now try the same program, but with the name */
 	res = bpf_probe_name();
 	if (res)
 		obj->caps.name = 1;
@@ -3139,11 +3149,23 @@ static bool bpf_object__probe_name(struct bpf_object *obj)
 
 static bool bpf_object__probe_global_data(struct bpf_object *obj)
 {
-	bool res;
+	char *cp, errmsg[STRERR_BUFSIZE];
+	int map, btf_fd, res;
 
-	res = bpf_probe_global_data();
-	if (res)
-		obj->caps.global_data = 1;
+	res = bpf_probe_map_type_get_fds(BPF_MAP_TYPE_ARRAY, &map, &btf_fd, 0);
+	if (res && map >= 0) {
+		res = bpf_probe_global_data_from_fd(map);
+		if (res)
+			obj->caps.global_data = 1;
+		close(map);
+	} else {
+		cp = libbpf_strerror_r(errno, errmsg, sizeof(errmsg));
+		pr_warn("Error in %s():%s(%d). Couldn't create simple array map.\n",
+			__func__, cp, errno);
+	}
+
+	if (btf_fd >= 0)
+		close(btf_fd);
 
 	return res;
 }
