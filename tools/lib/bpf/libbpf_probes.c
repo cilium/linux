@@ -206,12 +206,17 @@ static int load_sk_storage_btf(void)
 				     strs, sizeof(strs));
 }
 
-bool bpf_probe_map_type(enum bpf_map_type map_type, __u32 ifindex)
+static bool
+bpf_probe_map_type_get_fds(enum bpf_map_type map_type, int *fd, int *btf_fd,
+			   __u32 ifindex)
 {
 	int key_size, value_size, max_entries, map_flags;
 	__u32 btf_key_type_id = 0, btf_value_type_id = 0;
 	struct bpf_create_map_attr attr = {};
-	int fd = -1, btf_fd = -1, fd_inner;
+	int fd_inner;
+
+	*fd = -1;
+	*btf_fd = -1;
 
 	key_size	= sizeof(__u32);
 	value_size	= sizeof(__u32);
@@ -243,8 +248,8 @@ bool bpf_probe_map_type(enum bpf_map_type map_type, __u32 ifindex)
 		value_size = 8;
 		max_entries = 0;
 		map_flags = BPF_F_NO_PREALLOC;
-		btf_fd = load_sk_storage_btf();
-		if (btf_fd < 0)
+		*btf_fd = load_sk_storage_btf();
+		if (*btf_fd < 0)
 			return false;
 		break;
 	case BPF_MAP_TYPE_UNSPEC:
@@ -283,7 +288,7 @@ bool bpf_probe_map_type(enum bpf_map_type map_type, __u32 ifindex)
 					  sizeof(__u32), sizeof(__u32), 1, 0);
 		if (fd_inner < 0)
 			return false;
-		fd = bpf_create_map_in_map(map_type, NULL, sizeof(__u32),
+		*fd = bpf_create_map_in_map(map_type, NULL, sizeof(__u32),
 					   fd_inner, 1, 0);
 		close(fd_inner);
 	} else {
@@ -294,20 +299,30 @@ bool bpf_probe_map_type(enum bpf_map_type map_type, __u32 ifindex)
 		attr.max_entries = max_entries;
 		attr.map_flags = map_flags;
 		attr.map_ifindex = ifindex;
-		if (btf_fd >= 0) {
-			attr.btf_fd = btf_fd;
+		if (*btf_fd >= 0) {
+			attr.btf_fd = *btf_fd;
 			attr.btf_key_type_id = btf_key_type_id;
 			attr.btf_value_type_id = btf_value_type_id;
 		}
 
-		fd = bpf_create_map_xattr(&attr);
+		*fd = bpf_create_map_xattr(&attr);
 	}
+
+	return *fd >= 0;
+}
+
+bool bpf_probe_map_type(enum bpf_map_type map_type, __u32 ifindex)
+{
+	int fd, btf_fd;
+	bool ret;
+
+	ret = bpf_probe_map_type_get_fds(map_type, &fd, &btf_fd, ifindex);
 	if (fd >= 0)
 		close(fd);
 	if (btf_fd >= 0)
 		close(btf_fd);
 
-	return fd >= 0;
+	return ret;
 }
 
 bool bpf_probe_helper(enum bpf_func_id id, enum bpf_prog_type prog_type,
@@ -379,7 +394,6 @@ bool bpf_probe_name(void)
 bool bpf_probe_global_data(void)
 {
 	struct bpf_load_program_attr prg_attr;
-	struct bpf_create_map_attr map_attr;
 	char *cp, errmsg[STRERR_BUFSIZE];
 	struct bpf_insn insns[] = {
 		BPF_LD_MAP_VALUE(BPF_REG_1, 0, 16),
@@ -387,19 +401,16 @@ bool bpf_probe_global_data(void)
 		BPF_MOV64_IMM(BPF_REG_0, 0),
 		BPF_EXIT_INSN(),
 	};
-	int ret, map;
+	int ret, map, btf_fd;
 
-	memset(&map_attr, 0, sizeof(map_attr));
-	map_attr.map_type = BPF_MAP_TYPE_ARRAY;
-	map_attr.key_size = sizeof(int);
-	map_attr.value_size = 32;
-	map_attr.max_entries = 1;
-
-	map = bpf_create_map_xattr(&map_attr);
-	if (map < 0) {
+	ret = !bpf_probe_map_type_get_fds(BPF_MAP_TYPE_ARRAY, &map, &btf_fd, 0);
+	if (!ret || map < 0) {
 		cp = libbpf_strerror_r(errno, errmsg, sizeof(errmsg));
 		pr_warn("Error in %s():%s(%d). Couldn't create simple array map.\n",
 			__func__, cp, errno);
+
+		if (btf_fd >= 0)
+			close(btf_fd);
 		return false;
 	}
 
@@ -414,6 +425,8 @@ bool bpf_probe_global_data(void)
 	ret = bpf_load_program_xattr(&prg_attr, NULL, 0);
 	if (ret >= 0)
 		close(ret);
+	if (btf_fd >= 0)
+		close(btf_fd);
 	close(map);
 
 	return ret;
