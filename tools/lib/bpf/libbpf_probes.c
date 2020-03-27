@@ -70,7 +70,8 @@ static int get_kernel_version(void)
 
 static void
 probe_load(enum bpf_prog_type prog_type, const struct bpf_insn *insns,
-	   size_t insns_cnt, char *buf, size_t buf_len, __u32 ifindex)
+	   size_t insns_cnt, const char *name, char *buf, size_t buf_len,
+	   __u32 ifindex)
 {
 	struct bpf_load_program_attr xattr = {};
 	int fd;
@@ -116,6 +117,7 @@ probe_load(enum bpf_prog_type prog_type, const struct bpf_insn *insns,
 	xattr.prog_type = prog_type;
 	xattr.insns = insns;
 	xattr.insns_cnt = insns_cnt;
+	xattr.name = name;
 	xattr.license = "GPL";
 	xattr.prog_ifindex = ifindex;
 
@@ -124,7 +126,9 @@ probe_load(enum bpf_prog_type prog_type, const struct bpf_insn *insns,
 		close(fd);
 }
 
-bool bpf_probe_prog_type(enum bpf_prog_type prog_type, __u32 ifindex)
+static bool
+bpf_probe_prog_type_with_name(enum bpf_prog_type prog_type, const char *name,
+			      __u32 ifindex)
 {
 	struct bpf_insn insns[2] = {
 		BPF_MOV64_IMM(BPF_REG_0, 0),
@@ -136,9 +140,14 @@ bool bpf_probe_prog_type(enum bpf_prog_type prog_type, __u32 ifindex)
 		insns[0].imm = 2;
 
 	errno = 0;
-	probe_load(prog_type, insns, ARRAY_SIZE(insns), NULL, 0, ifindex);
+	probe_load(prog_type, insns, ARRAY_SIZE(insns), name, NULL, 0, ifindex);
 
 	return errno != EINVAL && errno != EOPNOTSUPP;
+}
+
+bool bpf_probe_prog_type(enum bpf_prog_type prog_type, __u32 ifindex)
+{
+	return bpf_probe_prog_type_with_name(prog_type, NULL, ifindex);
 }
 
 int libbpf__load_raw_btf(const char *raw_types, size_t types_len,
@@ -311,7 +320,7 @@ bool bpf_probe_helper(enum bpf_func_id id, enum bpf_prog_type prog_type,
 	char buf[4096] = {};
 	bool res;
 
-	probe_load(prog_type, insns, ARRAY_SIZE(insns), buf, sizeof(buf),
+	probe_load(prog_type, insns, ARRAY_SIZE(insns), NULL, buf, sizeof(buf),
 		   ifindex);
 	res = !grep(buf, "invalid func ") && !grep(buf, "unknown func ");
 
@@ -344,48 +353,27 @@ bool bpf_probe_large_insn_limit(__u32 ifindex)
 	insns[BPF_MAXINSNS] = BPF_EXIT_INSN();
 
 	errno = 0;
-	probe_load(BPF_PROG_TYPE_SCHED_CLS, insns, ARRAY_SIZE(insns), NULL, 0,
-		   ifindex);
+	probe_load(BPF_PROG_TYPE_SCHED_CLS, insns, ARRAY_SIZE(insns), NULL,
+		   NULL, 0, ifindex);
 
 	return errno != E2BIG && errno != EINVAL;
 }
 
 bool bpf_probe_name(void)
 {
-	struct bpf_load_program_attr attr;
 	char *cp, errmsg[STRERR_BUFSIZE];
-	struct bpf_insn insns[] = {
-		BPF_MOV64_IMM(BPF_REG_0, 0),
-		BPF_EXIT_INSN(),
-	};
-	int ret;
 
 	/* make sure basic loading works */
-
-	memset(&attr, 0, sizeof(attr));
-	attr.prog_type = BPF_PROG_TYPE_SOCKET_FILTER;
-	attr.insns = insns;
-	attr.insns_cnt = ARRAY_SIZE(insns);
-	attr.license = "GPL";
-
-	ret = bpf_load_program_xattr(&attr, NULL, 0);
-	if (ret < 0) {
+	if (!bpf_probe_prog_type(BPF_PROG_TYPE_SOCKET_FILTER, 0)) {
 		cp = libbpf_strerror_r(errno, errmsg, sizeof(errmsg));
 		pr_warn("Error in %s():%s(%d). Couldn't load basic 'r0 = 0' BPF program.\n",
 			__func__, cp, errno);
 		return false;
 	}
-	close(ret);
 
 	/* now try the same program, but with the name */
-
-	attr.name = "test";
-	ret = bpf_load_program_xattr(&attr, NULL, 0);
-	if (ret >= 0) {
-		close(ret);
-		return true;
-	}
-	return false;
+	return bpf_probe_prog_type_with_name(BPF_PROG_TYPE_SOCKET_FILTER,
+					     "libbpf_probe", 0);
 }
 
 bool bpf_probe_global_data(void)
