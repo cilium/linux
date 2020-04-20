@@ -753,12 +753,11 @@ do_err:
 }
 EXPORT_SYMBOL(inet_accept);
 
-
 /*
  *	This does both peername and sockname.
  */
 int inet_getname(struct socket *sock, struct sockaddr *uaddr,
-			int peer)
+		 int peer)
 {
 	struct sock *sk		= sock->sk;
 	struct inet_sock *inet	= inet_sk(sk);
@@ -780,6 +779,9 @@ int inet_getname(struct socket *sock, struct sockaddr *uaddr,
 		sin->sin_addr.s_addr = addr;
 	}
 	memset(sin->sin_zero, 0, sizeof(sin->sin_zero));
+	if (cgroup_bpf_enabled)
+		BPF_CGROUP_RUN_PROG_INET4_GETNAME_LOCK(sk, (struct sockaddr *)sin,
+						       &peer);
 	return sizeof(*sin);
 }
 EXPORT_SYMBOL(inet_getname);

@@ -6990,6 +6990,7 @@ static bool sock_addr_is_valid_access(int off, int size,
 		switch (prog->expected_attach_type) {
 		case BPF_CGROUP_INET4_BIND:
 		case BPF_CGROUP_INET4_CONNECT:
+		case BPF_CGROUP_INET4_GETNAME:
 		case BPF_CGROUP_UDP4_SENDMSG:
 		case BPF_CGROUP_UDP4_RECVMSG:
 			break;
@@ -7001,6 +7002,7 @@ static bool sock_addr_is_valid_access(int off, int size,
 		switch (prog->expected_attach_type) {
 		case BPF_CGROUP_INET6_BIND:
 		case BPF_CGROUP_INET6_CONNECT:
+		case BPF_CGROUP_INET6_GETNAME:
 		case BPF_CGROUP_UDP6_SENDMSG:
 		case BPF_CGROUP_UDP6_RECVMSG:
 			break;
@@ -7020,6 +7022,15 @@ static bool sock_addr_is_valid_access(int off, int size,
 				msg_src_ip6[3]):
 		switch (prog->expected_attach_type) {
 		case BPF_CGROUP_UDP6_SENDMSG:
+			break;
+		default:
+			return false;
+		}
+		break;
+	case bpf_ctx_range(struct bpf_sock_addr, peer):
+		switch (prog->expected_attach_type) {
+		case BPF_CGROUP_INET4_GETNAME:
+		case BPF_CGROUP_INET6_GETNAME:
 			break;
 		default:
 			return false;
@@ -8038,6 +8049,13 @@ static u32 sock_addr_convert_ctx_access(enum bpf_access_type type,
 		*insn++ = BPF_LDX_MEM(BPF_FIELD_SIZEOF(struct bpf_sock_addr_kern, sk),
 				      si->dst_reg, si->src_reg,
 				      offsetof(struct bpf_sock_addr_kern, sk));
+		break;
+	case offsetof(struct bpf_sock_addr, peer):
+		*target_size = 4;
+		*insn++ = BPF_LDX_MEM(BPF_FIELD_SIZEOF(struct bpf_sock_addr_kern, t_ctx),
+				      si->dst_reg, si->src_reg,
+				      offsetof(struct bpf_sock_addr_kern, t_ctx));
+		*insn++ = BPF_LDX_MEM(BPF_W, si->dst_reg, si->dst_reg, 0);
 		break;
 	}
 

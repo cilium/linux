@@ -215,6 +215,8 @@ enum bpf_attach_type {
 	BPF_TRACE_FEXIT,
 	BPF_MODIFY_RETURN,
 	BPF_LSM_MAC,
+	BPF_CGROUP_INET4_GETNAME,
+	BPF_CGROUP_INET6_GETNAME,
 	__MAX_BPF_ATTACH_TYPE
 };
 
@@ -3623,6 +3625,7 @@ struct bpf_sock_addr {
 				 * Stored in network byte order.
 				 */
 	__bpf_md_ptr(struct bpf_sock *, sk);
+	__u32 peer;		/* Allows 4-byte read, but no write. */
 };
 
 /* User bpf_sock_ops struct to access socket values and specify request ops
