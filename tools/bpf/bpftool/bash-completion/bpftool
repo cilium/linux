@@ -466,6 +466,7 @@ _bpftool()
                                 lwt_seg6local sockops sk_skb sk_msg \
                                 lirc_mode2 cgroup/bind4 cgroup/bind6 \
                                 cgroup/connect4 cgroup/connect6 \
+                                cgroup/getname4 cgroup/getname6 \
                                 cgroup/sendmsg4 cgroup/sendmsg6 \
                                 cgroup/recvmsg4 cgroup/recvmsg6 \
                                 cgroup/post_bind4 cgroup/post_bind6 \
@@ -948,8 +949,8 @@ _bpftool()
                 attach|detach)
                     local ATTACH_TYPES='ingress egress sock_create sock_ops \
                         device bind4 bind6 post_bind4 post_bind6 connect4 \
-                        connect6 sendmsg4 sendmsg6 recvmsg4 recvmsg6 sysctl \
-                        getsockopt setsockopt'
+                        connect6 getname4 getname6 sendmsg4 sendmsg6 recvmsg4 \
+                        recvmsg6 sysctl getsockopt setsockopt'
                     local ATTACH_FLAGS='multi override'
                     local PROG_TYPE='id pinned tag name'
                     case $prev in
@@ -958,8 +959,8 @@ _bpftool()
                             return 0
                             ;;
                         ingress|egress|sock_create|sock_ops|device|bind4|bind6|\
-                        post_bind4|post_bind6|connect4|connect6|sendmsg4|\
-                        sendmsg6|recvmsg4|recvmsg6|sysctl|getsockopt|\
+                        post_bind4|post_bind6|connect4|connect6|getname4|getname6|\
+                        sendmsg4|sendmsg6|recvmsg4|recvmsg6|sysctl|getsockopt|\
                         setsockopt)
                             COMPREPLY=( $( compgen -W "$PROG_TYPE" -- \
                                 "$cur" ) )
