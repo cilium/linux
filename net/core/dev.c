@@ -3063,6 +3063,17 @@ void netif_inherit_tso_max(struct net_device *to, const struct net_device *from)
 EXPORT_SYMBOL(netif_inherit_tso_max);
 
 /**
+ * netif_inherit_headroom() - copy headroom requirement
+ * @to:		netdev to update
+ * @from:	netdev from which to copy the headroom
+ */
+void netif_inherit_headroom(struct net_device *to, const struct net_device *from)
+{
+	netdev_set_rx_headroom(to, from->needed_headroom);
+}
+EXPORT_SYMBOL(netif_inherit_headroom);
+
+/**
  * netif_get_num_default_rss_queues - default number of RSS queues
  *
  * Default value is the number of physical cores if there are only 1 or 2, or
@@ -8686,6 +8697,25 @@ int dev_change_flags(struct net_device *dev, unsigned int flags,
 	return ret;
 }
 EXPORT_SYMBOL(dev_change_flags);
+
+int dev_validate_headroom(struct net_device *dev, int new_headroom,
+			  struct netlink_ext_ack *extack)
+{
+	if (!dev->netdev_ops->ndo_set_rx_headroom) {
+		NL_SET_ERR_MSG(extack, "device unable to configure headroom");
+		return -EOPNOTSUPP;
+	}
+	if (new_headroom < NETDEV_MIN_HEADROOM &&
+	    new_headroom != NETDEV_RESET_HEADROOM) {
+		NL_SET_ERR_MSG(extack, "headroom less than device minimum");
+		return -EINVAL;
+	}
+	if (new_headroom > NETDEV_MAX_HEADROOM) {
+		NL_SET_ERR_MSG(extack, "headroom greater than device maximum");
+		return -EINVAL;
+	}
+	return 0;
+}
 
 int __dev_set_mtu(struct net_device *dev, int new_mtu)
 {

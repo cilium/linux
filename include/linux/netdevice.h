@@ -2532,6 +2532,10 @@ struct netdev_queue *netdev_core_pick_tx(struct net_device *dev,
 					 struct sk_buff *skb,
 					 struct net_device *sb_dev);
 
+#define NETDEV_MIN_HEADROOM	0
+#define NETDEV_MAX_HEADROOM	512
+#define NETDEV_RESET_HEADROOM	-1
+
 /* returns the headroom that the master device needs to take in account
  * when forwarding to this dev
  */
@@ -2549,7 +2553,7 @@ static inline void netdev_set_rx_headroom(struct net_device *dev, int new_hr)
 /* set the device rx headroom to the dev's default */
 static inline void netdev_reset_rx_headroom(struct net_device *dev)
 {
-	netdev_set_rx_headroom(dev, -1);
+	netdev_set_rx_headroom(dev, NETDEV_RESET_HEADROOM);
 }
 
 static inline void *netdev_get_ml_priv(struct net_device *dev,
@@ -5008,6 +5012,9 @@ void netif_set_tso_max_size(struct net_device *dev, unsigned int size);
 void netif_set_tso_max_segs(struct net_device *dev, unsigned int segs);
 void netif_inherit_tso_max(struct net_device *to,
 			   const struct net_device *from);
+
+void netif_inherit_headroom(struct net_device *to,
+			    const struct net_device *from);
 
 static inline bool netif_is_macsec(const struct net_device *dev)
 {

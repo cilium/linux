@@ -53,6 +53,7 @@ static int create_netkit(int mode, int policy, int peer_policy, int *ifindex,
 
 	addattr_l(&req.n, sizeof(req), IFLA_IFNAME, netkit_name,
 		  strlen(netkit_name));
+	addattr32(&req.n, sizeof(req), IFLA_HEADROOM, 32);
 	linkinfo = addattr_nest(&req.n, sizeof(req), IFLA_LINKINFO);
 	addattr_l(&req.n, sizeof(req), IFLA_INFO_KIND, type, strlen(type));
 	data = addattr_nest(&req.n, sizeof(req), IFLA_INFO_DATA);

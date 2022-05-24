@@ -404,6 +404,7 @@ static int netkit_new_link(struct net *src_net, struct net_device *dev,
 	bpf_mprog_bundle_init(&nk->bundle);
 	RCU_INIT_POINTER(nk->active, NULL);
 	rcu_assign_pointer(nk->peer, dev);
+	netif_inherit_headroom(peer, dev);
 	return 0;
 err_configure_peer:
 	unregister_netdevice(peer);
