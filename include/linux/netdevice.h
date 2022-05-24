@@ -2529,6 +2529,10 @@ struct netdev_queue *netdev_core_pick_tx(struct net_device *dev,
 					 struct sk_buff *skb,
 					 struct net_device *sb_dev);
 
+#define NETDEV_MIN_HEADROOM	0
+#define NETDEV_MAX_HEADROOM	4096
+#define NETDEV_RESET_HEADROOM	-1
+
 /* returns the headroom that the master device needs to take in account
  * when forwarding to this dev
  */
@@ -2546,7 +2550,7 @@ static inline void netdev_set_rx_headroom(struct net_device *dev, int new_hr)
 /* set the device rx headroom to the dev's default */
 static inline void netdev_reset_rx_headroom(struct net_device *dev)
 {
-	netdev_set_rx_headroom(dev, -1);
+	netdev_set_rx_headroom(dev, NETDEV_RESET_HEADROOM);
 }
 
 static inline void *netdev_get_ml_priv(struct net_device *dev,
@@ -3934,6 +3938,8 @@ int dev_pre_changeaddr_notify(struct net_device *dev, const char *addr,
 			      struct netlink_ext_ack *extack);
 int dev_set_mac_address(struct net_device *dev, struct sockaddr *sa,
 			struct netlink_ext_ack *extack);
+int dev_set_headroom(struct net_device *dev, int new_headroom,
+		     struct netlink_ext_ack *extack);
 int dev_set_mac_address_user(struct net_device *dev, struct sockaddr *sa,
 			     struct netlink_ext_ack *extack);
 int dev_get_mac_address(struct sockaddr *sa, struct net *net, char *dev_name);

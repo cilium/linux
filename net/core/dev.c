@@ -8673,6 +8673,38 @@ int dev_change_flags(struct net_device *dev, unsigned int flags,
 }
 EXPORT_SYMBOL(dev_change_flags);
 
+int dev_validate_headroom(struct net_device *dev, int new_headroom,
+			  struct netlink_ext_ack *extack)
+{
+	if (!dev->netdev_ops->ndo_set_rx_headroom) {
+		NL_SET_ERR_MSG(extack, "device unable to configure headroom");
+		return -EOPNOTSUPP;
+	}
+	if (new_headroom < NETDEV_MIN_HEADROOM &&
+	    new_headroom != NETDEV_RESET_HEADROOM) {
+		NL_SET_ERR_MSG(extack, "headroom less than device minimum");
+		return -EINVAL;
+	}
+	if (new_headroom > NETDEV_MAX_HEADROOM) {
+		NL_SET_ERR_MSG(extack, "headroom greater than device maximum");
+		return -EINVAL;
+	}
+	return 0;
+}
+
+int dev_set_headroom(struct net_device *dev, int new_headroom,
+		     struct netlink_ext_ack *extack)
+{
+	int err;
+
+	err = dev_validate_headroom(dev, new_headroom, extack);
+	if (err)
+		return err;
+	if (dev->needed_headroom != new_headroom)
+		netdev_set_rx_headroom(dev, new_headroom);
+	return 0;
+}
+
 int __dev_set_mtu(struct net_device *dev, int new_mtu)
 {
 	const struct net_device_ops *ops = dev->netdev_ops;

@@ -1070,6 +1070,7 @@ static noinline size_t if_nlmsg_size(const struct net_device *dev,
 	       + nla_total_size(4) /* IFLA_TXQLEN */
 	       + nla_total_size(4) /* IFLA_WEIGHT */
 	       + nla_total_size(4) /* IFLA_MTU */
+	       + nla_total_size(4) /* IFLA_HEADROOM */
 	       + nla_total_size(4) /* IFLA_LINK */
 	       + nla_total_size(4) /* IFLA_MASTER */
 	       + nla_total_size(1) /* IFLA_CARRIER */
@@ -1813,6 +1814,7 @@ static int rtnl_fill_ifinfo(struct sk_buff *skb,
 	    nla_put_u32(skb, IFLA_GROUP, dev->group) ||
 	    nla_put_u32(skb, IFLA_PROMISCUITY, dev->promiscuity) ||
 	    nla_put_u32(skb, IFLA_ALLMULTI, dev->allmulti) ||
+	    nla_put_u32(skb, IFLA_HEADROOM, dev->needed_headroom) ||
 	    nla_put_u32(skb, IFLA_NUM_TX_QUEUES, dev->num_tx_queues) ||
 	    nla_put_u32(skb, IFLA_GSO_MAX_SEGS, dev->gso_max_segs) ||
 	    nla_put_u32(skb, IFLA_GSO_MAX_SIZE, dev->gso_max_size) ||
@@ -1932,6 +1934,7 @@ static const struct nla_policy ifla_policy[IFLA_MAX+1] = {
 	[IFLA_BROADCAST]	= { .type = NLA_BINARY, .len = MAX_ADDR_LEN },
 	[IFLA_MAP]		= { .len = sizeof(struct rtnl_link_ifmap) },
 	[IFLA_MTU]		= { .type = NLA_U32 },
+	[IFLA_HEADROOM]		= { .type = NLA_U32 },
 	[IFLA_LINK]		= { .type = NLA_U32 },
 	[IFLA_MASTER]		= { .type = NLA_U32 },
 	[IFLA_CARRIER]		= { .type = NLA_U8 },
@@ -2825,6 +2828,14 @@ static int do_setlink(const struct sk_buff *skb,
 		status |= DO_SETLINK_MODIFIED;
 	}
 
+	if (tb[IFLA_HEADROOM]) {
+		err = dev_set_headroom(dev, nla_get_u32(tb[IFLA_HEADROOM]),
+				       extack);
+		if (err < 0)
+			goto errout;
+		status |= DO_SETLINK_MODIFIED;
+	}
+
 	if (tb[IFLA_GROUP]) {
 		dev_set_group(dev, nla_get_u32(tb[IFLA_GROUP]));
 		status |= DO_SETLINK_NOTIFY;
@@ -3359,6 +3370,17 @@ struct net_device *rtnl_create_link(struct net *net, const char *ifname,
 			return ERR_PTR(err);
 		}
 		dev->mtu = mtu;
+	}
+	if (tb[IFLA_HEADROOM]) {
+		u32 headroom = nla_get_u32(tb[IFLA_HEADROOM]);
+		int err;
+
+		err = dev_validate_headroom(dev, headroom, extack);
+		if (err) {
+			free_netdev(dev);
+			return ERR_PTR(err);
+		}
+		dev->needed_headroom = headroom;
 	}
 	if (tb[IFLA_ADDRESS]) {
 		__dev_addr_set(dev, nla_data(tb[IFLA_ADDRESS]),
@@ -4875,6 +4897,7 @@ int ndo_dflt_bridge_getlink(struct sk_buff *skb, u32 pid, u32 seq,
 
 	if (nla_put_string(skb, IFLA_IFNAME, dev->name) ||
 	    nla_put_u32(skb, IFLA_MTU, dev->mtu) ||
+	    nla_put_u32(skb, IFLA_HEADROOM, dev->needed_headroom) ||
 	    nla_put_u8(skb, IFLA_OPERSTATE, operstate) ||
 	    (br_dev &&
 	     nla_put_u32(skb, IFLA_MASTER, br_dev->ifindex)) ||
@@ -5068,6 +5091,7 @@ static inline size_t bridge_nlmsg_size(void)
 		+ nla_total_size(MAX_ADDR_LEN)	/* IFLA_ADDRESS */
 		+ nla_total_size(sizeof(u32))	/* IFLA_MASTER */
 		+ nla_total_size(sizeof(u32))	/* IFLA_MTU */
+		+ nla_total_size(sizeof(u32))	/* IFLA_HEADROOM */
 		+ nla_total_size(sizeof(u32))	/* IFLA_LINK */
 		+ nla_total_size(sizeof(u32))	/* IFLA_OPERSTATE */
 		+ nla_total_size(sizeof(u8))	/* IFLA_PROTINFO */
