@@ -999,6 +999,8 @@ enum bpf_attach_type {
 	BPF_PERF_EVENT,
 	BPF_TRACE_KPROBE_MULTI,
 	BPF_LSM_CGROUP,
+	BPF_NET_INGRESS,
+	BPF_NET_EGRESS,
 	__MAX_BPF_ATTACH_TYPE
 };
 
@@ -1373,14 +1375,20 @@ union bpf_attr {
 	};
 
 	struct { /* anonymous struct used by BPF_PROG_ATTACH/DETACH commands */
-		__u32		target_fd;	/* container object to attach to */
+		union {
+			__u32	target_fd;	/* container object to attach to */
+			__u32	target_ifindex; /* target ifindex */
+		};
 		__u32		attach_bpf_fd;	/* eBPF program to attach */
 		__u32		attach_type;
 		__u32		attach_flags;
-		__u32		replace_bpf_fd;	/* previously attached eBPF
+		union {
+			__u32	attach_priority;
+			__u32	replace_bpf_fd;	/* previously attached eBPF
 						 * program to replace if
 						 * BPF_F_REPLACE is used
 						 */
+		};
 	};
 
 	struct { /* anonymous struct used by BPF_PROG_TEST_RUN command */
@@ -1426,7 +1434,10 @@ union bpf_attr {
 	} info;
 
 	struct { /* anonymous struct used by BPF_PROG_QUERY command */
-		__u32		target_fd;	/* container object to query */
+		union {
+			__u32	target_fd;	/* container object to query */
+			__u32	target_ifindex; /* target ifindex */
+		};
 		__u32		attach_type;
 		__u32		query_flags;
 		__u32		attach_flags;
