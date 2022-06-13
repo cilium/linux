@@ -9147,7 +9147,7 @@ static struct bpf_insn *bpf_convert_tstamp_read(const struct bpf_prog *prog,
 	__u8 value_reg = si->dst_reg;
 	__u8 skb_reg = si->src_reg;
 
-#ifdef CONFIG_NET_CLS_ACT
+#ifdef CONFIG_NET_XGRESS
 	/* If the tstamp_type is read,
 	 * the bpf prog is aware the tstamp could have delivery time.
 	 * Thus, read skb->tstamp as is if tstamp_type_access is true.
@@ -9181,7 +9181,7 @@ static struct bpf_insn *bpf_convert_tstamp_write(const struct bpf_prog *prog,
 	__u8 value_reg = si->src_reg;
 	__u8 skb_reg = si->dst_reg;
 
-#ifdef CONFIG_NET_CLS_ACT
+#ifdef CONFIG_NET_XGRESS
 	/* If the tstamp_type is read,
 	 * the bpf prog is aware the tstamp could have delivery time.
 	 * Thus, write skb->tstamp as is if tstamp_type_access is true.

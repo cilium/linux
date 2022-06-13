@@ -948,7 +948,7 @@ struct sk_buff {
 	__u8			csum_level:2;
 	__u8			dst_pending_confirm:1;
 	__u8			mono_delivery_time:1;	/* See SKB_MONO_DELIVERY_TIME_MASK */
-#ifdef CONFIG_NET_CLS_ACT
+#ifdef CONFIG_NET_XGRESS
 	__u8			tc_skip_classify:1;
 	__u8			tc_at_ingress:1;	/* See TC_AT_INGRESS_MASK */
 #endif
