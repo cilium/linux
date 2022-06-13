@@ -9011,6 +9011,8 @@ static const struct bpf_sec_def section_defs[] = {
 	SEC_DEF("kretprobe.multi+",	KPROBE,	BPF_TRACE_KPROBE_MULTI, SEC_NONE, attach_kprobe_multi),
 	SEC_DEF("usdt+",		KPROBE,	0, SEC_NONE, attach_usdt),
 	SEC_DEF("tc",			SCHED_CLS, 0, SEC_NONE),
+	//SEC_DEF("tc.ingress",		SCHED_CLS, BPF_NET_INGRESS, SEC_ATTACHABLE),
+	//SEC_DEF("tc.egress",		SCHED_CLS, BPF_NET_EGRESS, SEC_ATTACHABLE),
 	SEC_DEF("classifier",		SCHED_CLS, 0, SEC_NONE | SEC_SLOPPY_PFX | SEC_DEPRECATED),
 	SEC_DEF("action",		SCHED_ACT, 0, SEC_NONE | SEC_SLOPPY_PFX),
 	SEC_DEF("tracepoint+",		TRACEPOINT, 0, SEC_NONE, attach_tp),

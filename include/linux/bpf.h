@@ -1313,6 +1313,7 @@ struct bpf_prog_array_item {
 	union {
 		struct bpf_cgroup_storage *cgroup_storage[MAX_BPF_CGROUP_STORAGE_TYPE];
 		u64 bpf_cookie;
+		u32 bpf_priority;
 	};
 };
 
@@ -2420,4 +2421,27 @@ void bpf_dynptr_init(struct bpf_dynptr_kern *ptr, void *data,
 void bpf_dynptr_set_null(struct bpf_dynptr_kern *ptr);
 int bpf_dynptr_check_size(u32 size);
 
+#ifdef CONFIG_NET_XGRESS
+int sch_prog_attach(const union bpf_attr *attr, struct bpf_prog *prog);
+int sch_prog_detach(const union bpf_attr *attr);
+int sch_prog_query(const union bpf_attr *attr,
+		   union bpf_attr __user *uattr);
+#else
+static inline int sch_prog_attach(const union bpf_attr *attr,
+				  struct bpf_prog *prog)
+{
+	return -EINVAL;
+}
+
+static inline int sch_prog_detach(const union bpf_attr *attr)
+{
+	return -EINVAL;
+}
+
+static inline int sch_prog_query(const union bpf_attr *attr,
+				 union bpf_attr __user *uattr)
+{
+	return -EINVAL;
+}
+#endif /* CONFIG_NET_XGRESS */
 #endif /* _LINUX_BPF_H */

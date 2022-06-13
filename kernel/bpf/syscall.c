@@ -3416,6 +3416,9 @@ attach_type_to_prog_type(enum bpf_attach_type attach_type)
 		return BPF_PROG_TYPE_SK_LOOKUP;
 	case BPF_XDP:
 		return BPF_PROG_TYPE_XDP;
+	case BPF_NET_INGRESS:
+	case BPF_NET_EGRESS:
+		return BPF_PROG_TYPE_SCHED_CLS;
 	default:
 		return BPF_PROG_TYPE_UNSPEC;
 	}
@@ -3434,18 +3437,15 @@ static int bpf_prog_attach(const union bpf_attr *attr)
 
 	if (CHECK_ATTR(BPF_PROG_ATTACH))
 		return -EINVAL;
-
 	if (attr->attach_flags & ~BPF_F_ATTACH_MASK)
 		return -EINVAL;
 
 	ptype = attach_type_to_prog_type(attr->attach_type);
 	if (ptype == BPF_PROG_TYPE_UNSPEC)
 		return -EINVAL;
-
 	prog = bpf_prog_get_type(attr->attach_bpf_fd, ptype);
 	if (IS_ERR(prog))
 		return PTR_ERR(prog);
-
 	if (bpf_prog_attach_check_attach_type(prog, attr->attach_type)) {
 		bpf_prog_put(prog);
 		return -EINVAL;
@@ -3471,16 +3471,18 @@ static int bpf_prog_attach(const union bpf_attr *attr)
 	case BPF_PROG_TYPE_SOCK_OPS:
 		ret = cgroup_bpf_prog_attach(attr, ptype, prog);
 		break;
+	case BPF_PROG_TYPE_SCHED_CLS:
+		ret = sch_prog_attach(attr, prog);
+		break;
 	default:
 		ret = -EINVAL;
 	}
-
-	if (ret)
+	if (ret < 0)
 		bpf_prog_put(prog);
 	return ret;
 }
 
-#define BPF_PROG_DETACH_LAST_FIELD attach_type
+#define BPF_PROG_DETACH_LAST_FIELD replace_bpf_fd
 
 static int bpf_prog_detach(const union bpf_attr *attr)
 {
@@ -3490,6 +3492,9 @@ static int bpf_prog_detach(const union bpf_attr *attr)
 		return -EINVAL;
 
 	ptype = attach_type_to_prog_type(attr->attach_type);
+	if (ptype != BPF_PROG_TYPE_SCHED_CLS &&
+	    (attr->attach_flags || attr->replace_bpf_fd))
+		return -EINVAL;
 
 	switch (ptype) {
 	case BPF_PROG_TYPE_SK_MSG:
@@ -3507,6 +3512,8 @@ static int bpf_prog_detach(const union bpf_attr *attr)
 	case BPF_PROG_TYPE_CGROUP_SYSCTL:
 	case BPF_PROG_TYPE_SOCK_OPS:
 		return cgroup_bpf_prog_detach(attr, ptype);
+	case BPF_PROG_TYPE_SCHED_CLS:
+		return sch_prog_detach(attr);
 	default:
 		return -EINVAL;
 	}
@@ -3559,6 +3566,9 @@ static int bpf_prog_query(const union bpf_attr *attr,
 	case BPF_SK_MSG_VERDICT:
 	case BPF_SK_SKB_VERDICT:
 		return sock_map_bpf_prog_query(attr, uattr);
+	case BPF_NET_INGRESS:
+	case BPF_NET_EGRESS:
+		return sch_prog_query(attr, uattr);
 	default:
 		return -EINVAL;
 	}
