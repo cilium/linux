@@ -3982,6 +3982,7 @@ BPF_CALL_4(bpf_skb_set_tunnel_key, struct sk_buff *, skb,
 	info->key.tun_id = cpu_to_be64(from->tunnel_id);
 	info->key.tos = from->tunnel_tos;
 	info->key.ttl = from->tunnel_ttl;
+	info->key.flow_flags = FLOWI_FLAG_ANYSRC;
 
 	if (flags & BPF_F_TUNINFO_IPV6) {
 		info->mode |= IP_TUNNEL_INFO_IPV6;
