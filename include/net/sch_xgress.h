@@ -33,6 +33,13 @@ struct sch_entry_pair {
 	struct sch_entry	b;
 };
 
+struct bpf_tc_link {
+	struct bpf_link link;
+	struct net_device *dev;
+	u32 priority;
+	u32 location;
+};
+
 static inline void sch_set_ingress(struct sk_buff *skb, bool ingress)
 {
 #ifdef CONFIG_NET_XGRESS
@@ -168,6 +175,7 @@ int sch_prog_detach(const union bpf_attr *attr);
 int sch_prog_query(const union bpf_attr *attr,
 		   union bpf_attr __user *uattr);
 void dev_sch_uninstall(struct net_device *dev);
+int sch_link_attach(const union bpf_attr *attr, struct bpf_prog *prog);
 #else
 static inline int sch_prog_attach(const union bpf_attr *attr,
 				  struct bpf_prog *prog)
@@ -188,6 +196,12 @@ static inline int sch_prog_query(const union bpf_attr *attr,
 
 static inline void dev_sch_uninstall(struct net_device *dev)
 {
+}
+
+static inline int sch_link_attach(const union bpf_attr *attr,
+				  struct bpf_prog *prog)
+{
+	return -EINVAL;
 }
 #endif /* CONFIG_NET_XGRESS */
 #endif /* __NET_SCHED_XGRESS_H */

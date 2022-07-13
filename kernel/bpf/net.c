@@ -27,13 +27,15 @@ static bool sch_prog_refcounted(const struct bpf_prog *prog)
 }
 
 static int __sch_prog_attach(struct net_device *dev, bool ingress, u32 limit,
-			     struct bpf_prog *nprog, u32 prio, u32 flags)
+			     u32 id, struct bpf_prog *nprog, u32 prio, u32 flags)
 {
 	struct bpf_prog_array_item *item, *tmp;
 	struct sch_entry *entry, *peer;
 	struct bpf_prog *oprog;
 	bool created;
 	int i, j;
+
+	ASSERT_RTNL();
 
 	entry = dev_sch_entry_fetch(dev, ingress, &created);
 	if (!entry)
@@ -44,10 +46,12 @@ static int __sch_prog_attach(struct net_device *dev, bool ingress, u32 limit,
 		if (!oprog)
 			break;
 		if (item->bpf_priority == prio) {
-			if (flags & BPF_F_REPLACE) {
+			if (item->bpf_id == id &&
+			    (flags & BPF_F_REPLACE)) {
 				/* Pairs with READ_ONCE() in sch_run_progs(). */
 				WRITE_ONCE(item->prog, nprog);
-				if (sch_prog_refcounted(oprog))
+				item->bpf_id = id;
+				if (!id && sch_prog_refcounted(oprog))
 					bpf_prog_put(oprog);
 				dev_sch_entry_prio_set(entry, prio, nprog);
 				return prio;
@@ -73,19 +77,23 @@ static int __sch_prog_attach(struct net_device *dev, bool ingress, u32 limit,
 			if (i == j) {
 				tmp->prog = nprog;
 				tmp->bpf_priority = prio;
+				tmp->bpf_id = id;
 			}
 			break;
 		} else if (item->bpf_priority < prio) {
 			tmp->prog = oprog;
 			tmp->bpf_priority = item->bpf_priority;
+			tmp->bpf_id = item->bpf_id;
 		} else if (item->bpf_priority > prio) {
 			if (i == j) {
 				tmp->prog = nprog;
 				tmp->bpf_priority = prio;
+				tmp->bpf_id = id;
 				tmp = &peer->items[++j];
 			}
 			tmp->prog = oprog;
 			tmp->bpf_priority = item->bpf_priority;
+			tmp->bpf_id = item->bpf_id;
 		}
 	}
 	dev_sch_entry_update(dev, peer, ingress);
@@ -112,7 +120,7 @@ int sch_prog_attach(const union bpf_attr *attr, struct bpf_prog *nprog)
 		rtnl_unlock();
 		return -EINVAL;
 	}
-	ret = __sch_prog_attach(dev, ingress, SCH_MAX_ENTRIES, nprog,
+	ret = __sch_prog_attach(dev, ingress, SCH_MAX_ENTRIES, 0, nprog,
 				attr->attach_priority, attr->attach_flags);
 	rtnl_unlock();
 	return ret;
@@ -125,8 +133,7 @@ int sch_prog_attach_kern(struct net_device *dev, bool ingress)
 		(struct bpf_prog *)&sch_prog_ingress :
 		(struct bpf_prog *)&sch_prog_egress;
 
-	ASSERT_RTNL();
-	return __sch_prog_attach(dev, ingress, SCH_MAX_ENTRIES + 1, prog,
+	return __sch_prog_attach(dev, ingress, SCH_MAX_ENTRIES + 1, 0, prog,
 				 SCH_PRIO_RESERVED, BPF_F_REPLACE);
 #else
 	return -EOPNOTSUPP;
@@ -135,12 +142,14 @@ int sch_prog_attach_kern(struct net_device *dev, bool ingress)
 EXPORT_SYMBOL_GPL(sch_prog_attach_kern);
 
 static int __sch_prog_detach(struct net_device *dev, bool ingress, u32 limit,
-			     u32 prio)
+			     u32 id, u32 prio)
 {
 	struct bpf_prog_array_item *item, *tmp;
 	struct bpf_prog *oprog, *fprog = NULL;
 	struct sch_entry *entry, *peer;
 	int i, j;
+
+	ASSERT_RTNL();
 
 	entry = ingress ?
 		rcu_dereference_rtnl(dev->sch_ingress) :
@@ -158,8 +167,11 @@ static int __sch_prog_detach(struct net_device *dev, bool ingress, u32 limit,
 		if (item->bpf_priority != prio) {
 			tmp->prog = oprog;
 			tmp->bpf_priority = item->bpf_priority;
+			tmp->bpf_id = item->bpf_id;
 			j++;
 		} else {
+			if (item->bpf_id != id)
+				return -EBUSY;
 			fprog = oprog;
 		}
 	}
@@ -168,7 +180,7 @@ static int __sch_prog_detach(struct net_device *dev, bool ingress, u32 limit,
 		if (dev_sch_entry_total(peer) == 0)
 			peer = NULL;
 		dev_sch_entry_update(dev, peer, ingress);
-		if (sch_prog_refcounted(fprog))
+		if (!id && sch_prog_refcounted(fprog))
 			bpf_prog_put(fprog);
 		if (!peer)
 			dev_sch_entry_free(entry);
@@ -197,7 +209,7 @@ int sch_prog_detach(const union bpf_attr *attr)
 		rtnl_unlock();
 		return -EINVAL;
 	}
-	ret = __sch_prog_detach(dev, ingress, SCH_MAX_ENTRIES,
+	ret = __sch_prog_detach(dev, ingress, SCH_MAX_ENTRIES, 0,
 				attr->attach_priority);
 	rtnl_unlock();
 	return ret;
@@ -206,8 +218,7 @@ int sch_prog_detach(const union bpf_attr *attr)
 int sch_prog_detach_kern(struct net_device *dev, bool ingress)
 {
 #ifdef CONFIG_NET_CLS_ACT
-	ASSERT_RTNL();
-	return __sch_prog_detach(dev, ingress, SCH_MAX_ENTRIES + 1,
+	return __sch_prog_detach(dev, ingress, SCH_MAX_ENTRIES + 1, 0,
 				 SCH_PRIO_RESERVED);
 #else
 	return -EOPNOTSUPP;
@@ -236,7 +247,7 @@ static void __sch_prog_detach_all(struct net_device *dev, bool ingress, u32 limi
 		if (!prog)
 			break;
 		dev_sch_entry_prio_del(entry, item->bpf_priority);
-		if (sch_prog_refcounted(prog))
+		if (!item->bpf_id && sch_prog_refcounted(prog))
 			bpf_prog_put(prog);
 		if (ingress)
 			net_dec_ingress_queue();
@@ -262,9 +273,12 @@ __sch_prog_query(const union bpf_attr *attr, union bpf_attr __user *uattr,
 	u32 i, flags = 0, cnt;
 	int ret = 0;
 	struct {
-		u32 id;
+		u32 prog_id;
+		u32 link_id;
 		u32 prio;
 	} __packed idp, __user *prog_ids = u64_to_user_ptr(attr->query.prog_ids);
+
+	ASSERT_RTNL();
 
 	entry = ingress ?
 		rcu_dereference_rtnl(dev->sch_ingress) :
@@ -288,7 +302,8 @@ __sch_prog_query(const union bpf_attr *attr, union bpf_attr __user *uattr,
 		prog = item->prog;
 		if (!prog)
 			break;
-		idp.id = sch_prog_refcounted(prog) ? prog->aux->id : 0;
+		idp.prog_id = sch_prog_refcounted(prog) ? prog->aux->id : 0;
+		idp.link_id = item->bpf_id;
 		idp.prio = item->bpf_priority;
 		if (copy_to_user(prog_ids + i, &idp, sizeof(idp)))
 			return -EFAULT;
@@ -316,4 +331,91 @@ int sch_prog_query(const union bpf_attr *attr, union bpf_attr __user *uattr)
 	ret = __sch_prog_query(attr, uattr, dev, ingress, SCH_MAX_ENTRIES);
 	rtnl_unlock();
 	return ret;
+}
+
+static int __sch_link_attach(struct bpf_link *l, u32 id)
+{
+	struct bpf_tc_link *link = container_of(l, struct bpf_tc_link, link);
+	int ret;
+
+	rtnl_lock();
+	ret = __sch_prog_attach(link->dev, link->location == BPF_NET_INGRESS,
+				SCH_MAX_ENTRIES, id, l->prog, link->priority,
+				0);
+	if (ret > 0) {
+		link->priority = ret;
+		ret = 0;
+	}
+	rtnl_unlock();
+	return ret;
+}
+
+static void sch_link_release(struct bpf_link *l)
+{
+	struct bpf_tc_link *link = container_of(l, struct bpf_tc_link, link);
+
+	rtnl_lock();
+	if (link->dev) {
+		WARN_ON(__sch_prog_detach(link->dev,
+					  link->location == BPF_NET_INGRESS,
+					  SCH_MAX_ENTRIES, l->id, link->priority));
+		link->dev = NULL;
+	}
+	rtnl_unlock();
+}
+
+static void sch_link_dealloc(struct bpf_link *l)
+{
+	struct bpf_tc_link *link = container_of(l, struct bpf_tc_link, link);
+
+	kfree(link);
+}
+
+static const struct bpf_link_ops bpf_tc_link_lops = {
+	.release = sch_link_release,
+	.dealloc = sch_link_dealloc,
+};
+
+int sch_link_attach(const union bpf_attr *attr, struct bpf_prog *prog)
+{
+	struct net *net = current->nsproxy->net_ns;
+	struct bpf_link_primer link_primer;
+	struct bpf_tc_link *link;
+	struct net_device *dev;
+	int fd, err;
+
+	if (attr->link_create.flags)
+		return -EINVAL;
+	dev = dev_get_by_index(net, attr->link_create.target_ifindex);
+	if (!dev)
+		return -EINVAL;
+	link = kzalloc(sizeof(*link), GFP_USER);
+	if (!link) {
+		err = -ENOMEM;
+		goto out_put;
+	}
+
+	bpf_link_init(&link->link, BPF_LINK_TYPE_TC, &bpf_tc_link_lops, prog);
+	link->priority = attr->link_create.tc.priority;
+	link->location = attr->link_create.attach_type;
+	link->dev = dev;
+
+	err = bpf_link_prime(&link->link, &link_primer);
+	if (err) {
+		kfree(link);
+		goto out_put;
+	}
+	err = __sch_link_attach(&link->link, link_primer.id);
+	if (err) {
+		link->dev = NULL;
+		bpf_link_cleanup(&link_primer);
+		goto out_put;
+	}
+
+	fd = bpf_link_settle(&link_primer);
+	dev_put(dev);
+	return fd;
+out_put:
+	dev_put(dev);
+	return err;
 }
