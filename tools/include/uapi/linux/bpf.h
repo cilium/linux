@@ -1017,6 +1017,7 @@ enum bpf_link_type {
 	BPF_LINK_TYPE_PERF_EVENT = 7,
 	BPF_LINK_TYPE_KPROBE_MULTI = 8,
 	BPF_LINK_TYPE_STRUCT_OPS = 9,
+	BPF_LINK_TYPE_TC = 10,
 
 	MAX_BPF_LINK_TYPE,
 };
@@ -1512,6 +1513,9 @@ union bpf_attr {
 				 */
 				__u64		cookie;
 			} tracing;
+			struct {
+				__u32		priority;
+			} tc;
 		};
 	} link_create;
 
@@ -6696,6 +6700,7 @@ struct bpf_flow_keys {
 
 struct bpf_query_info {
 	__u32 prog_id;
+	__u32 link_id;
 	__u32 prio;
 };
 
