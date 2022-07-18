@@ -367,10 +367,13 @@ SEC("tc")
 int vxlan_get_tunnel_src(struct __sk_buff *skb)
 {
 	int ret;
+	__u32 assigned_ip = bpf_htonl(0xac1001c8); /* 172.16.1.200 */
 	struct bpf_tunnel_key key;
 	struct vxlan_metadata md;
+	__u32 orig_daddr;
 	__u32 index = 0;
 	__u32 *local_ip = NULL;
+	__s64 csum;
 
 	local_ip = bpf_map_lookup_elem(&local_ip_map, &index);
 	if (!local_ip) {
@@ -397,6 +400,18 @@ int vxlan_get_tunnel_src(struct __sk_buff *skb)
 		bpf_printk("local_ip 0x%x\n", *local_ip);
 		log_err(ret);
 		return TC_ACT_SHOT;
+	}
+
+	if (key.local_ipv4 != bpf_ntohl(assigned_ip)) {
+		orig_daddr = bpf_htonl(key.local_ipv4);
+		csum = bpf_csum_diff(&orig_daddr, sizeof(__u32), &assigned_ip,
+				     sizeof(__u32), 0);
+		if (bpf_skb_store_bytes(skb, ETH_HLEN + offsetof(struct iphdr, daddr),
+					&assigned_ip, sizeof(__u32), 0) < 0)
+			return TC_ACT_SHOT;
+		if (bpf_l3_csum_replace(skb, ETH_HLEN + offsetof(struct iphdr, check),
+					0, csum, 0) < 0)
+			return TC_ACT_SHOT;
 	}
 
 	return TC_ACT_OK;
