@@ -18,10 +18,13 @@
 #include <linux/socket.h>
 #include <linux/pkt_cls.h>
 #include <linux/erspan.h>
+#include <linux/udp.h>
 #include <bpf/bpf_helpers.h>
 #include <bpf/bpf_endian.h>
 
 #define log_err(__ret) bpf_printk("ERROR line:%d ret:%d\n", __LINE__, __ret)
+
+#define VXLAN_UDP_PORT 8472
 
 struct geneve_opt {
 	__be16	opt_class;
@@ -33,6 +36,11 @@ struct geneve_opt {
 	__u8	opt_data[8]; /* hard-coded to 8 byte */
 };
 
+struct vxlanhdr {
+	__be32 vx_flags;
+	__be32 vx_vni;
+} __attribute__((packed));
+
 struct vxlan_metadata {
 	__u32     gbp;
 };
@@ -43,6 +51,13 @@ struct {
 	__type(key, __u32);
 	__type(value, __u32);
 } local_ip_map SEC(".maps");
+
+struct {
+	__uint(type, BPF_MAP_TYPE_ARRAY);
+	__uint(max_entries, 1);
+	__type(key, __u32);
+	__type(value, __u32);
+} vxlan_ifindex_map SEC(".maps");
 
 SEC("tc")
 int gre_set_tunnel(struct __sk_buff *skb)
@@ -369,6 +384,7 @@ int vxlan_get_tunnel_src(struct __sk_buff *skb)
 	int ret;
 	struct bpf_tunnel_key key;
 	struct vxlan_metadata md;
+	__u32 orig_daddr;
 	__u32 index = 0;
 	__u32 *local_ip = NULL;
 
@@ -400,6 +416,88 @@ int vxlan_get_tunnel_src(struct __sk_buff *skb)
 	}
 
 	return TC_ACT_OK;
+}
+
+SEC("tc")
+int veth_set_outer_dst(struct __sk_buff *skb)
+{
+	__u32 assigned_ip = bpf_htonl(0xac1001c8); /* 172.16.1.200 */
+	//__u32 orig_daddr;
+	__s64 csum;
+	__u32 *vxlan_ifindex = NULL;
+	__u32 index = 0;
+	void *data_end = (void *)(long)skb->data_end;
+	void *data = (void *)(long)skb->data;
+	struct ethhdr *eth = data;
+	struct udphdr *udph;
+	struct iphdr *iph;
+	int shrink;
+	int ret;
+
+	vxlan_ifindex = bpf_map_lookup_elem(&vxlan_ifindex_map, &index);
+	if (!vxlan_ifindex) {
+		log_err(ret);
+		return TC_ACT_SHOT;
+	}
+
+	if ((void *)eth + sizeof(*eth) > data_end) {
+		log_err(ret);
+		return TC_ACT_SHOT;
+	}
+	if (eth->h_proto != bpf_htons(ETH_P_IP))
+		return TC_ACT_OK;
+
+	iph = (struct iphdr *)(eth + 1);
+	if ((void *)iph + sizeof(*iph) > data_end) {
+		log_err(ret);
+		return TC_ACT_SHOT;
+	}
+	if (iph->protocol != IPPROTO_UDP)
+		return TC_ACT_OK;
+
+	udph = (struct udphdr *)(iph + 1);
+	if ((void *)udph + sizeof(*udph) > data_end) {
+		log_err(ret);
+		return TC_ACT_SHOT;
+	}
+	if (udph->dest != bpf_htons(VXLAN_UDP_PORT))
+		return TC_ACT_OK;
+
+	if (iph->daddr != assigned_ip)
+		return TC_ACT_OK;
+
+	shrink = sizeof(struct iphdr) + sizeof(struct udphdr) +
+		 sizeof(struct vxlanhdr) + sizeof(struct ethhdr);
+	if (bpf_skb_adjust_room(skb, -shrink, BPF_ADJ_ROOM_MAC,
+				BPF_F_ADJ_ROOM_NO_CSUM_RESET)) {
+		log_err(ret);
+		return TC_ACT_SHOT;
+	}
+	return bpf_redirect(*vxlan_ifindex, BPF_F_INGRESS);
+
+	/*if (bpf_skb_load_bytes(skb, ETH_HLEN + offsetof(struct iphdr, daddr),
+			       &orig_daddr, sizeof(__u32)) < 0) {
+		log_err(ret);
+		return TC_ACT_SHOT;
+	}
+
+	if (orig_daddr != assigned_ip) {
+		csum = bpf_csum_diff(&orig_daddr, sizeof(__u32), &assigned_ip,
+				     sizeof(__u32), 0);
+		if (bpf_skb_store_bytes(skb, ETH_HLEN + offsetof(struct iphdr, daddr),
+					&assigned_ip, sizeof(__u32), 0) < 0) {
+			log_err(ret);
+			return TC_ACT_SHOT;
+		}
+		if (bpf_l3_csum_replace(skb, ETH_HLEN + offsetof(struct iphdr, check),
+					0, csum, 0) < 0) {
+			log_err(ret);
+			return TC_ACT_SHOT;
+		}
+		return bpf_redirect(*vxlan_ifindex, BPF_F_INGRESS);
+	}
+
+	return TC_ACT_OK;*/
 }
 
 SEC("tc")
