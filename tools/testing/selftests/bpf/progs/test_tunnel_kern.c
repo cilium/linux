@@ -14,14 +14,18 @@
 #include <linux/if_packet.h>
 #include <linux/ip.h>
 #include <linux/ipv6.h>
+#include <linux/icmp.h>
 #include <linux/types.h>
 #include <linux/socket.h>
 #include <linux/pkt_cls.h>
 #include <linux/erspan.h>
+#include <linux/udp.h>
 #include <bpf/bpf_helpers.h>
 #include <bpf/bpf_endian.h>
 
 #define log_err(__ret) bpf_printk("ERROR line:%d ret:%d\n", __LINE__, __ret)
+
+#define VXLAN_UDP_PORT 4789
 
 struct geneve_opt {
 	__be16	opt_class;
@@ -32,6 +36,11 @@ struct geneve_opt {
 	__u8	r1:1;
 	__u8	opt_data[8]; /* hard-coded to 8 byte */
 };
+
+struct vxlanhdr {
+	__be32 vx_flags;
+	__be32 vx_vni;
+} __attribute__((packed));
 
 struct vxlan_metadata {
 	__u32     gbp;
@@ -369,6 +378,7 @@ int vxlan_get_tunnel_src(struct __sk_buff *skb)
 	int ret;
 	struct bpf_tunnel_key key;
 	struct vxlan_metadata md;
+	__u32 orig_daddr;
 	__u32 index = 0;
 	__u32 *local_ip = NULL;
 
@@ -399,6 +409,56 @@ int vxlan_get_tunnel_src(struct __sk_buff *skb)
 		return TC_ACT_SHOT;
 	}
 
+	return TC_ACT_OK;
+}
+
+SEC("tc")
+int veth_set_outer_dst(struct __sk_buff *skb)
+{
+	__u32 assigned_ip = bpf_htonl(0xac1001c8); /* 172.16.1.200 */
+	struct ethhdr *eth = (struct ethhdr *)(long)skb->data;
+	void *data_end = (void *)(long)skb->data_end;
+	struct udphdr *udph;
+	struct iphdr *iph;
+	__u32 index = 0;
+	int ret = 0;
+	int shrink;
+
+	if ((void *)eth + sizeof(*eth) > data_end) {
+		log_err(ret);
+		return TC_ACT_SHOT;
+	}
+
+	if (eth->h_proto != bpf_htons(ETH_P_IP))
+		return TC_ACT_OK;
+
+	iph = (struct iphdr *)(eth + 1);
+	if ((void *)iph + sizeof(*iph) > data_end) {
+		log_err(ret);
+		return TC_ACT_SHOT;
+	}
+	if (iph->protocol != IPPROTO_UDP)
+		return TC_ACT_OK;
+
+	udph = (struct udphdr *)(iph + 1);
+	if ((void *)udph + sizeof(*udph) > data_end) {
+		log_err(ret);
+		return TC_ACT_SHOT;
+	}
+	if (udph->dest != bpf_htons(VXLAN_UDP_PORT))
+		return TC_ACT_OK;
+
+	if (iph->daddr == assigned_ip)
+		return TC_ACT_OK;
+
+	shrink = sizeof(struct iphdr) + sizeof(struct udphdr) +
+		 sizeof(struct vxlanhdr) + sizeof(struct ethhdr);
+	if (bpf_skb_adjust_room(skb, -shrink, BPF_ADJ_ROOM_MAC,
+				BPF_F_ADJ_ROOM_NO_CSUM_RESET)) {
+		log_err(ret);
+		return TC_ACT_SHOT;
+	}
+	bpf_skb_change_type(skb, PACKET_HOST);
 	return TC_ACT_OK;
 }
 
