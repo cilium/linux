@@ -350,6 +350,39 @@ static int __sch_link_attach(struct bpf_link *l, u32 id)
 	return ret;
 }
 
+static int sch_link_update(struct bpf_link *l, struct bpf_prog *nprog,
+			   struct bpf_prog *oprog)
+{
+	struct bpf_tc_link *link = container_of(l, struct bpf_tc_link, link);
+	int ret = 0;
+
+	rtnl_lock();
+	if (!link->dev) {
+		ret = -ENOLINK;
+		goto out;
+	}
+	if (oprog && l->prog != oprog) {
+		ret = -EPERM;
+		goto out;
+	}
+	oprog = l->prog;
+	if (oprog == nprog) {
+		bpf_prog_put(nprog);
+		goto out;
+	}
+	ret = __sch_prog_attach(link->dev, link->location == BPF_NET_INGRESS,
+				SCH_MAX_ENTRIES, l->id, nprog, link->priority,
+				BPF_F_REPLACE);
+	if (ret == link->priority) {
+		oprog = xchg(&l->prog, nprog);
+		bpf_prog_put(oprog);
+		ret = 0;
+	}
+out:
+	rtnl_unlock();
+	return ret;
+}
+
 static void sch_link_release(struct bpf_link *l)
 {
 	struct bpf_tc_link *link = container_of(l, struct bpf_tc_link, link);
@@ -372,8 +405,9 @@ static void sch_link_dealloc(struct bpf_link *l)
 }
 
 static const struct bpf_link_ops bpf_tc_link_lops = {
-	.release = sch_link_release,
-	.dealloc = sch_link_dealloc,
+	.release	= sch_link_release,
+	.dealloc	= sch_link_dealloc,
+	.update_prog	= sch_link_update,
 };
 
 int sch_link_attach(const union bpf_attr *attr, struct bpf_prog *prog)
