@@ -6162,6 +6162,11 @@ struct bpf_link_info {
 		struct {
 			__u32 ifindex;
 		} xdp;
+		struct {
+			__u32 ifindex;
+			__u32 attach_type;
+			__u32 priority;
+		} tc;
 	};
 } __attribute__((aligned(8)));
 

@@ -404,10 +404,46 @@ static void sch_link_dealloc(struct bpf_link *l)
 	kfree(link);
 }
 
+static void sch_link_fdinfo(const struct bpf_link *l, struct seq_file *seq)
+{
+	struct bpf_tc_link *link = container_of(l, struct bpf_tc_link, link);
+	u32 ifindex = 0;
+
+	rtnl_lock();
+	if (link->dev)
+		ifindex = link->dev->ifindex;
+	rtnl_unlock();
+
+	seq_printf(seq, "ifindex:\t%u\n", ifindex);
+	seq_printf(seq, "attach_type:\t%u (%s)\n",
+		   link->location,
+		   link->location == BPF_NET_INGRESS ? "ingress" : "egress");
+	seq_printf(seq, "priority:\t%u\n", link->priority);
+}
+
+static int sch_link_fill_info(const struct bpf_link *l,
+			      struct bpf_link_info *info)
+{
+	struct bpf_tc_link *link = container_of(l, struct bpf_tc_link, link);
+	u32 ifindex = 0;
+
+	rtnl_lock();
+	if (link->dev)
+		ifindex = link->dev->ifindex;
+	rtnl_unlock();
+
+	info->tc.ifindex = ifindex;
+	info->tc.attach_type = link->location;
+	info->tc.priority = link->priority;
+	return 0;
+}
+
 static const struct bpf_link_ops bpf_tc_link_lops = {
 	.release	= sch_link_release,
 	.dealloc	= sch_link_dealloc,
 	.update_prog	= sch_link_update,
+	.show_fdinfo	= sch_link_fdinfo,
+	.fill_link_info	= sch_link_fill_info,
 };
 
 int sch_link_attach(const union bpf_attr *attr, struct bpf_prog *prog)
