@@ -246,6 +246,7 @@ static void test_vxlan_tunnel(void)
 {
 	struct test_tunnel_kern *skel = NULL;
 	struct nstoken *nstoken;
+	int vxlan_ifindex_map_fd = -1;
 	int local_ip_map_fd = -1;
 	int set_src_prog_fd, get_src_prog_fd;
 	int set_dst_prog_fd;
@@ -275,6 +276,28 @@ static void test_vxlan_tunnel(void)
 	if (!ASSERT_GE(set_src_prog_fd, 0, "bpf_program__fd"))
 		goto done;
 	if (attach_tc_prog(&tc_hook, get_src_prog_fd, set_src_prog_fd))
+		goto done;
+
+	/* load and attach bpf prog to veth dev tc hook point */
+	ifindex = if_nametoindex("veth1");
+	if (!ASSERT_NEQ(ifindex, 0, "veth1 ifindex"))
+		goto done;
+	tc_hook.ifindex = ifindex;
+	set_dst_prog_fd = bpf_program__fd(skel->progs.veth_set_outer_dst);
+	if (!ASSERT_GE(set_dst_prog_fd, 0, "bpf_program__fd"))
+		goto done;
+	if (attach_tc_prog(&tc_hook, set_dst_prog_fd, -1))
+		goto done;
+
+	/* tell veth bpf prog to redirect to vxlan11 */
+	ifindex = if_nametoindex(VXLAN_TUNL_DEV1);
+	if (!ASSERT_NEQ(ifindex, 0, "vxlan11 ifindex"))
+		goto done;
+	vxlan_ifindex_map_fd = bpf_map__fd(skel->maps.vxlan_ifindex_map);
+	if (!ASSERT_GE(vxlan_ifindex_map_fd, 0, "bpf_map__fd"))
+		goto done;
+	err = bpf_map_update_elem(vxlan_ifindex_map_fd, &key, &ifindex, BPF_ANY);
+	if (!ASSERT_OK(err, "update bpf vxlan_ifindex_map"))
 		goto done;
 
 	/* load and attach prog set_md to tunnel dev tc hook point at_ns0 */
@@ -311,6 +334,8 @@ done:
 	delete_vxlan_tunnel();
 	if (local_ip_map_fd >= 0)
 		close(local_ip_map_fd);
+	if (vxlan_ifindex_map_fd >= 0)
+		close(vxlan_ifindex_map_fd);
 	if (skel)
 		test_tunnel_kern__destroy(skel);
 }
