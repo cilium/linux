@@ -397,6 +397,12 @@ static void sch_link_release(struct bpf_link *l)
 	rtnl_unlock();
 }
 
+static int sch_link_detach(struct bpf_link *l)
+{
+	sch_link_release(l);
+	return 0;
+}
+
 static void sch_link_dealloc(struct bpf_link *l)
 {
 	struct bpf_tc_link *link = container_of(l, struct bpf_tc_link, link);
@@ -440,6 +446,7 @@ static int sch_link_fill_info(const struct bpf_link *l,
 
 static const struct bpf_link_ops bpf_tc_link_lops = {
 	.release	= sch_link_release,
+	.detach		= sch_link_detach,
 	.dealloc	= sch_link_dealloc,
 	.update_prog	= sch_link_update,
 	.show_fdinfo	= sch_link_fdinfo,
