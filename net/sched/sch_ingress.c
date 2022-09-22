@@ -92,7 +92,6 @@ static int ingress_init(struct Qdisc *sch, struct nlattr *opt,
 	mini_qdisc_pair_init(&q->miniqp, sch, &dev_sch_entry_pair(entry)->miniq);
 	if (created)
 		dev_sch_entry_update(dev, entry, true);
-	sch_prog_attach_kern(dev, true);
 
 	q->block_info.binder_type = FLOW_BLOCK_BINDER_TYPE_CLSACT_INGRESS;
 	q->block_info.chain_head_change = clsact_chain_head_change;
@@ -110,9 +109,13 @@ static void ingress_destroy(struct Qdisc *sch)
 {
 	struct ingress_sched_data *q = qdisc_priv(sch);
 	struct net_device *dev = qdisc_dev(sch);
+	struct sch_entry *entry = rtnl_dereference(dev->sch_ingress);
 
 	tcf_block_put_ext(q->block, sch, &q->block_info);
-	sch_prog_detach_kern(dev, true);
+	if (entry && dev_sch_entry_total(entry) == 0) {
+		dev_sch_entry_update(dev, NULL, true);
+		dev_sch_entry_free(entry);
+	}
 	net_dec_ingress_queue();
 }
 
@@ -242,7 +245,6 @@ static int clsact_init(struct Qdisc *sch, struct nlattr *opt,
 	mini_qdisc_pair_init(&q->miniqp_ingress, sch, &dev_sch_entry_pair(entry)->miniq);
 	if (created)
 		dev_sch_entry_update(dev, entry, true);
-	sch_prog_attach_kern(dev, true);
 
 	q->ingress_block_info.binder_type = FLOW_BLOCK_BINDER_TYPE_CLSACT_INGRESS;
 	q->ingress_block_info.chain_head_change = clsact_chain_head_change;
@@ -262,7 +264,6 @@ static int clsact_init(struct Qdisc *sch, struct nlattr *opt,
 	mini_qdisc_pair_init(&q->miniqp_egress, sch, &dev_sch_entry_pair(entry)->miniq);
 	if (created)
 		dev_sch_entry_update(dev, entry, false);
-	sch_prog_attach_kern(dev, false);
 
 	q->egress_block_info.binder_type = FLOW_BLOCK_BINDER_TYPE_CLSACT_EGRESS;
 	q->egress_block_info.chain_head_change = clsact_chain_head_change;
@@ -275,12 +276,20 @@ static void clsact_destroy(struct Qdisc *sch)
 {
 	struct clsact_sched_data *q = qdisc_priv(sch);
 	struct net_device *dev = qdisc_dev(sch);
+	struct sch_entry *ingress_entry = rtnl_dereference(dev->sch_ingress);
+	struct sch_entry *egress_entry = rtnl_dereference(dev->sch_egress);
 
 	tcf_block_put_ext(q->egress_block, sch, &q->egress_block_info);
-	tcf_block_put_ext(q->ingress_block, sch, &q->ingress_block_info);
+	if (egress_entry && dev_sch_entry_total(egress_entry) == 0) {
+		dev_sch_entry_update(dev, NULL, false);
+		dev_sch_entry_free(egress_entry);
+	}
 
-	sch_prog_detach_kern(dev, true);
-	sch_prog_detach_kern(dev, false);
+	tcf_block_put_ext(q->ingress_block, sch, &q->ingress_block_info);
+	if (ingress_entry && dev_sch_entry_total(ingress_entry) == 0) {
+		dev_sch_entry_update(dev, NULL, true);
+		dev_sch_entry_free(ingress_entry);
+	}
 
 	net_dec_ingress_queue();
 	net_dec_egress_queue();

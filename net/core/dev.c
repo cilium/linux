@@ -3957,59 +3957,17 @@ EXPORT_SYMBOL_GPL(netdev_xmit_skip_txqueue);
 
 #ifdef CONFIG_NET_XGRESS
 #ifdef CONFIG_NET_CLS_ACT
-unsigned int sch_cls_ingress(const void *pskb, const struct bpf_insn *null)
+static int sch_cls_handle(struct sch_entry *entry, struct sk_buff *skb)
 {
-	struct sk_buff *skb = (void *)pskb;
-	struct mini_Qdisc *miniq;
+	struct mini_Qdisc *miniq = dev_sch_entry_pair(entry)->miniq;
+	int ret = TC_ACT_UNSPEC;
 	struct tcf_result res;
-	int ret;
 
 	tc_skb_cb(skb)->mru = 0;
 	tc_skb_cb(skb)->post_ct = false;
 
-	miniq = dev_sch_entry_pair(skb->dev->sch_ingress)->miniq;
 	if (!miniq)
-		return TC_ACT_UNSPEC;
-	mini_qdisc_bstats_cpu_update(miniq, skb);
-	__skb_pull(skb, skb->mac_len);
-	ret = tcf_classify(skb, miniq->block, miniq->filter_list, &res, false);
-	__skb_push(skb, skb->mac_len);
-	/* Only tcf related quirks below. */
-	switch (ret) {
-	case TC_ACT_SHOT:
-		mini_qdisc_qstats_cpu_drop(miniq);
-		break;
-	case TC_ACT_OK:
-	case TC_ACT_RECLASSIFY:
-		skb->tc_index = TC_H_MIN(res.classid);
-		ret = TC_ACT_OK;
-		break;
-	case TC_ACT_STOLEN:
-	case TC_ACT_QUEUED:
-	case TC_ACT_TRAP:
-		ret = TC_ACT_CONSUMED;
-		break;
-	case TC_ACT_CONSUMED:
-		/* Bump refcount given skb is now in use elsewhere. */
-		skb_get(skb);
-		break;
-	}
-	return ret;
-}
-
-unsigned int sch_cls_egress(const void *pskb, const struct bpf_insn *null)
-{
-	struct sk_buff *skb = (void *)pskb;
-	struct mini_Qdisc *miniq;
-	struct tcf_result res;
-	int ret;
-
-	tc_skb_cb(skb)->mru = 0;
-	tc_skb_cb(skb)->post_ct = false;
-
-	miniq = dev_sch_entry_pair(skb->dev->sch_egress)->miniq;
-	if (!miniq)
-		return TC_ACT_UNSPEC;
+		return ret;
 	mini_qdisc_bstats_cpu_update(miniq, skb);
 	ret = tcf_classify(skb, miniq->block, miniq->filter_list, &res, false);
 	/* Only tcf related quirks below. */
@@ -4020,16 +3978,6 @@ unsigned int sch_cls_egress(const void *pskb, const struct bpf_insn *null)
 	case TC_ACT_OK:
 	case TC_ACT_RECLASSIFY:
 		skb->tc_index = TC_H_MIN(res.classid);
-		ret = TC_ACT_OK;
-		break;
-	case TC_ACT_STOLEN:
-	case TC_ACT_QUEUED:
-	case TC_ACT_TRAP:
-		ret = TC_ACT_CONSUMED;
-		break;
-	case TC_ACT_CONSUMED:
-		/* Bump refcount given skb is now in use elsewhere. */
-		skb_get(skb);
 		break;
 	}
 	return ret;
@@ -4056,7 +4004,8 @@ sch_run_progs(const struct sch_entry *entry, struct sk_buff *skb,
 	}
 	if (needs_mac)
 		__skb_pull(skb, skb->mac_len);
-	return ret;
+
+	return sch_action_code(ret);
 }
 
 static __always_inline struct sk_buff *
@@ -4064,6 +4013,7 @@ sch_handle_ingress(struct sk_buff *skb, struct packet_type **pt_prev, int *ret,
 		   struct net_device *orig_dev, bool *another)
 {
 	struct sch_entry *entry = rcu_dereference_bh(skb->dev->sch_ingress);
+	int sch_ret;
 
 	if (!entry)
 		return skb;
@@ -4075,14 +4025,12 @@ sch_handle_ingress(struct sk_buff *skb, struct packet_type **pt_prev, int *ret,
 	qdisc_skb_cb(skb)->pkt_len = skb->len;
 	sch_set_ingress(skb, true);
 
-	switch (sch_run_progs(entry, skb, true)) {
-	case TC_ACT_UNSPEC:
-	case TC_ACT_OK:
-		break;
-	default:
-	case TC_ACT_SHOT:
-		kfree_skb_reason(skb, SKB_DROP_REASON_TC_INGRESS);
-		return NULL;
+	sch_ret = sch_run_progs(entry, skb, true);
+	if (sch_ret != TC_ACT_UNSPEC)
+		goto ingress_verdict;
+	sch_ret = sch_cls_handle(entry, skb);
+ingress_verdict:
+	switch (sch_ret) {
 	case TC_ACT_REDIRECT:
 		/* skb_mac_header check was done by BPF, so we can safely
 		 * push the L2 header back before redirecting to another
@@ -4095,10 +4043,19 @@ sch_handle_ingress(struct sk_buff *skb, struct packet_type **pt_prev, int *ret,
 			break;
 		}
 		return NULL;
-	case TC_ACT_CONSUMED:
+	case TC_ACT_SHOT:
+		kfree_skb_reason(skb, SKB_DROP_REASON_TC_INGRESS);
+		return NULL;
+	/* used by tcf */
+	case TC_ACT_STOLEN:
+	case TC_ACT_QUEUED:
+	case TC_ACT_TRAP:
 		consume_skb(skb);
+		fallthrough;
+	case TC_ACT_CONSUMED:
 		return NULL;
 	}
+
 	return skb;
 }
 
@@ -4106,6 +4063,7 @@ static __always_inline struct sk_buff *
 sch_handle_egress(struct sk_buff *skb, int *ret, struct net_device *dev)
 {
 	struct sch_entry *entry = rcu_dereference_bh(dev->sch_egress);
+	int sch_ret;
 
 	if (!entry)
 		return skb;
@@ -4113,26 +4071,29 @@ sch_handle_egress(struct sk_buff *skb, int *ret, struct net_device *dev)
 	/* qdisc_skb_cb(skb)->pkt_len & sch_set_ingress() was already
 	 * set by the caller.
 	 */
-
-	switch (sch_run_progs(entry, skb, false)) {
-	case TC_ACT_UNSPEC:
-	case TC_ACT_OK:
-		break;
-	default:
-	case TC_ACT_SHOT:
-		*ret = NET_XMIT_DROP;
-		kfree_skb_reason(skb, SKB_DROP_REASON_TC_EGRESS);
-		return NULL;
+	sch_ret = sch_run_progs(entry, skb, false);
+	if (sch_ret != TC_ACT_UNSPEC)
+		goto egress_verdict;
+	sch_ret = sch_cls_handle(entry, skb);
+egress_verdict:
+	switch (sch_ret) {
 	case TC_ACT_REDIRECT:
 		*ret = NET_XMIT_SUCCESS;
 		/* No need to push/pop skb's mac_header here on egress! */
 		skb_do_redirect(skb);
 		return NULL;
-	case TC_ACT_CONSUMED:
+	case TC_ACT_SHOT:
+		*ret = NET_XMIT_DROP;
+		kfree_skb_reason(skb, SKB_DROP_REASON_TC_EGRESS);
+		return NULL;
+	/* used by tcf */
+	case TC_ACT_STOLEN:
+	case TC_ACT_QUEUED:
+	case TC_ACT_TRAP:
 		*ret = NET_XMIT_SUCCESS;
-		consume_skb(skb);
 		return NULL;
 	}
+
 	return skb;
 }
 #else

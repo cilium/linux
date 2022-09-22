@@ -9,9 +9,8 @@
 #include <net/sch_generic.h>
 
 #define SCH_MAX_ENTRIES 30
-/* Adds 1 NULL entry and 1 tc entry. */
-#define SCH_MAX	(SCH_MAX_ENTRIES + 2)
-#define SCH_PRIO_RESERVED INT_MAX
+/* Adds 1 NULL entry. */
+#define SCH_MAX	(SCH_MAX_ENTRIES + 1)
 
 enum sch_entry_type {
 	SCH_ENTRY_A,
@@ -48,12 +47,6 @@ static inline void sch_set_ingress(struct sk_buff *skb, bool ingress)
 }
 
 #ifdef CONFIG_NET_XGRESS
-unsigned int sch_cls_ingress(const void *pskb, const struct bpf_insn *null);
-unsigned int sch_cls_egress(const void *pskb, const struct bpf_insn *null);
-
-int sch_prog_attach_kern(struct net_device *dev, bool ingress);
-int sch_prog_detach_kern(struct net_device *dev, bool ingress);
-
 static inline void
 dev_sch_entry_update(struct net_device *dev, struct sch_entry *entry,
 		     bool ingress)
@@ -121,15 +114,11 @@ static inline int dev_sch_entry_prio_new(struct sch_entry *entry, u32 prio,
 					 struct bpf_prog *prog)
 {
 	struct sch_entry_pair *pair = dev_sch_entry_pair(entry);
-	static const u32 prio_kern = SCH_PRIO_RESERVED;
 	int ret;
 
-	if (prio >= prio_kern)
-		return prio;
 	if (prio == 0)
 		prio = 1;
-	ret = idr_alloc_u32(&pair->idr, prog, &prio, prio_kern - 1,
-			    GFP_KERNEL);
+	ret = idr_alloc_u32(&pair->idr, prog, &prio, U32_MAX, GFP_KERNEL);
 	return ret < 0 ? ret : prio;
 }
 
@@ -168,6 +157,19 @@ static inline u32 dev_sch_entry_total(struct sch_entry *entry)
 		item++;
 	}
 	return num;
+}
+
+static inline int sch_action_code(int code)
+{
+	switch (code) {
+	case TC_ACT_OK:
+	case TC_ACT_SHOT:
+	case TC_ACT_REDIRECT:
+		return code;
+	case TC_ACT_UNSPEC:
+	default:
+		return TC_ACT_UNSPEC;
+	}
 }
 
 int sch_prog_attach(const union bpf_attr *attr, struct bpf_prog *prog);

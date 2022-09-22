@@ -7,25 +7,6 @@
 
 #include <net/sch_xgress.h>
 
-#ifdef CONFIG_NET_CLS_ACT
-static const struct bpf_prog sch_prog_ingress = {
-	.bpf_func = sch_cls_ingress,
-};
-static const struct bpf_prog sch_prog_egress = {
-	.bpf_func = sch_cls_egress,
-};
-#endif
-
-static bool sch_prog_refcounted(const struct bpf_prog *prog)
-{
-#ifdef CONFIG_NET_CLS_ACT
-	return prog == &sch_prog_ingress ||
-	       prog == &sch_prog_egress ? false : true;
-#else
-	return true;
-#endif
-}
-
 static int __sch_prog_attach(struct net_device *dev, bool ingress, u32 limit,
 			     u32 id, struct bpf_prog *nprog, u32 prio, u32 flags)
 {
@@ -51,7 +32,7 @@ static int __sch_prog_attach(struct net_device *dev, bool ingress, u32 limit,
 				/* Pairs with READ_ONCE() in sch_run_progs(). */
 				WRITE_ONCE(item->prog, nprog);
 				item->bpf_id = id;
-				if (!id && sch_prog_refcounted(oprog))
+				if (!id)
 					bpf_prog_put(oprog);
 				dev_sch_entry_prio_set(entry, prio, nprog);
 				return prio;
@@ -111,8 +92,7 @@ int sch_prog_attach(const union bpf_attr *attr, struct bpf_prog *nprog)
 	struct net_device *dev;
 	int ret;
 
-	if ((attr->attach_flags & ~BPF_F_REPLACE) ||
-	    attr->attach_priority >= SCH_PRIO_RESERVED)
+	if (attr->attach_flags & ~BPF_F_REPLACE)
 		return -EINVAL;
 	rtnl_lock();
 	dev = __dev_get_by_index(net, attr->target_ifindex);
@@ -125,21 +105,6 @@ int sch_prog_attach(const union bpf_attr *attr, struct bpf_prog *nprog)
 	rtnl_unlock();
 	return ret;
 }
-
-int sch_prog_attach_kern(struct net_device *dev, bool ingress)
-{
-#ifdef CONFIG_NET_CLS_ACT
-	struct bpf_prog *prog = ingress ?
-		(struct bpf_prog *)&sch_prog_ingress :
-		(struct bpf_prog *)&sch_prog_egress;
-
-	return __sch_prog_attach(dev, ingress, SCH_MAX_ENTRIES + 1, 0, prog,
-				 SCH_PRIO_RESERVED, BPF_F_REPLACE);
-#else
-	return -EOPNOTSUPP;
-#endif
-}
-EXPORT_SYMBOL_GPL(sch_prog_attach_kern);
 
 static int __sch_prog_detach(struct net_device *dev, bool ingress, u32 limit,
 			     u32 id, u32 prio)
@@ -177,10 +142,11 @@ static int __sch_prog_detach(struct net_device *dev, bool ingress, u32 limit,
 	}
 	if (fprog) {
 		dev_sch_entry_prio_del(peer, prio);
-		if (dev_sch_entry_total(peer) == 0)
+		if (dev_sch_entry_total(peer) == 0 &&
+		    !dev_sch_entry_pair(entry)->miniq)
 			peer = NULL;
 		dev_sch_entry_update(dev, peer, ingress);
-		if (!id && sch_prog_refcounted(fprog))
+		if (!id)
 			bpf_prog_put(fprog);
 		if (!peer)
 			dev_sch_entry_free(entry);
@@ -200,8 +166,7 @@ int sch_prog_detach(const union bpf_attr *attr)
 	struct net_device *dev;
 	int ret;
 
-	if (attr->attach_flags || !attr->attach_priority ||
-	    attr->attach_priority >= SCH_PRIO_RESERVED)
+	if (attr->attach_flags || !attr->attach_priority)
 		return -EINVAL;
 	rtnl_lock();
 	dev = __dev_get_by_index(net, attr->target_ifindex);
@@ -214,17 +179,6 @@ int sch_prog_detach(const union bpf_attr *attr)
 	rtnl_unlock();
 	return ret;
 }
-
-int sch_prog_detach_kern(struct net_device *dev, bool ingress)
-{
-#ifdef CONFIG_NET_CLS_ACT
-	return __sch_prog_detach(dev, ingress, SCH_MAX_ENTRIES + 1, 0,
-				 SCH_PRIO_RESERVED);
-#else
-	return -EOPNOTSUPP;
-#endif
-}
-EXPORT_SYMBOL_GPL(sch_prog_detach_kern);
 
 static void __sch_prog_detach_all(struct net_device *dev, bool ingress, u32 limit)
 {
@@ -247,7 +201,7 @@ static void __sch_prog_detach_all(struct net_device *dev, bool ingress, u32 limi
 		if (!prog)
 			break;
 		dev_sch_entry_prio_del(entry, item->bpf_priority);
-		if (!item->bpf_id && sch_prog_refcounted(prog))
+		if (!item->bpf_id)
 			bpf_prog_put(prog);
 		if (ingress)
 			net_dec_ingress_queue();
@@ -302,7 +256,7 @@ __sch_prog_query(const union bpf_attr *attr, union bpf_attr __user *uattr,
 		prog = item->prog;
 		if (!prog)
 			break;
-		idp.prog_id = sch_prog_refcounted(prog) ? prog->aux->id : 0;
+		idp.prog_id = prog->aux->id;
 		idp.link_id = item->bpf_id;
 		idp.prio = item->bpf_priority;
 		if (copy_to_user(prog_ids + i, &idp, sizeof(idp)))
