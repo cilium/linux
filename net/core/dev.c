@@ -3959,7 +3959,7 @@ EXPORT_SYMBOL_GPL(netdev_xmit_skip_txqueue);
 #ifdef CONFIG_NET_CLS_ACT
 static int sch_cls_handle(struct sch_entry *entry, struct sk_buff *skb)
 {
-	struct mini_Qdisc *miniq = dev_sch_entry_pair(entry)->miniq;
+	struct mini_Qdisc *miniq = rcu_dereference_bh(entry->parent->miniq);
 	int ret = TC_ACT_UNSPEC;
 	struct tcf_result res;
 

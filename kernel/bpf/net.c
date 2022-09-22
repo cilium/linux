@@ -144,8 +144,7 @@ static int __sch_prog_detach(struct net_device *dev, bool ingress, u32 limit,
 	}
 	if (fprog) {
 		dev_sch_entry_prio_del(peer, prio);
-		if (dev_sch_entry_total(peer) == 0 &&
-		    !dev_sch_entry_pair(entry)->miniq)
+		if (dev_sch_entry_total(peer) == 0 && !entry->parent->miniq)
 			peer = NULL;
 		dev_sch_entry_update(dev, peer, ingress);
 		if (!id)

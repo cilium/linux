@@ -12,14 +12,9 @@
 /* Adds 1 NULL entry. */
 #define SCH_MAX	(SCH_MAX_ENTRIES + 1)
 
-enum sch_entry_type {
-	SCH_ENTRY_A,
-	SCH_ENTRY_B,
-};
-
 struct sch_entry {
 	struct bpf_prog_array_item items[SCH_MAX] ____cacheline_aligned;
-	enum sch_entry_type        type;
+	struct sch_entry_pair *parent;
 };
 
 struct mini_Qdisc;
@@ -62,20 +57,12 @@ dev_sch_entry_update(struct net_device *dev, struct sch_entry *entry,
 	synchronize_rcu();
 }
 
-static inline struct sch_entry_pair *dev_sch_entry_pair(struct sch_entry *entry)
+static inline struct sch_entry *dev_sch_entry_peer(const struct sch_entry *entry)
 {
-	if (entry->type == SCH_ENTRY_A)
-		return container_of(entry, struct sch_entry_pair, a);
+	if (entry == &entry->parent->a)
+		return &entry->parent->b;
 	else
-		return container_of(entry, struct sch_entry_pair, b);
-}
-
-static inline struct sch_entry *dev_sch_entry_peer(struct sch_entry *entry)
-{
-	if (entry->type == SCH_ENTRY_A)
-		return &dev_sch_entry_pair(entry)->b;
-	else
-		return &dev_sch_entry_pair(entry)->a;
+		return &entry->parent->a;
 }
 
 static inline struct sch_entry *dev_sch_entry_create(void)
@@ -83,8 +70,8 @@ static inline struct sch_entry *dev_sch_entry_create(void)
 	struct sch_entry_pair *pair = kzalloc(sizeof(*pair), GFP_KERNEL);
 
 	if (pair) {
-		pair->a.type = SCH_ENTRY_A;
-		pair->b.type = SCH_ENTRY_B;
+		pair->a.parent = pair;
+		pair->b.parent = pair;
 		idr_init(&pair->idr);
 		return &pair->a;
 	}
@@ -116,36 +103,30 @@ static inline void dev_sch_entry_clear(struct sch_entry *entry)
 static inline int dev_sch_entry_prio_new(struct sch_entry *entry, u32 prio,
 					 struct bpf_prog *prog)
 {
-	struct sch_entry_pair *pair = dev_sch_entry_pair(entry);
 	int ret;
 
 	if (prio == 0)
 		prio = 1;
-	ret = idr_alloc_u32(&pair->idr, prog, &prio, U32_MAX, GFP_KERNEL);
+	ret = idr_alloc_u32(&entry->parent->idr, prog, &prio, U32_MAX,
+			    GFP_KERNEL);
 	return ret < 0 ? ret : prio;
 }
 
 static inline void dev_sch_entry_prio_set(struct sch_entry *entry, u32 prio,
 					  struct bpf_prog *prog)
 {
-	struct sch_entry_pair *pair = dev_sch_entry_pair(entry);
-
-	idr_replace(&pair->idr, prog, prio);
+	idr_replace(&entry->parent->idr, prog, prio);
 }
 
 static inline void dev_sch_entry_prio_del(struct sch_entry *entry, u32 prio)
 {
-	struct sch_entry_pair *pair = dev_sch_entry_pair(entry);
-
-	idr_remove(&pair->idr, prio);
+	idr_remove(&entry->parent->idr, prio);
 }
 
 static inline void dev_sch_entry_free(struct sch_entry *entry)
 {
-	struct sch_entry_pair *pair = dev_sch_entry_pair(entry);
-
-	idr_destroy(&pair->idr);
-	kfree_rcu(pair, rcu);
+	idr_destroy(&entry->parent->idr);
+	kfree_rcu(entry->parent, rcu);
 }
 
 static inline u32 dev_sch_entry_total(struct sch_entry *entry)

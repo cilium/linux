@@ -89,7 +89,7 @@ static int ingress_init(struct Qdisc *sch, struct nlattr *opt,
 	if (!entry)
 		return -ENOMEM;
 
-	mini_qdisc_pair_init(&q->miniqp, sch, &dev_sch_entry_pair(entry)->miniq);
+	mini_qdisc_pair_init(&q->miniqp, sch, &entry->parent->miniq);
 	if (created)
 		dev_sch_entry_update(dev, entry, true);
 
@@ -242,7 +242,7 @@ static int clsact_init(struct Qdisc *sch, struct nlattr *opt,
 	if (!entry)
 		return -ENOMEM;
 
-	mini_qdisc_pair_init(&q->miniqp_ingress, sch, &dev_sch_entry_pair(entry)->miniq);
+	mini_qdisc_pair_init(&q->miniqp_ingress, sch, &entry->parent->miniq);
 	if (created)
 		dev_sch_entry_update(dev, entry, true);
 
@@ -261,7 +261,7 @@ static int clsact_init(struct Qdisc *sch, struct nlattr *opt,
 	if (!entry)
 		return -ENOMEM;
 
-	mini_qdisc_pair_init(&q->miniqp_egress, sch, &dev_sch_entry_pair(entry)->miniq);
+	mini_qdisc_pair_init(&q->miniqp_egress, sch, &entry->parent->miniq);
 	if (created)
 		dev_sch_entry_update(dev, entry, false);
 
