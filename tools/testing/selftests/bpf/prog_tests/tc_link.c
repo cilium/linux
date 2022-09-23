@@ -34,7 +34,7 @@ void serial_test_tc_link_base(void)
 	prog_fd2 = bpf_program__fd(skel1->progs.tc_handler_eg);
 
 	skel2 = test_tc_link__open_and_load();
-	if (!ASSERT_OK_PTR(skel1, "skel_load"))
+	if (!ASSERT_OK_PTR(skel2, "skel_load"))
 		goto cleanup;
 	prog_fd3 = bpf_program__fd(skel2->progs.tc_handler_in);
 	prog_fd4 = bpf_program__fd(skel2->progs.tc_handler_eg);
