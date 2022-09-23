@@ -143,16 +143,16 @@ static inline u32 dev_sch_entry_total(struct sch_entry *entry)
 	return num;
 }
 
-static inline int sch_action_code(int code)
+static inline enum skb_action sch_action_code(int code)
 {
 	switch (code) {
-	case TC_ACT_OK:
-	case TC_ACT_SHOT:
-	case TC_ACT_REDIRECT:
+	case SKB_PASS:
+	case SKB_DROP:
+	case SKB_REDIRECT:
 		return code;
-	case TC_ACT_UNSPEC:
+	case SKB_UNSPEC:
 	default:
-		return TC_ACT_UNSPEC;
+		return SKB_UNSPEC;
 	}
 }
 

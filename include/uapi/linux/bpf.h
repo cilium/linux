@@ -5853,6 +5853,16 @@ enum bpf_ret_code {
 	BPF_LWT_REROUTE = 128,
 };
 
+/* User return codes for skb prog types (e.g. tc bpf, ingress/egress hooks).
+ * Compatible with their TC_ACT_* counter-parts.
+ */
+enum skb_action {
+	SKB_UNSPEC = -1,
+	SKB_PASS = 0,
+	SKB_DROP = 2,
+	SKB_REDIRECT = 7,
+};
+
 struct bpf_sock {
 	__u32 bound_dev_if;
 	__u32 family;

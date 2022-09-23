@@ -3998,13 +3998,13 @@ void sch_bpf_dec(void)
 }
 EXPORT_SYMBOL_GPL(sch_bpf_dec);
 
-static __always_inline int
+static __always_inline enum skb_action
 sch_run_progs(const struct sch_entry *entry, struct sk_buff *skb,
 	      const bool needs_mac)
 {
 	const struct bpf_prog_array_item *item;
 	const struct bpf_prog *prog;
-	int ret = TC_ACT_UNSPEC;
+	int ret = SKB_UNSPEC;
 
 	if (needs_mac)
 		__skb_push(skb, skb->mac_len);
@@ -4012,7 +4012,7 @@ sch_run_progs(const struct sch_entry *entry, struct sk_buff *skb,
 	while ((prog = READ_ONCE(item->prog))) {
 		bpf_compute_data_pointers(skb);
 		ret = bpf_prog_run(prog, skb);
-		if (ret != TC_ACT_UNSPEC)
+		if (ret != SKB_UNSPEC)
 			break;
 		item++;
 	}
@@ -4041,7 +4041,7 @@ sch_handle_ingress(struct sk_buff *skb, struct packet_type **pt_prev, int *ret,
 
 	if (static_branch_unlikely(&sch_bpf_needed_key)) {
 		sch_ret = sch_run_progs(entry, skb, true);
-		if (sch_ret != TC_ACT_UNSPEC)
+		if (sch_ret != SKB_UNSPEC)
 			goto ingress_verdict;
 	}
 	sch_ret = sch_cls_handle(entry, skb);
@@ -4089,7 +4089,7 @@ sch_handle_egress(struct sk_buff *skb, int *ret, struct net_device *dev)
 	 */
 	if (static_branch_unlikely(&sch_bpf_needed_key)) {
 		sch_ret = sch_run_progs(entry, skb, false);
-		if (sch_ret != TC_ACT_UNSPEC)
+		if (sch_ret != SKB_UNSPEC)
 			goto egress_verdict;
 	}
 	sch_ret = sch_cls_handle(entry, skb);
