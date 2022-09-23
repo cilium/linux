@@ -3963,11 +3963,11 @@ static int sch_cls_handle(struct sch_entry *entry, struct sk_buff *skb)
 	int ret = TC_ACT_UNSPEC;
 	struct tcf_result res;
 
-	tc_skb_cb(skb)->mru = 0;
-	tc_skb_cb(skb)->post_ct = false;
-
 	if (!miniq)
 		return ret;
+
+	tc_skb_cb(skb)->mru = 0;
+	tc_skb_cb(skb)->post_ct = false;
 
 	mini_qdisc_bstats_cpu_update(miniq, skb);
 	ret = tcf_classify(skb, miniq->block, miniq->filter_list, &res, false);
