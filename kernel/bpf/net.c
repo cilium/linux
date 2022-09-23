@@ -82,6 +82,8 @@ static int __sch_prog_attach(struct net_device *dev, bool ingress, u32 limit,
 		net_inc_ingress_queue();
 	else
 		net_inc_egress_queue();
+	sch_bpf_inc();
+
 	return prio;
 }
 
@@ -154,6 +156,7 @@ static int __sch_prog_detach(struct net_device *dev, bool ingress, u32 limit,
 			net_dec_ingress_queue();
 		else
 			net_dec_egress_queue();
+		sch_bpf_dec();
 		return 0;
 	}
 	return -ENOENT;

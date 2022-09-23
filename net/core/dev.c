@@ -3968,6 +3968,7 @@ static int sch_cls_handle(struct sch_entry *entry, struct sk_buff *skb)
 
 	if (!miniq)
 		return ret;
+
 	mini_qdisc_bstats_cpu_update(miniq, skb);
 	ret = tcf_classify(skb, miniq->block, miniq->filter_list, &res, false);
 	/* Only tcf related quirks below. */
@@ -3983,6 +3984,19 @@ static int sch_cls_handle(struct sch_entry *entry, struct sk_buff *skb)
 	return ret;
 }
 #endif /* CONFIG_NET_CLS_ACT */
+static DEFINE_STATIC_KEY_FALSE(sch_bpf_needed_key);
+
+void sch_bpf_inc(void)
+{
+	static_branch_inc(&sch_bpf_needed_key);
+}
+EXPORT_SYMBOL_GPL(sch_bpf_inc);
+
+void sch_bpf_dec(void)
+{
+	static_branch_dec(&sch_bpf_needed_key);
+}
+EXPORT_SYMBOL_GPL(sch_bpf_dec);
 
 static __always_inline int
 sch_run_progs(const struct sch_entry *entry, struct sk_buff *skb,
@@ -4025,9 +4039,11 @@ sch_handle_ingress(struct sk_buff *skb, struct packet_type **pt_prev, int *ret,
 	qdisc_skb_cb(skb)->pkt_len = skb->len;
 	sch_set_ingress(skb, true);
 
-	sch_ret = sch_run_progs(entry, skb, true);
-	if (sch_ret != TC_ACT_UNSPEC)
-		goto ingress_verdict;
+	if (static_branch_unlikely(&sch_bpf_needed_key)) {
+		sch_ret = sch_run_progs(entry, skb, true);
+		if (sch_ret != TC_ACT_UNSPEC)
+			goto ingress_verdict;
+	}
 	sch_ret = sch_cls_handle(entry, skb);
 ingress_verdict:
 	switch (sch_ret) {
@@ -4071,9 +4087,11 @@ sch_handle_egress(struct sk_buff *skb, int *ret, struct net_device *dev)
 	/* qdisc_skb_cb(skb)->pkt_len & sch_set_ingress() was already
 	 * set by the caller.
 	 */
-	sch_ret = sch_run_progs(entry, skb, false);
-	if (sch_ret != TC_ACT_UNSPEC)
-		goto egress_verdict;
+	if (static_branch_unlikely(&sch_bpf_needed_key)) {
+		sch_ret = sch_run_progs(entry, skb, false);
+		if (sch_ret != TC_ACT_UNSPEC)
+			goto egress_verdict;
+	}
 	sch_ret = sch_cls_handle(entry, skb);
 egress_verdict:
 	switch (sch_ret) {

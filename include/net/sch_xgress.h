@@ -47,6 +47,9 @@ static inline void sch_set_ingress(struct sk_buff *skb, bool ingress)
 }
 
 #ifdef CONFIG_NET_XGRESS
+void sch_bpf_inc(void);
+void sch_bpf_dec(void);
+
 static inline void
 dev_sch_entry_update(struct net_device *dev, struct sch_entry *entry,
 		     bool ingress)
