@@ -208,6 +208,7 @@ static void __xtc_prog_detach_all(struct net_device *dev, bool ingress, u32 limi
 			net_dec_ingress_queue();
 		else
 			net_dec_egress_queue();
+		xtc_dec();
 	}
 	dev_xtc_entry_free(entry);
 }
