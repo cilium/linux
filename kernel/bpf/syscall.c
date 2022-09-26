@@ -36,7 +36,7 @@
 #include <linux/memcontrol.h>
 #include <linux/trace_events.h>
 
-#include <net/sch_xgress.h>
+#include <net/xtc.h>
 
 #define IS_FD_ARRAY(map) ((map)->map_type == BPF_MAP_TYPE_PERF_EVENT_ARRAY || \
 			  (map)->map_type == BPF_MAP_TYPE_CGROUP_ARRAY || \
@@ -3501,7 +3501,7 @@ static int bpf_prog_attach(const union bpf_attr *attr)
 		ret = cgroup_bpf_prog_attach(attr, ptype, prog);
 		break;
 	case BPF_PROG_TYPE_SCHED_CLS:
-		ret = sch_prog_attach(attr, prog);
+		ret = xtc_prog_attach(attr, prog);
 		break;
 	default:
 		ret = -EINVAL;
@@ -3543,7 +3543,7 @@ static int bpf_prog_detach(const union bpf_attr *attr)
 	case BPF_PROG_TYPE_LSM:
 		return cgroup_bpf_prog_detach(attr, ptype);
 	case BPF_PROG_TYPE_SCHED_CLS:
-		return sch_prog_detach(attr);
+		return xtc_prog_detach(attr);
 	default:
 		return -EINVAL;
 	}
@@ -3599,7 +3599,7 @@ static int bpf_prog_query(const union bpf_attr *attr,
 		return sock_map_bpf_prog_query(attr, uattr);
 	case BPF_NET_INGRESS:
 	case BPF_NET_EGRESS:
-		return sch_prog_query(attr, uattr);
+		return xtc_prog_query(attr, uattr);
 	default:
 		return -EINVAL;
 	}
@@ -4603,7 +4603,7 @@ static int link_create(union bpf_attr *attr, bpfptr_t uattr)
 		ret = bpf_xdp_link_attach(attr, prog);
 		break;
 	case BPF_PROG_TYPE_SCHED_CLS:
-		ret = sch_link_attach(attr, prog);
+		ret = xtc_link_attach(attr, prog);
 		break;
 #endif
 	case BPF_PROG_TYPE_PERF_EVENT:

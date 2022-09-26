@@ -107,7 +107,7 @@
 #include <net/pkt_cls.h>
 #include <net/checksum.h>
 #include <net/xfrm.h>
-#include <net/sch_xgress.h>
+#include <net/xtc.h>
 #include <linux/highmem.h>
 #include <linux/init.h>
 #include <linux/module.h>
@@ -3957,7 +3957,7 @@ EXPORT_SYMBOL_GPL(netdev_xmit_skip_txqueue);
 
 #ifdef CONFIG_NET_XGRESS
 #ifdef CONFIG_NET_CLS_ACT
-static int sch_cls_handle(struct sch_entry *entry, struct sk_buff *skb)
+static int tc_run(struct xtc_entry *entry, struct sk_buff *skb)
 {
 	struct mini_Qdisc *miniq = rcu_dereference_bh(entry->parent->miniq);
 	int ret = TC_ACT_UNSPEC;
@@ -3984,27 +3984,27 @@ static int sch_cls_handle(struct sch_entry *entry, struct sk_buff *skb)
 	return ret;
 }
 #endif /* CONFIG_NET_CLS_ACT */
-static DEFINE_STATIC_KEY_FALSE(sch_bpf_needed_key);
+static DEFINE_STATIC_KEY_FALSE(xtc_needed_key);
 
-void sch_bpf_inc(void)
+void xtc_inc(void)
 {
-	static_branch_inc(&sch_bpf_needed_key);
+	static_branch_inc(&xtc_needed_key);
 }
-EXPORT_SYMBOL_GPL(sch_bpf_inc);
+EXPORT_SYMBOL_GPL(xtc_inc);
 
-void sch_bpf_dec(void)
+void xtc_dec(void)
 {
-	static_branch_dec(&sch_bpf_needed_key);
+	static_branch_dec(&xtc_needed_key);
 }
-EXPORT_SYMBOL_GPL(sch_bpf_dec);
+EXPORT_SYMBOL_GPL(xtc_dec);
 
-static __always_inline enum skb_action
-sch_run_progs(const struct sch_entry *entry, struct sk_buff *skb,
-	      const bool needs_mac)
+static __always_inline enum xtc_action
+xtc_run(const struct xtc_entry *entry, struct sk_buff *skb,
+	const bool needs_mac)
 {
 	const struct bpf_prog_array_item *item;
 	const struct bpf_prog *prog;
-	int ret = SKB_UNSPEC;
+	int ret = XTC_NEXT;
 
 	if (needs_mac)
 		__skb_push(skb, skb->mac_len);
@@ -4012,21 +4012,20 @@ sch_run_progs(const struct sch_entry *entry, struct sk_buff *skb,
 	while ((prog = READ_ONCE(item->prog))) {
 		bpf_compute_data_pointers(skb);
 		ret = bpf_prog_run(prog, skb);
-		if (ret != SKB_UNSPEC)
+		if (ret != XTC_NEXT)
 			break;
 		item++;
 	}
 	if (needs_mac)
 		__skb_pull(skb, skb->mac_len);
-
-	return sch_action_code(ret);
+	return xtc_action_code(ret);
 }
 
 static __always_inline struct sk_buff *
 sch_handle_ingress(struct sk_buff *skb, struct packet_type **pt_prev, int *ret,
 		   struct net_device *orig_dev, bool *another)
 {
-	struct sch_entry *entry = rcu_dereference_bh(skb->dev->sch_ingress);
+	struct xtc_entry *entry = rcu_dereference_bh(skb->dev->xtc_ingress);
 	int sch_ret;
 
 	if (!entry)
@@ -4037,14 +4036,14 @@ sch_handle_ingress(struct sk_buff *skb, struct packet_type **pt_prev, int *ret,
 	}
 
 	qdisc_skb_cb(skb)->pkt_len = skb->len;
-	sch_set_ingress(skb, true);
+	xtc_set_ingress(skb, true);
 
-	if (static_branch_unlikely(&sch_bpf_needed_key)) {
-		sch_ret = sch_run_progs(entry, skb, true);
-		if (sch_ret != SKB_UNSPEC)
+	if (static_branch_unlikely(&xtc_needed_key)) {
+		sch_ret = xtc_run(entry, skb, true);
+		if (sch_ret != TC_ACT_UNSPEC)
 			goto ingress_verdict;
 	}
-	sch_ret = sch_cls_handle(entry, skb);
+	sch_ret = tc_run(entry, skb);
 ingress_verdict:
 	switch (sch_ret) {
 	case TC_ACT_REDIRECT:
@@ -4078,21 +4077,21 @@ ingress_verdict:
 static __always_inline struct sk_buff *
 sch_handle_egress(struct sk_buff *skb, int *ret, struct net_device *dev)
 {
-	struct sch_entry *entry = rcu_dereference_bh(dev->sch_egress);
+	struct xtc_entry *entry = rcu_dereference_bh(dev->xtc_egress);
 	int sch_ret;
 
 	if (!entry)
 		return skb;
 
-	/* qdisc_skb_cb(skb)->pkt_len & sch_set_ingress() was already
-	 * set by the caller.
+	/* qdisc_skb_cb(skb)->pkt_len & xtc_set_ingress() was
+	 * already set by the caller.
 	 */
-	if (static_branch_unlikely(&sch_bpf_needed_key)) {
-		sch_ret = sch_run_progs(entry, skb, false);
-		if (sch_ret != SKB_UNSPEC)
+	if (static_branch_unlikely(&xtc_needed_key)) {
+		sch_ret = xtc_run(entry, skb, false);
+		if (sch_ret != TC_ACT_UNSPEC)
 			goto egress_verdict;
 	}
-	sch_ret = sch_cls_handle(entry, skb);
+	sch_ret = tc_run(entry, skb);
 egress_verdict:
 	switch (sch_ret) {
 	case TC_ACT_REDIRECT:
@@ -4311,7 +4310,7 @@ int __dev_queue_xmit(struct sk_buff *skb, struct net_device *sb_dev)
 	skb_update_prio(skb);
 
 	qdisc_pkt_len_init(skb);
-	sch_set_ingress(skb, false);
+	xtc_set_ingress(skb, false);
 #ifdef CONFIG_NET_EGRESS
 	if (static_branch_unlikely(&egress_needed_key)) {
 		if (nf_hook_egress_active()) {
@@ -10917,7 +10916,7 @@ void unregister_netdevice_many(struct list_head *head)
 
 		/* Shutdown queueing discipline. */
 		dev_shutdown(dev);
-		dev_sch_uninstall(dev);
+		dev_xtc_uninstall(dev);
 		dev_xdp_uninstall(dev);
 
 		netdev_offload_xstats_disable_all(dev);

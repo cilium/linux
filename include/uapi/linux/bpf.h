@@ -5853,16 +5853,6 @@ enum bpf_ret_code {
 	BPF_LWT_REROUTE = 128,
 };
 
-/* User return codes for skb prog types (e.g. tc bpf, ingress/egress hooks).
- * Compatible with their TC_ACT_* counter-parts.
- */
-enum skb_action {
-	SKB_UNSPEC = -1,
-	SKB_PASS = 0,
-	SKB_DROP = 2,
-	SKB_REDIRECT = 7,
-};
-
 struct bpf_sock {
 	__u32 bound_dev_if;
 	__u32 family;
@@ -5942,6 +5932,17 @@ struct bpf_sock_tuple {
 			__be16 dport;
 		} ipv6;
 	};
+};
+
+/* User return codes for XTC (eXpress traffic control) program types
+ * (e.g. tc bpf at ingress/egress hooks). Must remain compatible with
+ * their TC_ACT_* counter-parts.
+ */
+enum xtc_action {
+	XTC_NEXT	= -1,
+	XTC_PASS	= 0,
+	XTC_DROP	= 2,
+	XTC_REDIRECT	= 7,
 };
 
 struct bpf_xdp_sock {

@@ -13,7 +13,7 @@
 #include <net/netlink.h>
 #include <net/pkt_sched.h>
 #include <net/pkt_cls.h>
-#include <net/sch_xgress.h>
+#include <net/xtc.h>
 
 struct ingress_sched_data {
 	struct tcf_block *block;
@@ -79,19 +79,19 @@ static int ingress_init(struct Qdisc *sch, struct nlattr *opt,
 {
 	struct ingress_sched_data *q = qdisc_priv(sch);
 	struct net_device *dev = qdisc_dev(sch);
-	struct sch_entry *entry;
+	struct xtc_entry *entry;
 	bool created;
 	int err;
 
 	net_inc_ingress_queue();
 
-	entry = dev_sch_entry_fetch(dev, true, &created);
+	entry = dev_xtc_entry_fetch(dev, true, &created);
 	if (!entry)
 		return -ENOMEM;
 
 	mini_qdisc_pair_init(&q->miniqp, sch, &entry->parent->miniq);
 	if (created)
-		dev_sch_entry_update(dev, entry, true);
+		dev_xtc_entry_update(dev, entry, true);
 
 	q->block_info.binder_type = FLOW_BLOCK_BINDER_TYPE_CLSACT_INGRESS;
 	q->block_info.chain_head_change = clsact_chain_head_change;
@@ -109,12 +109,12 @@ static void ingress_destroy(struct Qdisc *sch)
 {
 	struct ingress_sched_data *q = qdisc_priv(sch);
 	struct net_device *dev = qdisc_dev(sch);
-	struct sch_entry *entry = rtnl_dereference(dev->sch_ingress);
+	struct xtc_entry *entry = rtnl_dereference(dev->xtc_ingress);
 
 	tcf_block_put_ext(q->block, sch, &q->block_info);
-	if (entry && dev_sch_entry_total(entry) == 0) {
-		dev_sch_entry_update(dev, NULL, true);
-		dev_sch_entry_free(entry);
+	if (entry && dev_xtc_entry_total(entry) == 0) {
+		dev_xtc_entry_update(dev, NULL, true);
+		dev_xtc_entry_free(entry);
 	}
 	net_dec_ingress_queue();
 }
@@ -231,20 +231,20 @@ static int clsact_init(struct Qdisc *sch, struct nlattr *opt,
 {
 	struct clsact_sched_data *q = qdisc_priv(sch);
 	struct net_device *dev = qdisc_dev(sch);
-	struct sch_entry *entry;
+	struct xtc_entry *entry;
 	bool created;
 	int err;
 
 	net_inc_ingress_queue();
 	net_inc_egress_queue();
 
-	entry = dev_sch_entry_fetch(dev, true, &created);
+	entry = dev_xtc_entry_fetch(dev, true, &created);
 	if (!entry)
 		return -ENOMEM;
 
 	mini_qdisc_pair_init(&q->miniqp_ingress, sch, &entry->parent->miniq);
 	if (created)
-		dev_sch_entry_update(dev, entry, true);
+		dev_xtc_entry_update(dev, entry, true);
 
 	q->ingress_block_info.binder_type = FLOW_BLOCK_BINDER_TYPE_CLSACT_INGRESS;
 	q->ingress_block_info.chain_head_change = clsact_chain_head_change;
@@ -257,13 +257,13 @@ static int clsact_init(struct Qdisc *sch, struct nlattr *opt,
 
 	mini_qdisc_pair_block_init(&q->miniqp_ingress, q->ingress_block);
 
-	entry = dev_sch_entry_fetch(dev, false, &created);
+	entry = dev_xtc_entry_fetch(dev, false, &created);
 	if (!entry)
 		return -ENOMEM;
 
 	mini_qdisc_pair_init(&q->miniqp_egress, sch, &entry->parent->miniq);
 	if (created)
-		dev_sch_entry_update(dev, entry, false);
+		dev_xtc_entry_update(dev, entry, false);
 
 	q->egress_block_info.binder_type = FLOW_BLOCK_BINDER_TYPE_CLSACT_EGRESS;
 	q->egress_block_info.chain_head_change = clsact_chain_head_change;
@@ -276,19 +276,19 @@ static void clsact_destroy(struct Qdisc *sch)
 {
 	struct clsact_sched_data *q = qdisc_priv(sch);
 	struct net_device *dev = qdisc_dev(sch);
-	struct sch_entry *ingress_entry = rtnl_dereference(dev->sch_ingress);
-	struct sch_entry *egress_entry = rtnl_dereference(dev->sch_egress);
+	struct xtc_entry *ingress_entry = rtnl_dereference(dev->xtc_ingress);
+	struct xtc_entry *egress_entry = rtnl_dereference(dev->xtc_egress);
 
 	tcf_block_put_ext(q->egress_block, sch, &q->egress_block_info);
-	if (egress_entry && dev_sch_entry_total(egress_entry) == 0) {
-		dev_sch_entry_update(dev, NULL, false);
-		dev_sch_entry_free(egress_entry);
+	if (egress_entry && dev_xtc_entry_total(egress_entry) == 0) {
+		dev_xtc_entry_update(dev, NULL, false);
+		dev_xtc_entry_free(egress_entry);
 	}
 
 	tcf_block_put_ext(q->ingress_block, sch, &q->ingress_block_info);
-	if (ingress_entry && dev_sch_entry_total(ingress_entry) == 0) {
-		dev_sch_entry_update(dev, NULL, true);
-		dev_sch_entry_free(ingress_entry);
+	if (ingress_entry && dev_xtc_entry_total(ingress_entry) == 0) {
+		dev_xtc_entry_update(dev, NULL, true);
+		dev_xtc_entry_free(ingress_entry);
 	}
 
 	net_dec_ingress_queue();
