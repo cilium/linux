@@ -603,12 +603,15 @@ cleanup:
 	test_tc_link__destroy(skel);
 }
 
-void tc_link_run_chain(int location)
+void tc_link_run_chain(int location, bool chain_tc_bpf)
 {
+	DECLARE_LIBBPF_OPTS(bpf_tc_opts, tc_opts, .handle = 1, .priority = 1);
+	DECLARE_LIBBPF_OPTS(bpf_tc_hook, tc_hook, .ifindex = loopback);
 	DECLARE_LIBBPF_OPTS(bpf_prog_attach_opts, opta);
 	DECLARE_LIBBPF_OPTS(bpf_prog_detach_opts, optd);
+	bool hook_created = false, tc_attached = false;
+	__u32 prog_fd1, prog_fd2, prog_fd3;
 	struct test_tc_link *skel;
-	__u32 prog_fd1, prog_fd2;
 	int err;
 
 	skel = test_tc_link__open_and_load();
@@ -617,6 +620,25 @@ void tc_link_run_chain(int location)
 
 	prog_fd1 = bpf_program__fd(skel->progs.tc_handler_in);
 	prog_fd2 = bpf_program__fd(skel->progs.tc_handler_eg);
+	prog_fd3 = bpf_program__fd(skel->progs.tc_handler_old);
+
+	if (chain_tc_bpf) {
+		tc_hook.attach_point = location == BPF_NET_INGRESS ?
+						BPF_TC_INGRESS : BPF_TC_EGRESS;
+		err = bpf_tc_hook_create(&tc_hook);
+		if (err == 0)
+			hook_created = true;
+
+		err = err == -EEXIST ? 0 : err;
+		if (!ASSERT_OK(err, "bpf_tc_hook_create"))
+			goto cleanup;
+
+		tc_opts.prog_fd = prog_fd3;
+		err = bpf_tc_attach(&tc_hook, &tc_opts);
+		if (!ASSERT_OK(err, "bpf_tc_attach"))
+			goto cleanup;
+		tc_attached = true;
+	}
 
 	opta.flags = 0;
 	opta.attach_priority = 1;
@@ -631,7 +653,7 @@ void tc_link_run_chain(int location)
 		goto cleanup_detach;
 
 	CHECK_FAIL(system(ping_cmd));
-	ASSERT_EQ(skel->bss->run, 3, "run32_value");
+	ASSERT_EQ(skel->bss->run, chain_tc_bpf ? 7 : 3, "run32_value");
 
 	skel->bss->run = 0;
 
@@ -641,7 +663,7 @@ void tc_link_run_chain(int location)
 		goto cleanup_detach;
 
 	CHECK_FAIL(system(ping_cmd));
-	ASSERT_EQ(skel->bss->run, 1, "run32_value");
+	ASSERT_EQ(skel->bss->run, chain_tc_bpf ? 5 : 1, "run32_value");
 
 cleanup_detach:
 	optd.attach_priority = 1;
@@ -649,11 +671,23 @@ cleanup_detach:
 	if (!ASSERT_OK(err, "prog_detach"))
 		goto cleanup;
 cleanup:
+	if (tc_attached) {
+		tc_opts.flags = tc_opts.prog_fd = tc_opts.prog_id = 0;
+		err = bpf_tc_detach(&tc_hook, &tc_opts);
+		ASSERT_OK(err, "bpf_tc_detach");
+	}
+	if (hook_created) {
+		tc_hook.attach_point = BPF_TC_INGRESS | BPF_TC_EGRESS;
+		bpf_tc_hook_destroy(&tc_hook);
+	}
 	test_tc_link__destroy(skel);
 }
 
 void serial_test_tc_link_run_chain(void)
 {
-	tc_link_run_chain(BPF_NET_INGRESS);
-	tc_link_run_chain(BPF_NET_EGRESS);
+	tc_link_run_chain(BPF_NET_INGRESS, false);
+	tc_link_run_chain(BPF_NET_EGRESS, false);
+
+	tc_link_run_chain(BPF_NET_INGRESS, true);
+	tc_link_run_chain(BPF_NET_EGRESS, true);
 }
