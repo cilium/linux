@@ -230,6 +230,82 @@ cleanup:
 	test_tc_link__destroy(skel2);
 }
 
+void serial_test_tc_link_detach(void)
+{
+	struct bpf_prog_info prog_info;
+	struct bpf_link_info link_info;
+	struct test_tc_link *skel;
+	__u32 prog_info_len = sizeof(prog_info);
+	__u32 link_info_len = sizeof(link_info);
+	__u32 prog_cnt, attach_flags = 0;
+	__u32 prog_fd, id, id2;
+	struct bpf_link *link;
+	int err;
+
+	skel = test_tc_link__open_and_load();
+	if (!ASSERT_OK_PTR(skel, "skel_load"))
+		goto cleanup;
+	prog_fd = bpf_program__fd(skel->progs.tc_handler_in);
+
+	memset(&prog_info, 0, sizeof(prog_info));
+	err = bpf_obj_get_info_by_fd(prog_fd, &prog_info, &prog_info_len);
+	if (!ASSERT_OK(err, "fd_info"))
+		goto cleanup;
+	id = prog_info.id;
+
+	link = bpf_program__attach_tc(skel->progs.tc_handler_in, loopback, 0);
+	if (!ASSERT_OK_PTR(link, "link_attach"))
+		goto cleanup;
+	skel->links.tc_handler_in = link;
+
+	memset(&link_info, 0, sizeof(link_info));
+	err = bpf_obj_get_info_by_fd(bpf_link__fd(link), &link_info, &link_info_len);
+	if (!ASSERT_OK(err, "link_info"))
+		goto cleanup;
+
+	/* Sanity check that attached ingress BPF link looks as expected. */
+	ASSERT_EQ(link_info.type, BPF_LINK_TYPE_TC, "link_type");
+	ASSERT_EQ(link_info.prog_id, id, "link_prog_id");
+	ASSERT_EQ(link_info.tc.ifindex, loopback, "link_ifindex");
+	ASSERT_EQ(link_info.tc.attach_type, BPF_NET_INGRESS, "link_attach_type");
+	ASSERT_EQ(link_info.tc.priority, 1, "link_priority");
+	id2 = link_info.id;
+
+	/* Sanity check query API that one prog is attached. */
+	prog_cnt = 0;
+	err = bpf_prog_query(loopback, BPF_NET_INGRESS, 0, &attach_flags,
+			     NULL, &prog_cnt);
+	if (!ASSERT_OK(err, "prog_query"))
+		goto cleanup;
+
+	ASSERT_EQ(prog_cnt, 1, "prog_cnt");
+
+	err = bpf_link__detach(link);
+	if (!ASSERT_OK(err, "link_detach"))
+		goto cleanup;
+
+	memset(&link_info, 0, sizeof(link_info));
+	err = bpf_obj_get_info_by_fd(bpf_link__fd(link), &link_info, &link_info_len);
+	if (!ASSERT_OK(err, "link_info"))
+		goto cleanup;
+
+	/* Sanity check that defunct detached link looks as expected. */
+	ASSERT_EQ(link_info.type, BPF_LINK_TYPE_TC, "link_type");
+	ASSERT_EQ(link_info.prog_id, id, "link_prog_id");
+	ASSERT_EQ(link_info.tc.ifindex, 0, "link_ifindex");
+	ASSERT_EQ(link_info.tc.attach_type, BPF_NET_INGRESS, "link_attach_type");
+	ASSERT_EQ(link_info.tc.priority, 1, "link_priority");
+	ASSERT_EQ(link_info.id, id2, "link_id");
+
+	/* Sanity check query API that no prog is attached. */
+	prog_cnt = 0;
+	err = bpf_prog_query(loopback, BPF_NET_INGRESS, 0, &attach_flags,
+			     NULL, &prog_cnt);
+	ASSERT_EQ(err, -ENOENT, "prog_cnt");
+cleanup:
+	test_tc_link__destroy(skel);
+}
+
 void serial_test_tc_link_opts(void)
 {
 	DECLARE_LIBBPF_OPTS(bpf_prog_attach_opts, opta);
@@ -603,7 +679,7 @@ cleanup:
 	test_tc_link__destroy(skel);
 }
 
-void tc_link_run_chain(int location, bool chain_tc_bpf)
+void tc_link_run_chain(int location, bool chain_tc_old)
 {
 	DECLARE_LIBBPF_OPTS(bpf_tc_opts, tc_opts, .handle = 1, .priority = 1);
 	DECLARE_LIBBPF_OPTS(bpf_tc_hook, tc_hook, .ifindex = loopback);
@@ -622,13 +698,12 @@ void tc_link_run_chain(int location, bool chain_tc_bpf)
 	prog_fd2 = bpf_program__fd(skel->progs.tc_handler_eg);
 	prog_fd3 = bpf_program__fd(skel->progs.tc_handler_old);
 
-	if (chain_tc_bpf) {
+	if (chain_tc_old) {
 		tc_hook.attach_point = location == BPF_NET_INGRESS ?
-						BPF_TC_INGRESS : BPF_TC_EGRESS;
+				       BPF_TC_INGRESS : BPF_TC_EGRESS;
 		err = bpf_tc_hook_create(&tc_hook);
 		if (err == 0)
 			hook_created = true;
-
 		err = err == -EEXIST ? 0 : err;
 		if (!ASSERT_OK(err, "bpf_tc_hook_create"))
 			goto cleanup;
@@ -653,7 +728,7 @@ void tc_link_run_chain(int location, bool chain_tc_bpf)
 		goto cleanup_detach;
 
 	CHECK_FAIL(system(ping_cmd));
-	ASSERT_EQ(skel->bss->run, chain_tc_bpf ? 7 : 3, "run32_value");
+	ASSERT_EQ(skel->bss->run, chain_tc_old ? 7 : 3, "run32_value");
 
 	skel->bss->run = 0;
 
@@ -663,7 +738,7 @@ void tc_link_run_chain(int location, bool chain_tc_bpf)
 		goto cleanup_detach;
 
 	CHECK_FAIL(system(ping_cmd));
-	ASSERT_EQ(skel->bss->run, chain_tc_bpf ? 5 : 1, "run32_value");
+	ASSERT_EQ(skel->bss->run, chain_tc_old ? 5 : 1, "run32_value");
 
 cleanup_detach:
 	optd.attach_priority = 1;
