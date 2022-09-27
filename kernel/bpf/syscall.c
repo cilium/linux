@@ -3442,7 +3442,7 @@ attach_type_to_prog_type(enum bpf_attach_type attach_type)
 		return BPF_PROG_TYPE_LSM;
 	case BPF_NET_INGRESS:
 	case BPF_NET_EGRESS:
-		return BPF_PROG_TYPE_SCHED_CLS;
+		return BPF_PROG_TYPE_XTC;
 	default:
 		return BPF_PROG_TYPE_UNSPEC;
 	}
@@ -3500,7 +3500,7 @@ static int bpf_prog_attach(const union bpf_attr *attr)
 
 		ret = cgroup_bpf_prog_attach(attr, ptype, prog);
 		break;
-	case BPF_PROG_TYPE_SCHED_CLS:
+	case BPF_PROG_TYPE_XTC:
 		ret = xtc_prog_attach(attr, prog);
 		break;
 	default:
@@ -3521,7 +3521,7 @@ static int bpf_prog_detach(const union bpf_attr *attr)
 		return -EINVAL;
 
 	ptype = attach_type_to_prog_type(attr->attach_type);
-	if (ptype != BPF_PROG_TYPE_SCHED_CLS &&
+	if (ptype != BPF_PROG_TYPE_XTC &&
 	    (attr->attach_flags || attr->replace_bpf_fd))
 		return -EINVAL;
 
@@ -3542,7 +3542,7 @@ static int bpf_prog_detach(const union bpf_attr *attr)
 	case BPF_PROG_TYPE_SOCK_OPS:
 	case BPF_PROG_TYPE_LSM:
 		return cgroup_bpf_prog_detach(attr, ptype);
-	case BPF_PROG_TYPE_SCHED_CLS:
+	case BPF_PROG_TYPE_XTC:
 		return xtc_prog_detach(attr);
 	default:
 		return -EINVAL;
@@ -4602,7 +4602,7 @@ static int link_create(union bpf_attr *attr, bpfptr_t uattr)
 	case BPF_PROG_TYPE_XDP:
 		ret = bpf_xdp_link_attach(attr, prog);
 		break;
-	case BPF_PROG_TYPE_SCHED_CLS:
+	case BPF_PROG_TYPE_XTC:
 		ret = xtc_link_attach(attr, prog);
 		break;
 #endif
