@@ -924,6 +924,7 @@ enum bpf_prog_type {
 	BPF_PROG_TYPE_SOCKET_FILTER,
 	BPF_PROG_TYPE_KPROBE,
 	BPF_PROG_TYPE_SCHED_CLS,
+#define BPF_PROG_TYPE_XTC BPF_PROG_TYPE_SCHED_CLS
 	BPF_PROG_TYPE_SCHED_ACT,
 	BPF_PROG_TYPE_TRACEPOINT,
 	BPF_PROG_TYPE_XDP,
@@ -5932,6 +5933,17 @@ struct bpf_sock_tuple {
 			__be16 dport;
 		} ipv6;
 	};
+};
+
+/* User return codes for XTC (eXpress traffic control) program types
+ * (e.g. tc bpf at ingress/egress hooks). Must remain compatible with
+ * their TC_ACT_* counter-parts.
+ */
+enum xtc_action {
+	XTC_NEXT	= -1,
+	XTC_PASS	= 0,
+	XTC_DROP	= 2,
+	XTC_REDIRECT	= 7,
 };
 
 struct bpf_xdp_sock {

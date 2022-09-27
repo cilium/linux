@@ -17,7 +17,7 @@ int tc_handler_in(struct __sk_buff *skb)
 #else
 	run |= 1;
 #endif
-	return TC_ACT_UNSPEC;
+	return XTC_NEXT;
 }
 
 SEC("tc/egress")
@@ -28,7 +28,7 @@ int tc_handler_eg(struct __sk_buff *skb)
 #else
 	run |= 2;
 #endif
-	return TC_ACT_UNSPEC;
+	return XTC_NEXT;
 }
 
 SEC("tc/egress")
@@ -39,5 +39,5 @@ int tc_handler_old(struct __sk_buff *skb)
 #else
 	run |= 4;
 #endif
-	return TC_ACT_UNSPEC;
+	return XTC_NEXT;
 }
