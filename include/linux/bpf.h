@@ -267,6 +267,15 @@ struct bpf_map {
 	} owner;
 	bool bypass_spec_v1;
 	bool frozen; /* write-once; write-protected by freeze_mutex */
+
+	atomic64_t stats_lookup_ok __aligned(8);
+	atomic64_t stats_lookup_ok_time;
+	atomic64_t stats_lookup_fail;
+	atomic64_t stats_lookup_fail_time;
+	atomic64_t stats_update;
+	atomic64_t stats_update_time;
+	atomic64_t stats_delete;
+	atomic64_t stats_delete_time;
 };
 
 static inline const char *btf_field_type_name(enum btf_field_type type)
