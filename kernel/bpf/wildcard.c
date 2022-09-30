@@ -199,12 +199,6 @@ struct bpf_wildcard {
 	int count;
 
 	union {
-		/* Brute Force */
-		struct {
-			struct hlist_head bf_elements_head;
-			union wildcard_lock bf_lock;
-		};
-
 		/* TupleMerge */
 		struct {
 			struct tm_bucket *buckets;
@@ -358,164 +352,6 @@ static inline void wcard_unlock(struct bpf_wildcard *wcard,
 	else
 		spin_unlock_irqrestore(&lock->lock, flags);
 }
-
-static inline int bf_lock(struct bpf_wildcard *wcard, unsigned long *pflags)
-{
-	return wcard_lock(wcard, &wcard->bf_lock, pflags);
-}
-
-static inline void bf_unlock(struct bpf_wildcard *wcard, unsigned long flags)
-{
-	return wcard_unlock(wcard, &wcard->bf_lock, flags);
-}
-
-static void *bf_match(const struct bpf_wildcard *wcard,
-		      const struct wildcard_key *key)
-{
-	struct wcard_elem *l;
-
-	hlist_for_each_entry_rcu(l, &wcard->bf_elements_head, node)
-		if (__match(wcard->desc, (struct wildcard_key *)l->key, key))
-			return l;
-
-	return NULL;
-}
-
-static void *bf_lookup(const struct bpf_wildcard *wcard,
-		       const struct wildcard_key *key)
-{
-	struct wcard_elem *l;
-
-	hlist_for_each_entry_rcu(l, &wcard->bf_elements_head, node)
-		if (!memcmp(l->key, key, wcard->map.key_size))
-			return l;
-
-	return NULL;
-}
-
-static int bf_update_elem(struct bpf_wildcard *wcard,
-			  const struct wildcard_key *key,
-			  void *value, u64 map_flags)
-{
-	struct wcard_elem *l_old, *l_new;
-	unsigned long irq_flags;
-	int ret;
-
-	ret = bf_lock(wcard, &irq_flags);
-	if (ret)
-		return ret;
-
-	l_old = bf_lookup(wcard, key);
-	ret = check_map_update_flags(l_old, map_flags);
-	if (ret)
-		goto unlock;
-
-	l_new = wcard_elem_alloc(wcard, key, value, l_old);
-	if (IS_ERR(l_new)) {
-		ret = PTR_ERR(l_new);
-		goto unlock;
-	}
-
-	if (l_old) {
-		hlist_replace_rcu(&l_old->node, &l_new->node);
-		wcard_elem_free(l_old);
-	} else {
-		hlist_add_head_rcu(&l_new->node, &wcard->bf_elements_head);
-	}
-
-unlock:
-	bf_unlock(wcard, irq_flags);
-	return ret;
-}
-
-static int bf_get_next_key(struct bpf_wildcard *wcard,
-			   const struct wildcard_key *key,
-			   struct wildcard_key *next_key)
-{
-	struct wcard_elem *l = NULL;
-	struct hlist_node *node;
-
-	if (key)
-		l = bf_lookup(wcard, key);
-
-	if (!l)
-		/* invalid key, get the first element */
-		node = rcu_dereference_raw(hlist_first_rcu(&wcard->bf_elements_head));
-	else
-		/* valid key, get the next element */
-		node = rcu_dereference_raw(hlist_next_rcu(&l->node));
-
-	l = hlist_entry_safe(node, struct wcard_elem, node);
-	if (!l)
-		return -ENOENT;
-
-	memcpy(next_key, l->key, wcard->map.key_size);
-	return 0;
-}
-
-static int bf_delete_elem(struct bpf_wildcard *wcard,
-			  const struct wildcard_key *key)
-{
-	struct wcard_elem *elem;
-	unsigned long irq_flags;
-	int err;
-
-	err = bf_lock(wcard, &irq_flags);
-	if (err)
-		return err;
-
-	elem = bf_lookup(wcard, key);
-	if (elem) {
-		hlist_del_rcu(&elem->node);
-		wcard_elem_free(elem);
-	} else {
-		err = -ENOENT;
-	}
-
-	bf_unlock(wcard, irq_flags);
-	return err;
-}
-
-static int bf_alloc(struct bpf_wildcard *wcard, const union bpf_attr *attr)
-{
-	INIT_HLIST_HEAD(&wcard->bf_elements_head);
-	wcard_init_lock(wcard, &wcard->bf_lock);
-	return 0;
-}
-
-static void bf_free(struct bpf_wildcard *wcard)
-{
-	struct hlist_node *n;
-	struct wcard_elem *l;
-
-	hlist_for_each_entry_safe(l, n, &wcard->bf_elements_head, node) {
-		hlist_del(&l->node);
-		__wcard_elem_free(l);
-	}
-}
-
-#ifdef __DEBUG
-static void bf_debug(struct bpf_wildcard *wcard)
-{
-	struct wcard_elem *l;
-	char buf[256] = "";
-	char *bufp;
-	unsigned i;
-	int n;
-
-	pr_info("-- et tu brute force map ------------\n");
-
-	bufp = &buf[0];
-	hlist_for_each_entry(l, &wcard->bf_elements_head, node) {
-		n = snprintf(bufp, sizeof(buf) - (bufp - buf), "l[%u] -> ", i++);
-		if (bufp + n >= buf + sizeof(buf))
-			break;
-		bufp += n;
-	}
-	pr_info("%s*\n", buf);
-	pr_info("--end--\n");
-}
-#endif
 
 static void __tm_copy_masked_rule(void *dst, const void *data, u32 size, u32 prefix)
 {
@@ -1436,18 +1272,6 @@ static void tm_debug(struct bpf_wildcard *wcard)
 #endif
 
 static struct wildcard_ops wildcard_algorithms[BPF_WILDCARD_F_ALGORITHM_MAX] = {
-	[BPF_WILDCARD_F_ALGORITHM_BF] = {
-		.alloc = bf_alloc,
-		.free = bf_free,
-		.get_next_key = bf_get_next_key,
-		.lookup = bf_lookup,
-		.match = bf_match,
-		.update_elem = bf_update_elem,
-		.delete_elem = bf_delete_elem,
-#ifdef __DEBUG
-		.debug = bf_debug,
-#endif
-	},
 	[BPF_WILDCARD_F_ALGORITHM_TM] = {
 		.alloc = tm_alloc,
 		.free = tm_free,
@@ -1471,9 +1295,6 @@ static void *wildcard_map_lookup_elem(struct bpf_map *map, void *key)
 	switch (((struct wildcard_key *)key)->type) {
 	case BPF_WILDCARD_KEY_RULE:
 		switch (wcard->algorithm) {
-		case BPF_WILDCARD_F_ALGORITHM_BF:
-			l = bf_lookup(wcard, key);
-			break;
 		case BPF_WILDCARD_F_ALGORITHM_TM:
 			l = tm_lookup(wcard, key);
 			break;
@@ -1481,9 +1302,6 @@ static void *wildcard_map_lookup_elem(struct bpf_map *map, void *key)
 		break;
 	case BPF_WILDCARD_KEY_ELEM:
 		switch (wcard->algorithm) {
-		case BPF_WILDCARD_F_ALGORITHM_BF:
-			l = bf_match(wcard, key);
-			break;
 		case BPF_WILDCARD_F_ALGORITHM_TM:
 			l = tm_match(wcard, key);
 			break;
@@ -1589,9 +1407,6 @@ static int wildcard_map_alloc_check(union bpf_attr *attr)
 		return -EINVAL;
 
 	switch (algorithm) {
-	case BPF_WILDCARD_F_ALGORITHM_BF:
-		flags_mask = BPF_WILDCARD_F_PRIORITY;
-		break;
 	case BPF_WILDCARD_F_ALGORITHM_TM:
 		flags_mask = BPF_WILDCARD_F_PRIORITY |
 			     BPF_WILDCARD_F_TM_STATIC_POOL |
