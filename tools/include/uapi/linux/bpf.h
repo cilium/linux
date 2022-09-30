@@ -146,9 +146,8 @@ struct wildcard_key {
 #define BPF_WILDCARD_MAX_TOTAL_RULE_SIZE 128
 
 /* Wildcard map algorithm selection */
-#define BPF_WILDCARD_F_ALGORITHM_BF	0
-#define BPF_WILDCARD_F_ALGORITHM_TM	1
-#define BPF_WILDCARD_F_ALGORITHM_MAX	2
+#define BPF_WILDCARD_F_ALGORITHM_TM	0
+#define BPF_WILDCARD_F_ALGORITHM_MAX	1
 #define BPF_WILDCARD_F_ALGORITHM_MASK	0xff
 #define BPF_WILDCARD_ALGORITHM(flags)	(flags & BPF_WILDCARD_F_ALGORITHM_MASK)
 
@@ -6298,6 +6297,14 @@ struct bpf_map_info {
 	__u32 btf_value_type_id;
 	__u32 :32;	/* alignment pad */
 	__u64 map_extra;
+	__u64 stats_lookup_ok;
+	__u64 stats_lookup_ok_time;
+	__u64 stats_lookup_fail;
+	__u64 stats_lookup_fail_time;
+	__u64 stats_update;
+	__u64 stats_update_time;
+	__u64 stats_delete;
+	__u64 stats_delete_time;
 } __attribute__((aligned(8)));
 
 struct bpf_btf_info {
