@@ -6171,6 +6171,14 @@ struct bpf_map_info {
 	__u32 btf_value_type_id;
 	__u32 :32;	/* alignment pad */
 	__u64 map_extra;
+	__u64 stats_lookup_ok;
+	__u64 stats_lookup_ok_time;
+	__u64 stats_lookup_fail;
+	__u64 stats_lookup_fail_time;
+	__u64 stats_update;
+	__u64 stats_update_time;
+	__u64 stats_delete;
+	__u64 stats_delete_time;
 } __attribute__((aligned(8)));
 
 struct bpf_btf_info {

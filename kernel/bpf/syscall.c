@@ -133,6 +133,16 @@ static struct bpf_map *find_and_alloc_map(union bpf_attr *attr)
 		return map;
 	map->ops = ops;
 	map->map_type = type;
+
+	atomic64_set(&map->stats_lookup_ok, 0);
+	atomic64_set(&map->stats_lookup_ok_time, 0);
+	atomic64_set(&map->stats_lookup_fail, 0);
+	atomic64_set(&map->stats_lookup_fail_time, 0);
+	atomic64_set(&map->stats_update, 0);
+	atomic64_set(&map->stats_update_time, 0);
+	atomic64_set(&map->stats_delete, 0);
+	atomic64_set(&map->stats_delete_time, 0);
+
 	return map;
 }
 
@@ -173,6 +183,36 @@ static void maybe_wait_bpf_programs(struct bpf_map *map)
 	if (map->map_type == BPF_MAP_TYPE_HASH_OF_MAPS ||
 	    map->map_type == BPF_MAP_TYPE_ARRAY_OF_MAPS)
 		synchronize_rcu();
+}
+
+static __always_inline int debug_delete_elem(struct bpf_map *map, void *key)
+{
+	u64 start, end;
+	int err;
+
+	start = ktime_get_mono_fast_ns();
+	err = map->ops->map_delete_elem(map, key);
+	end = ktime_get_mono_fast_ns();
+
+	atomic64_inc(&map->stats_delete);
+	atomic64_add(end - start, &map->stats_delete_time);
+
+	return err;
+}
+
+static __always_inline int debug_update_elem(struct bpf_map *map, void *key, void *value, u64 flags)
+{
+	u64 start, end;
+	int err;
+
+	start = ktime_get_mono_fast_ns();
+	err = map->ops->map_update_elem(map, key, value, flags);
+	end = ktime_get_mono_fast_ns();
+
+	atomic64_inc(&map->stats_update);
+	atomic64_add(end - start, &map->stats_update_time);
+
+	return err;
 }
 
 static int bpf_map_update_value(struct bpf_map *map, struct fd f, void *key,
@@ -223,13 +263,44 @@ static int bpf_map_update_value(struct bpf_map *map, struct fd f, void *key,
 		err = map->ops->map_push_elem(map, value, flags);
 	} else {
 		rcu_read_lock();
-		err = map->ops->map_update_elem(map, key, value, flags);
+		err = debug_update_elem(map, key, value, flags);
 		rcu_read_unlock();
 	}
 	bpf_enable_instrumentation();
 	maybe_wait_bpf_programs(map);
 
 	return err;
+}
+
+
+static __always_inline void *debug_lookup(struct bpf_map *map, void *key)
+{
+	u64 start, end;
+	void *ptr;
+
+	// XXX
+	// disable migrate
+	// disable preempt
+	// disable IRQ
+
+	start = ktime_get_mono_fast_ns();
+	ptr = map->ops->map_lookup_elem(map, key);
+	end = ktime_get_mono_fast_ns();
+
+	if (IS_ERR(ptr)) {
+		atomic64_inc(&map->stats_lookup_fail);
+		atomic64_add(end - start, &map->stats_lookup_fail_time);
+	} else {
+		atomic64_inc(&map->stats_lookup_ok);
+		atomic64_add(end - start, &map->stats_lookup_ok_time);
+	}
+
+	// XXX
+	// enable IRQ
+	// enable preempt
+	// enable migrate
+
+	return ptr;
 }
 
 static int bpf_map_copy_value(struct bpf_map *map, void *key, void *value,
@@ -269,7 +340,7 @@ static int bpf_map_copy_value(struct bpf_map *map, void *key, void *value,
 		if (map->ops->map_lookup_elem_sys_only)
 			ptr = map->ops->map_lookup_elem_sys_only(map, key);
 		else
-			ptr = map->ops->map_lookup_elem(map, key);
+			ptr = debug_lookup(map, key);
 		if (IS_ERR(ptr)) {
 			err = PTR_ERR(ptr);
 		} else if (!ptr) {
@@ -1480,7 +1551,7 @@ static int map_delete_elem(union bpf_attr *attr, bpfptr_t uattr)
 
 	bpf_disable_instrumentation();
 	rcu_read_lock();
-	err = map->ops->map_delete_elem(map, key);
+	err = debug_delete_elem(map, key);
 	rcu_read_unlock();
 	bpf_enable_instrumentation();
 	maybe_wait_bpf_programs(map);
@@ -4195,6 +4266,14 @@ static int bpf_map_get_info_by_fd(struct file *file,
 	info.max_entries = map->max_entries;
 	info.map_flags = map->map_flags;
 	info.map_extra = map->map_extra;
+	info.stats_lookup_ok =       atomic64_read(&map->stats_lookup_ok);
+	info.stats_lookup_ok_time =  atomic64_read(&map->stats_lookup_ok_time);
+	info.stats_lookup_fail =     atomic64_read(&map->stats_lookup_fail);
+	info.stats_lookup_fail_time= atomic64_read(&map->stats_lookup_fail_time);
+	info.stats_update=           atomic64_read(&map->stats_update);
+	info.stats_update_time=      atomic64_read(&map->stats_update_time);
+	info.stats_delete=           atomic64_read(&map->stats_delete);
+	info.stats_delete_time=      atomic64_read(&map->stats_delete_time);
 	memcpy(info.name, map->name, sizeof(map->name));
 
 	if (map->btf) {
