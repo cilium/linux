@@ -1099,7 +1099,14 @@ enum bpf_link_type {
  */
 #define BPF_F_ALLOW_OVERRIDE	(1U << 0)
 #define BPF_F_ALLOW_MULTI	(1U << 1)
+/* Generic attachment flags. */
 #define BPF_F_REPLACE		(1U << 2)
+#define BPF_F_BEFORE		(1U << 3)
+#define BPF_F_AFTER		(1U << 4)
+#define BPF_F_FIRST		(1U << 5)
+#define BPF_F_LAST		(1U << 6)
+#define BPF_F_ID		(1U << 7)
+#define BPF_F_LINK		(1U << 8)
 
 /* If BPF_F_STRICT_ALIGNMENT is used in BPF_PROG_LOAD command, the
  * verifier will perform strict alignment checking as if the kernel
@@ -1412,14 +1419,19 @@ union bpf_attr {
 	};
 
 	struct { /* anonymous struct used by BPF_PROG_ATTACH/DETACH commands */
-		__u32		target_fd;	/* container object to attach to */
-		__u32		attach_bpf_fd;	/* eBPF program to attach */
+		union {
+			__u32	target_fd;	/* target object to attach to or ... */
+			__u32	target_ifindex;	/* target ifindex */
+		};
+		__u32		attach_bpf_fd;
 		__u32		attach_type;
 		__u32		attach_flags;
-		__u32		replace_bpf_fd;	/* previously attached eBPF
-						 * program to replace if
-						 * BPF_F_REPLACE is used
-						 */
+		union {
+			__u32	relative_fd;
+			__u32	relative_id;
+			__u32	replace_bpf_fd;
+		};
+		__u32		expected_revision;
 	};
 
 	struct { /* anonymous struct used by BPF_PROG_TEST_RUN command */
@@ -1465,16 +1477,25 @@ union bpf_attr {
 	} info;
 
 	struct { /* anonymous struct used by BPF_PROG_QUERY command */
-		__u32		target_fd;	/* container object to query */
+		union {
+			__u32	target_fd;	/* target object to query or ... */
+			__u32	target_ifindex;	/* target ifindex */
+		};
 		__u32		attach_type;
 		__u32		query_flags;
 		__u32		attach_flags;
 		__aligned_u64	prog_ids;
-		__u32		prog_cnt;
+		union {
+			__u32	prog_cnt;
+			__u32	count;
+		};
+		__u32		revision;
 		/* output: per-program attach_flags.
 		 * not allowed to be set during effective query.
 		 */
 		__aligned_u64	prog_attach_flags;
+		__aligned_u64	link_ids;
+		__aligned_u64	link_attach_flags;
 	} query;
 
 	struct { /* anonymous struct used by BPF_RAW_TRACEPOINT_OPEN command */
@@ -1509,13 +1530,13 @@ union bpf_attr {
 	struct { /* struct used by BPF_LINK_CREATE command */
 		__u32		prog_fd;	/* eBPF program to attach */
 		union {
-			__u32		target_fd;	/* object to attach to */
-			__u32		target_ifindex; /* target ifindex */
+			__u32	target_fd;	/* target object to attach to or ... */
+			__u32	target_ifindex; /* target ifindex */
 		};
 		__u32		attach_type;	/* attach type */
 		__u32		flags;		/* extra flags */
 		union {
-			__u32		target_btf_id;	/* btf_id of target to attach to */
+			__u32	target_btf_id;	/* btf_id of target to attach to */
 			struct {
 				__aligned_u64	iter_info;	/* extra bpf_iter_link_info */
 				__u32		iter_info_len;	/* iter_info length */
