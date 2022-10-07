@@ -3715,6 +3715,14 @@ S:	Supported
 F:	arch/x86/net/
 X:	arch/x86/net/bpf_jit_comp32.c
 
+BPF META (Virtual Network Driver)
+M:	Daniel Borkmann <daniel@iogearbox.net>
+M:	Nikolay Aleksandrov <razor@blackwall.org>
+L:	netdev@vger.kernel.org
+L:	bpf@vger.kernel.org
+S:	Supported
+F:	drivers/net/meta.c
+
 BPF LSM (Security Audit and Enforcement using BPF)
 M:	KP Singh <kpsingh@kernel.org>
 R:	Florent Revest <revest@chromium.org>
