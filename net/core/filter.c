@@ -2499,6 +2499,7 @@ out_drop:
 	kfree_skb(skb);
 	return -EINVAL;
 }
+EXPORT_SYMBOL_GPL(skb_do_redirect);
 
 BPF_CALL_2(bpf_redirect, u32, ifindex, u64, flags)
 {
