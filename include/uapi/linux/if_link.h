@@ -748,6 +748,8 @@ struct tunnel_msg {
 enum {
 	IFLA_META_UNSPEC,
 	IFLA_META_PEER_INFO,
+	IFLA_META_BPF_FD,
+	IFLA_META_PEER_BPF_FD,
 	__IFLA_META_MAX,
 };
 

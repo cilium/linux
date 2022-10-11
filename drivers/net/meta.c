@@ -38,6 +38,32 @@ enum {
 
 static struct rtnl_link_ops meta_link_ops;
 
+static void __meta_bpf_prog_change(struct net_device *dev,
+				   struct bpf_prog *new_prog)
+{
+	struct meta *meta = netdev_priv(dev);
+	struct bpf_prog *old_prog = rtnl_dereference(meta->prog);
+
+	rcu_assign_pointer(meta->prog, new_prog);
+	if (old_prog)
+		bpf_prog_put(old_prog);
+}
+
+static int meta_bpf_prog_change(struct net_device *dev, u32 bpf_fd, bool attach)
+{
+	struct bpf_prog *new_prog = NULL;
+
+	if (attach) {
+		new_prog = bpf_prog_get_type(bpf_fd, BPF_PROG_TYPE_SCHED_CLS);
+		if (IS_ERR(new_prog))
+			return PTR_ERR(new_prog);
+	}
+
+	__meta_bpf_prog_change(dev, new_prog);
+
+	return 0;
+}
+
 static netdev_tx_t meta_xmit(struct sk_buff *skb, struct net_device *dev)
 {
 	struct meta *meta = netdev_priv(dev);
@@ -318,6 +344,24 @@ static int meta_new_link(struct net *src_net, struct net_device *dev,
 
 	netif_carrier_off(dev);
 
+	if (data) {
+		u32 bpf_fd;
+
+		if (data[IFLA_META_BPF_FD]) {
+			bpf_fd = nla_get_u32(data[IFLA_META_BPF_FD]);
+			err = meta_bpf_prog_change(dev, bpf_fd, true);
+			if (err)
+				goto err_bpf_attach;
+		}
+
+		if (data[IFLA_META_PEER_BPF_FD]) {
+			bpf_fd = nla_get_u32(data[IFLA_META_PEER_BPF_FD]);
+			err = meta_bpf_prog_change(peer, bpf_fd, true);
+			if (err)
+				goto err_bpf_attach;
+		}
+	}
+
 	priv = netdev_priv(dev);
 	rcu_assign_pointer(priv->peer, peer);
 
@@ -325,6 +369,10 @@ static int meta_new_link(struct net *src_net, struct net_device *dev,
 	rcu_assign_pointer(priv->peer, dev);
 	return 0;
 
+err_bpf_attach:
+	/* detach both bpf programs */
+	meta_bpf_prog_change(dev, 0, false);
+	meta_bpf_prog_change(peer, 0, false);
 err_register_dev:
 	/* nothing to do */
 err_configure_peer:
@@ -341,17 +389,88 @@ static void meta_del_link(struct net_device *dev, struct list_head *head)
 	struct meta *meta = netdev_priv(dev);
 	struct net_device *peer = rtnl_dereference(meta->peer);
 
+	meta_bpf_prog_change(dev, 0, false);
 	RCU_INIT_POINTER(meta->peer, NULL);
 	unregister_netdevice_queue(dev, head);
 	if (peer) {
 		meta = netdev_priv(peer);
+		meta_bpf_prog_change(peer, 0, false);
 		RCU_INIT_POINTER(meta->peer, NULL);
 		unregister_netdevice_queue(peer, head);
 	}
 }
 
+static int meta_change_link(struct net_device *dev, struct nlattr *tb[],
+			    struct nlattr *data[],
+			    struct netlink_ext_ack *extack)
+{
+	struct meta *meta = netdev_priv(dev);
+	struct net_device *peer = rtnl_dereference(meta->peer);
+	u32 bpf_fd;
+	int err;
+
+	if (!net_eq(dev_net(dev), &init_net)) {
+		NL_SET_ERR_MSG(extack,
+			       "Meta settings can be changed only from host network namespace");
+		return -EACCES;
+	}
+
+	if (data[IFLA_META_BPF_FD]) {
+		bpf_fd = nla_get_u32(data[IFLA_META_BPF_FD]);
+		err = meta_bpf_prog_change(dev, bpf_fd, true);
+		if (err) {
+			NL_SET_ERR_MSG(extack,
+				       "Could not attach meta device bpf program");
+			return err;
+		}
+	}
+
+	if (data[IFLA_META_PEER_BPF_FD]) {
+		bpf_fd = nla_get_u32(data[IFLA_META_PEER_BPF_FD]);
+		err = meta_bpf_prog_change(peer, bpf_fd, true);
+		if (err) {
+			NL_SET_ERR_MSG(extack,
+				       "Could not attach meta peer device bpf program");
+			return err;
+		}
+	}
+
+	return 0;
+}
+
+static size_t meta_get_size(const struct net_device *dev)
+{
+	return nla_total_size(sizeof(u32)) + /* IFLA_META_BPF_FD */
+	       nla_total_size(sizeof(u32)) + /* IFLA_META_PEER_BPF_FD */
+	       0;
+}
+
+static int meta_fill_info(struct sk_buff *skb, const struct net_device *dev)
+{
+	struct meta *meta = netdev_priv(dev);
+	struct net_device *peer = rtnl_dereference(meta->peer);
+	struct meta *peer_meta;
+	struct bpf_prog *prog;
+
+	prog = rtnl_dereference(meta->prog);
+	if (prog && nla_put_u32(skb, IFLA_META_BPF_FD, prog->aux->id))
+		return -EMSGSIZE;
+
+	if (peer) {
+		peer_meta = netdev_priv(peer);
+		prog = rtnl_dereference(peer_meta->prog);
+		if (prog &&
+		    nla_put_u32(skb, IFLA_META_PEER_BPF_FD, prog->aux->id))
+			return -EMSGSIZE;
+	}
+
+	return 0;
+}
+
 static const struct nla_policy meta_policy[IFLA_META_MAX + 1] = {
 	[IFLA_META_PEER_INFO]	= { .len = sizeof(struct ifinfomsg) },
+	[IFLA_META_BPF_FD]	= { .type = NLA_U32 },
+	[IFLA_META_PEER_BPF_FD]	= { .type = NLA_U32 },
 };
 
 static struct rtnl_link_ops meta_link_ops = {
@@ -360,7 +479,10 @@ static struct rtnl_link_ops meta_link_ops = {
 	.setup		= meta_setup,
 	.newlink	= meta_new_link,
 	.dellink	= meta_del_link,
+	.changelink	= meta_change_link,
 	.get_link_net	= meta_get_link_net,
+	.get_size	= meta_get_size,
+	.fill_info	= meta_fill_info,
 	.policy		= meta_policy,
 	.validate	= meta_validate,
 	.maxtype	= IFLA_META_MAX,
