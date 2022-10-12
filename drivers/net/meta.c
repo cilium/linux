@@ -15,8 +15,8 @@
 struct meta {
 	struct net_device __rcu *peer;
 	struct bpf_prog   __rcu *prog;
-	struct net_device __rcu	*master;
 	u32 headroom;
+	bool primary;
 };
 
 static void meta_scrub_minimum(struct sk_buff *skb)
@@ -268,7 +268,7 @@ static int meta_new_link(struct net *src_net, struct net_device *dev,
 	struct ifinfomsg *ifmp = NULL;
 	struct net_device *peer;
 	char ifname[IFNAMSIZ];
-	struct meta *priv;
+	struct meta *meta;
 	struct net *net;
 	int err;
 
@@ -362,11 +362,12 @@ static int meta_new_link(struct net *src_net, struct net_device *dev,
 		}
 	}
 
-	priv = netdev_priv(dev);
-	rcu_assign_pointer(priv->peer, peer);
+	meta = netdev_priv(dev);
+	meta->primary = true;
+	rcu_assign_pointer(meta->peer, peer);
 
-	priv = netdev_priv(peer);
-	rcu_assign_pointer(priv->peer, dev);
+	meta = netdev_priv(peer);
+	rcu_assign_pointer(meta->peer, dev);
 	return 0;
 
 err_bpf_attach:
@@ -409,9 +410,9 @@ static int meta_change_link(struct net_device *dev, struct nlattr *tb[],
 	u32 bpf_fd;
 	int err;
 
-	if (!net_eq(dev_net(dev), &init_net)) {
+	if (!meta->primary) {
 		NL_SET_ERR_MSG(extack,
-			       "Meta settings can be changed only from host network namespace");
+			       "Meta settings can be changed only through the primary device");
 		return -EACCES;
 	}
 
@@ -442,6 +443,7 @@ static size_t meta_get_size(const struct net_device *dev)
 {
 	return nla_total_size(sizeof(u32)) + /* IFLA_META_BPF_FD */
 	       nla_total_size(sizeof(u32)) + /* IFLA_META_PEER_BPF_FD */
+	       nla_total_size(sizeof(u8))  + /* IFLA_META_PRIMARY */
 	       0;
 }
 
@@ -451,6 +453,9 @@ static int meta_fill_info(struct sk_buff *skb, const struct net_device *dev)
 	struct net_device *peer = rtnl_dereference(meta->peer);
 	struct meta *peer_meta;
 	struct bpf_prog *prog;
+
+	if (nla_put_u8(skb, IFLA_META_PRIMARY, meta->primary))
+		return -EMSGSIZE;
 
 	prog = rtnl_dereference(meta->prog);
 	if (prog && nla_put_u32(skb, IFLA_META_BPF_FD, prog->aux->id))
@@ -471,6 +476,8 @@ static const struct nla_policy meta_policy[IFLA_META_MAX + 1] = {
 	[IFLA_META_PEER_INFO]	= { .len = sizeof(struct ifinfomsg) },
 	[IFLA_META_BPF_FD]	= { .type = NLA_U32 },
 	[IFLA_META_PEER_BPF_FD]	= { .type = NLA_U32 },
+	[IFLA_META_PRIMARY]	= { .type = NLA_REJECT,
+				    .reject_message = "Primary attribute is read-only" },
 };
 
 static struct rtnl_link_ops meta_link_ops = {
