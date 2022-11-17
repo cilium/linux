@@ -5426,6 +5426,16 @@ union bpf_attr {
  *		**-E2BIG** if user-space has tried to publish a sample which is
  *		larger than the size of the ring buffer, or which cannot fit
  *		within a struct bpf_dynptr.
+ *
+ * int bpf_sock_destroy(void *sk)
+ *	Description
+ *		Destroy the given socket with **ECONNABORTED** error code.
+ *
+ *		*sk* must be a full non-**NULL** pointer to a socket.
+ *	Return
+ *		0 if socket was successfully destroyed.
+ *
+ *		**-EPROTONOSUPPORT** if protocol specific destroy handler is not implemented.
  */
 #define __BPF_FUNC_MAPPER(FN)		\
 	FN(unspec),			\
@@ -5638,6 +5648,7 @@ union bpf_attr {
 	FN(tcp_raw_check_syncookie_ipv6),	\
 	FN(ktime_get_tai_ns),		\
 	FN(user_ringbuf_drain),		\
+	FN(sock_destroy),		\
 	/* */
 
 /* integer value in 'imm' field of BPF_CALL instruction selects which helper

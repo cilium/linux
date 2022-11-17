@@ -11483,6 +11483,8 @@ bpf_sk_base_func_proto(enum bpf_func_id func_id)
 		break;
 	case BPF_FUNC_ktime_get_coarse_ns:
 		return &bpf_ktime_get_coarse_ns_proto;
+	case BPF_FUNC_sock_destroy:
+		return &bpf_sock_destroy_proto;
 	default:
 		return bpf_base_func_proto(func_id);
 	}
@@ -11492,3 +11494,28 @@ bpf_sk_base_func_proto(enum bpf_func_id func_id)
 
 	return func;
 }
+
+BPF_CALL_1(bpf_sock_destroy, struct sock *, sk)
+{
+	sk = sk_to_full_sk(sk);
+
+	if (!sk || !sk_fullsock(sk))
+		return 0;
+	if (!sk->sk_prot->diag_destroy)
+		return -EOPNOTSUPP;
+
+	/* Certain bpf contexts acquire sock lock already, so
+	 * diag destroy handlers will not try to acquire
+	 * the lock again.
+	 */
+	lockdep_sock_is_held(sk);
+
+	return sk->sk_prot->diag_destroy(sk, ECONNABORTED, false);
+}
+
+const struct bpf_func_proto bpf_sock_destroy_proto = {
+	.func		= bpf_sock_destroy,
+	.gpl_only	= false,
+	.ret_type	= RET_INTEGER,
+	.arg1_type	= ARG_PTR_TO_BTF_ID_SOCK_COMMON,
+};
