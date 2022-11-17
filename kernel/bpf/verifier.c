@@ -6229,6 +6229,7 @@ static bool may_update_sockmap(struct bpf_verifier_env *env, int func_id)
 	case BPF_PROG_TYPE_SK_REUSEPORT:
 	case BPF_PROG_TYPE_FLOW_DISSECTOR:
 	case BPF_PROG_TYPE_SK_LOOKUP:
+	case BPF_PROG_TYPE_CGROUP_SOCK_ADDR:
 		return true;
 	default:
 		break;
