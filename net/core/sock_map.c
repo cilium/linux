@@ -536,8 +536,25 @@ static bool sock_map_sk_is_suitable(const struct sock *sk)
 
 static bool sock_map_sk_state_allowed(const struct sock *sk)
 {
-	if (sk_is_tcp(sk))
-		return (1 << sk->sk_state) & (TCPF_ESTABLISHED | TCPF_LISTEN);
+	/* Allow non-closing TCP sockets for storage purposes.
+	 * It's expected that the redirect helpers enforce
+	 * correct socket state checks for the redirect use cases.
+	 * See sock_map_redirect_allowed above.
+	 */
+	//if (sk_is_tcp(sk))
+	//	return (1 << sk->sk_state) & (TCPF_ESTABLISHED | TCPF_LISTEN);
+	if (sk_is_tcp(sk)) {
+		switch (1 << sk->sk_state) {
+		case TCPF_FIN_WAIT1:
+		case TCPF_FIN_WAIT2:
+		case TCPF_TIME_WAIT:
+		case TCPF_CLOSE_WAIT:
+		case TCPF_CLOSING:
+			return false;
+		default:
+			break;
+		}
+	}
 	return true;
 }
 
