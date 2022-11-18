@@ -1353,7 +1353,7 @@ struct proto {
 #ifdef SOCK_REFCNT_DEBUG
 	atomic_t		socks;
 #endif
-	int			(*diag_destroy)(struct sock *sk, int err);
+	int			(*diag_destroy)(struct sock *sk, int err, bool acquire_lock);
 } __randomize_layout;
 
 int proto_register(struct proto *prot, int alloc_slab);

@@ -900,15 +900,17 @@ static int compat_raw_ioctl(struct sock *sk, unsigned int cmd, unsigned long arg
 }
 #endif
 
-int raw_abort(struct sock *sk, int err)
+int raw_abort(struct sock *sk, int err, bool acquire_lock)
 {
-	lock_sock(sk);
+	if (acquire_lock)
+		lock_sock(sk);
 
 	sk->sk_err = err;
 	sk_error_report(sk);
 	__udp_disconnect(sk, 0);
 
-	release_sock(sk);
+	if (acquire_lock)
+		release_sock(sk);
 
 	return 0;
 }

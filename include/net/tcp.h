@@ -1397,7 +1397,7 @@ bool tcp_add_backlog(struct sock *sk, struct sk_buff *skb,
 int tcp_filter(struct sock *sk, struct sk_buff *skb);
 void tcp_set_state(struct sock *sk, int state);
 void tcp_done(struct sock *sk);
-int tcp_abort(struct sock *sk, int err);
+int tcp_abort(struct sock *sk, int err, bool acquire_lock);
 
 static inline void tcp_sack_reset(struct tcp_options_received *rx_opt)
 {

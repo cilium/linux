@@ -303,7 +303,7 @@ int sock_diag_destroy(struct sock *sk, int err)
 	if (!sk->sk_prot->diag_destroy)
 		return -EOPNOTSUPP;
 
-	return sk->sk_prot->diag_destroy(sk, err);
+	return sk->sk_prot->diag_destroy(sk, err, true);
 }
 EXPORT_SYMBOL_GPL(sock_diag_destroy);
 

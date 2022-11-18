@@ -10,7 +10,7 @@ bool raw_v6_match(struct net *net, struct sock *sk, unsigned short num,
 		  const struct in6_addr *loc_addr,
 		  const struct in6_addr *rmt_addr, int dif, int sdif);
 
-int raw_abort(struct sock *sk, int err);
+int raw_abort(struct sock *sk, int err, bool acquire_lock);
 
 void raw6_icmp_error(struct sk_buff *, int nexthdr,
 		u8 type, u8 code, int inner_offset, __be32);

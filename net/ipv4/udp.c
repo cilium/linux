@@ -2901,9 +2901,10 @@ __poll_t udp_poll(struct file *file, struct socket *sock, poll_table *wait)
 }
 EXPORT_SYMBOL(udp_poll);
 
-int udp_abort(struct sock *sk, int err)
+int udp_abort(struct sock *sk, int err, bool acquire_lock)
 {
-	lock_sock(sk);
+	if (acquire_lock)
+		lock_sock(sk);
 
 	/* udp{v6}_destroy_sock() sets it under the sk lock, avoid racing
 	 * with close()
@@ -2916,7 +2917,8 @@ int udp_abort(struct sock *sk, int err)
 	__udp_disconnect(sk, 0);
 
 out:
-	release_sock(sk);
+	if (acquire_lock)
+		release_sock(sk);
 
 	return 0;
 }

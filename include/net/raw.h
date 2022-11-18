@@ -23,7 +23,7 @@ extern struct raw_hashinfo raw_v4_hashinfo;
 bool raw_v4_match(struct net *net, struct sock *sk, unsigned short num,
 		  __be32 raddr, __be32 laddr, int dif, int sdif);
 
-int raw_abort(struct sock *sk, int err);
+int raw_abort(struct sock *sk, int err, bool acquire_lock);
 void raw_icmp_error(struct sk_buff *, int, u32);
 int raw_local_deliver(struct sk_buff *, int);
 
