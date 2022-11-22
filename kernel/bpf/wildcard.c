@@ -429,12 +429,9 @@ static void __tm_copy_masked_elem(void *dst, const void *data, u32 size, u32 pre
 
 static inline u32 bpf_hash32(const void *key, u32 length, u32 initval)
 {
-       return xxh64(key, length, initval) >> 32;
-}
-
-static inline u64 bpf_hash64(const void *key, u32 length, u64 initval)
-{
-       return xxh64(key, length, initval);
+	if (length <= 240)
+		return xxh3_240(key, length, initval);
+	return xxh64(key, length, initval);
 }
 
 static u32 tm_hash_rule(const struct wildcard_desc *desc,

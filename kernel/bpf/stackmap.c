@@ -3,6 +3,7 @@
  */
 #include <linux/bpf.h>
 #include <linux/jhash.h>
+#include <linux/xxhash.h>
 #include <linux/filter.h>
 #include <linux/kernel.h>
 #include <linux/stacktrace.h>
@@ -66,6 +67,8 @@ free_elems:
 	return err;
 }
 
+static void init_sysfs_toggle(void);
+
 /* Called from syscall */
 static struct bpf_map *stack_map_alloc(union bpf_attr *attr)
 {
@@ -73,6 +76,8 @@ static struct bpf_map *stack_map_alloc(union bpf_attr *attr)
 	struct bpf_stack_map *smap;
 	u64 cost, n_buckets;
 	int err;
+
+	init_sysfs_toggle();
 
 	if (!bpf_capable())
 		return ERR_PTR(-EPERM);
@@ -210,7 +215,65 @@ get_callchain_entry_for_task(struct task_struct *task, u32 max_depth)
 #endif
 }
 
-static long __bpf_get_stackid(struct bpf_map *map,
+static bool _stackid_fast = false;
+
+static ssize_t run_store(struct kobject *kobj,
+			struct kobj_attribute *attr,
+			const char *buf,
+			size_t n)
+{
+	long res;
+	int ret;
+
+	ret = kstrtol(buf, 10, &res);
+	if (ret)
+		return ret;
+
+	_stackid_fast = res;
+
+	return n;
+}
+
+static struct kobj_attribute run_attr = __ATTR_WO(run);
+static struct attribute *stackid_attributes[] = {
+	&run_attr.attr,
+	NULL
+};
+static struct attribute_group stackid_attr_group = {
+	.attrs = stackid_attributes,
+};
+static struct kobject *stackid_kobj = NULL;
+
+static void init_sysfs_toggle(void)
+{
+	int ret;
+
+	if (stackid_kobj)
+		return;
+
+	stackid_kobj = kobject_create_and_add("stackid", kernel_kobj);
+	if (!stackid_kobj)
+		return;
+
+	ret = sysfs_create_group(stackid_kobj, &stackid_attr_group);
+	if (ret) {
+		kobject_put(stackid_kobj);
+		stackid_kobj = NULL;
+		return;
+	}
+}
+
+static inline u32 ___hash(const void *key, u32 key_len)
+{
+	if (likely(_stackid_fast)) {
+		if (key_len <= 240)
+			return xxh3_240(key, key_len, 0);
+		return xxh64(key, key_len, 0);
+	}
+	return jhash2(key, key_len, 0);
+}
+
+static long ___bpf_get_stackid(struct bpf_map *map,
 			      struct perf_callchain_entry *trace, u64 flags)
 {
 	struct bpf_stack_map *smap = container_of(map, struct bpf_stack_map, map);
@@ -228,7 +291,7 @@ static long __bpf_get_stackid(struct bpf_map *map,
 	trace_nr = trace->nr - skip;
 	trace_len = trace_nr * sizeof(u64);
 	ips = trace->ip + skip;
-	hash = jhash2((u32 *)ips, trace_len / sizeof(u32), 0);
+	hash = ___hash((u32 *)ips, trace_len / sizeof(u32));
 	id = hash & (smap->n_buckets - 1);
 	bucket = READ_ONCE(smap->buckets[id]);
 
@@ -279,6 +342,35 @@ static long __bpf_get_stackid(struct bpf_map *map,
 		pcpu_freelist_push(&smap->freelist, &old_bucket->fnode);
 	return id;
 }
+
+static long __bpf_get_stackid(struct bpf_map *map,
+			      struct perf_callchain_entry *trace, u64 flags)
+{
+	unsigned long irq_flags;
+	u64 start, end;
+	long ret;
+
+	preempt_disable();
+	local_irq_save(irq_flags);
+
+	start = get_cycles();
+	ret = ___bpf_get_stackid(map, trace, flags);
+	end = get_cycles();
+
+	if (ret != 0) {
+		atomic64_inc(&map->stats_lookup_fail);
+		atomic64_add(end - start, &map->stats_lookup_fail_time);
+	} else {
+		atomic64_inc(&map->stats_lookup_ok);
+		atomic64_add(end - start, &map->stats_lookup_ok_time);
+	}
+
+	local_irq_restore(irq_flags);
+	preempt_enable();
+
+	return ret;
+}
+
 
 BPF_CALL_3(bpf_get_stackid, struct pt_regs *, regs, struct bpf_map *, map,
 	   u64, flags)

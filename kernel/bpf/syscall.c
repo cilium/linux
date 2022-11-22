@@ -134,6 +134,9 @@ static struct bpf_map *find_and_alloc_map(union bpf_attr *attr)
 	map->ops = ops;
 	map->map_type = type;
 
+	if (map->ops->map_post_alloc)
+		map->ops->map_post_alloc(map);
+
 	atomic64_set(&map->stats_lookup_ok, 0);
 	atomic64_set(&map->stats_lookup_ok_time, 0);
 	atomic64_set(&map->stats_lookup_fail, 0);
@@ -190,9 +193,9 @@ static __always_inline int debug_delete_elem(struct bpf_map *map, void *key)
 	u64 start, end;
 	int err;
 
-	start = ktime_get_mono_fast_ns();
+	start = get_cycles();
 	err = map->ops->map_delete_elem(map, key);
-	end = ktime_get_mono_fast_ns();
+	end = get_cycles();
 
 	atomic64_inc(&map->stats_delete);
 	atomic64_add(end - start, &map->stats_delete_time);
@@ -205,9 +208,24 @@ static __always_inline int debug_update_elem(struct bpf_map *map, void *key, voi
 	u64 start, end;
 	int err;
 
-	start = ktime_get_mono_fast_ns();
+	start = get_cycles();
 	err = map->ops->map_update_elem(map, key, value, flags);
-	end = ktime_get_mono_fast_ns();
+	end = get_cycles();
+
+	atomic64_inc(&map->stats_update);
+	atomic64_add(end - start, &map->stats_update_time);
+
+	return err;
+}
+
+static __always_inline int debug_push_elem(struct bpf_map *map, void *value, u64 flags)
+{
+	u64 start, end;
+	int err;
+
+	start = get_cycles();
+	err = map->ops->map_push_elem(map, value, flags);
+	end = get_cycles();
 
 	atomic64_inc(&map->stats_update);
 	atomic64_add(end - start, &map->stats_update_time);
@@ -260,7 +278,7 @@ static int bpf_map_update_value(struct bpf_map *map, struct fd f, void *key,
 	} else if (map->map_type == BPF_MAP_TYPE_QUEUE ||
 		   map->map_type == BPF_MAP_TYPE_STACK ||
 		   map->map_type == BPF_MAP_TYPE_BLOOM_FILTER) {
-		err = map->ops->map_push_elem(map, value, flags);
+		err = debug_push_elem(map, value, flags);
 	} else {
 		rcu_read_lock();
 		err = debug_update_elem(map, key, value, flags);
@@ -275,17 +293,17 @@ static int bpf_map_update_value(struct bpf_map *map, struct fd f, void *key,
 
 static __always_inline void *debug_lookup(struct bpf_map *map, void *key)
 {
+#if 0
+	unsigned long flags;
 	u64 start, end;
 	void *ptr;
 
-	// XXX
-	// disable migrate
-	// disable preempt
-	// disable IRQ
+	preempt_disable();
+	local_irq_save(flags);
 
-	start = ktime_get_mono_fast_ns();
+	start = get_cycles();
 	ptr = map->ops->map_lookup_elem(map, key);
-	end = ktime_get_mono_fast_ns();
+	end = get_cycles();
 
 	if (IS_ERR(ptr)) {
 		atomic64_inc(&map->stats_lookup_fail);
@@ -295,12 +313,40 @@ static __always_inline void *debug_lookup(struct bpf_map *map, void *key)
 		atomic64_add(end - start, &map->stats_lookup_ok_time);
 	}
 
-	// XXX
-	// enable IRQ
-	// enable preempt
-	// enable migrate
+	local_irq_restore(flags);
+	preempt_enable();
 
 	return ptr;
+#endif
+
+	return map->ops->map_lookup_elem(map, key);
+}
+
+static __always_inline int debug_peek_elem(struct bpf_map *map, void *value)
+{
+	unsigned long flags;
+	u64 start, end;
+	int ret;
+
+	preempt_disable();
+	local_irq_save(flags);
+
+	start = get_cycles();
+	ret = map->ops->map_peek_elem(map, value);
+	end = get_cycles();
+
+	if (ret < 0) {
+		atomic64_inc(&map->stats_lookup_fail);
+		atomic64_add(end - start, &map->stats_lookup_fail_time);
+	} else {
+		atomic64_inc(&map->stats_lookup_ok);
+		atomic64_add(end - start, &map->stats_lookup_ok_time);
+	}
+
+	local_irq_restore(flags);
+	preempt_enable();
+
+	return ret;
 }
 
 static int bpf_map_copy_value(struct bpf_map *map, void *key, void *value,
@@ -331,7 +377,7 @@ static int bpf_map_copy_value(struct bpf_map *map, void *key, void *value,
 	} else if (map->map_type == BPF_MAP_TYPE_QUEUE ||
 		   map->map_type == BPF_MAP_TYPE_STACK ||
 		   map->map_type == BPF_MAP_TYPE_BLOOM_FILTER) {
-		err = map->ops->map_peek_elem(map, value);
+		err = debug_peek_elem(map, value);
 	} else if (map->map_type == BPF_MAP_TYPE_STRUCT_OPS) {
 		/* struct_ops map requires directly updating "value" */
 		err = bpf_struct_ops_map_sys_lookup_elem(map, key, value);

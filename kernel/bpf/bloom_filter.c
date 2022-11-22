@@ -6,11 +6,12 @@
 #include <linux/btf.h>
 #include <linux/err.h>
 #include <linux/jhash.h>
+#include <linux/xxhash.h>
 #include <linux/random.h>
 #include <linux/btf_ids.h>
 
 #define BLOOM_CREATE_FLAG_MASK \
-	(BPF_F_NUMA_NODE | BPF_F_ZERO_SEED | BPF_F_ACCESS_MASK)
+	(BPF_F_NUMA_NODE | BPF_F_ZERO_SEED | BPF_F_ACCESS_MASK | BPF_F_FAST_HASH)
 
 struct bpf_bloom_filter {
 	struct bpf_map map;
@@ -27,16 +28,27 @@ struct bpf_bloom_filter {
 	unsigned long bitset[];
 };
 
+static inline u32 fast_hash(void *value, u32 value_size, u32 seed)
+{
+	if (value_size <= 240)
+		return xxh3_240(value, value_size, seed);
+	return xxh64(value, value_size, seed);
+}
+
 static u32 hash(struct bpf_bloom_filter *bloom, void *value,
 		u32 value_size, u32 index)
 {
 	u32 h;
 
-	if (bloom->aligned_u32_count)
-		h = jhash2(value, bloom->aligned_u32_count,
-			   bloom->hash_seed + index);
-	else
-		h = jhash(value, value_size, bloom->hash_seed + index);
+	if (bloom->map.map_flags & BPF_F_FAST_HASH) {
+		h = fast_hash(value, value_size, bloom->hash_seed + index);
+	} else {
+		if (bloom->aligned_u32_count)
+			h = jhash2(value, bloom->aligned_u32_count,
+					bloom->hash_seed + index);
+		else
+			h = jhash(value, value_size, bloom->hash_seed + index);
+	}
 
 	return h & bloom->bitset_mask;
 }

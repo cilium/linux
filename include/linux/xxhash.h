@@ -108,6 +108,25 @@ uint32_t xxh32(const void *input, size_t length, uint32_t seed);
 uint64_t xxh64(const void *input, size_t length, uint64_t seed);
 
 /**
+ * xxh3_240() - calculate the 64-bit hash of the input with a given seed.
+ *
+ * @input:  The data to hash.
+ * @length: The length of the data to hash.
+ * @seed:   The seed can be used to alter the result predictably.
+ *
+ * This function only supports inputs of length <= 240, as longer inputs would
+ * require vectorized instructions.
+ *
+ * Return:  The 64-bit hash of the data.
+ */
+uint64_t xxh3_240(const void *input, size_t length, uint64_t seed);
+u64 xxh3_1_to_3(const void *input, size_t n, u64 seed);
+u64 xxh3_4_to_8(const void *input, size_t len, u64 seed);
+u64 xxh3_9_to_16(const void* input, size_t len, u64 seed);
+u64 xxh3_17_to_128(const void *input, size_t len, u64 seed);
+u64 xxh3_129_to_240(const void* input, size_t len, u64 seed);
+
+/**
  * xxhash() - calculate wordsize hash of the input with a given seed
  * @input:  The data to hash.
  * @length: The length of the data to hash.
@@ -124,9 +143,9 @@ static inline unsigned long xxhash(const void *input, size_t length,
 				   uint64_t seed)
 {
 #if BITS_PER_LONG == 64
-       return xxh64(input, length, seed);
+	return xxh64(input, length, seed);
 #else
-       return xxh32(input, length, seed);
+	return xxh32(input, length, seed);
 #endif
 }
 
