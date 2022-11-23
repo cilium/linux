@@ -432,11 +432,6 @@ static inline u32 bpf_hash32(const void *key, u32 length, u32 initval)
        return xxh64(key, length, initval) >> 32;
 }
 
-static inline u64 bpf_hash64(const void *key, u32 length, u64 initval)
-{
-       return xxh64(key, length, initval);
-}
-
 static u32 tm_hash_rule(const struct wildcard_desc *desc,
 			const struct tm_table *table,
 			const struct wildcard_key *key)
