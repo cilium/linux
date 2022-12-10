@@ -15,7 +15,7 @@ struct {
 
 struct {
         __uint(type, BPF_MAP_TYPE_ARRAY);
-        __uint(max_entries, 1);
+        __uint(max_entries, 2);
         __type(key, __u32);
         __type(value, __u64);
 } udp_conn_sockets SEC(".maps");
@@ -27,12 +27,21 @@ struct {
 	__type(value, __u64);
 } sockmap SEC(".maps");
 
+struct {
+        __uint(type, BPF_MAP_TYPE_ARRAY);
+        __uint(max_entries, 10);
+        __type(key, __u32);
+        __type(value, int);
+} output SEC(".maps");
+
+
 SEC("cgroup/connect6")
 int sock_connect(struct bpf_sock_addr *ctx)
 {
 	int key = 0;
 	__u64 sock_cookie = 0;
 	__u32 keyc = 0;
+	__u32 keyc1 = 1;
 
 	if (ctx->family != AF_INET6 || ctx->user_family != AF_INET6)
 		return 1;
@@ -41,7 +50,7 @@ int sock_connect(struct bpf_sock_addr *ctx)
 	if (ctx->protocol == IPPROTO_TCP)
 		bpf_map_update_elem(&tcp_conn_sockets, &key, &sock_cookie, 0);
 	else if (ctx->protocol == IPPROTO_UDP)
-		bpf_map_update_elem(&udp_conn_sockets, &key, &sock_cookie, 0);
+		bpf_map_update_elem(&udp_conn_sockets, &keyc1, &sock_cookie, 0);
 	else
 		return 1;
 
@@ -105,6 +114,32 @@ int iter_tcp6(struct bpf_iter__tcp *ctx)
 
 	if (sock_cookie == *val) {
 		bpf_sock_destroy(sk_common);
+	}
+	
+	return 0;
+}
+
+SEC("iter/udp")
+int iter_udp6(struct bpf_iter__udp *ctx)
+{
+	struct seq_file *seq = ctx->meta->seq;
+	struct udp_sock *udp_sk = ctx->udp_sk;
+	struct sock *sk = (struct sock *) udp_sk;
+	__u64 sock_cookie = 0;
+	int key = 1;
+	__u64 *val;
+
+	if (sk == (void *)0)
+		return 0;
+
+	sock_cookie  = bpf_get_socket_cookie(sk);
+	val = bpf_map_lookup_elem(&udp_conn_sockets, &key);
+
+	if (val == (void *) 0)
+		return 0;
+
+	if (sock_cookie == *val) {
+		bpf_sock_destroy(sk);
 	}
 	
 	return 0;

@@ -11495,24 +11495,68 @@ bpf_sk_base_func_proto(enum bpf_func_id func_id)
 	return func;
 }
 
+struct sock_destroy_work {
+	struct sock *sk;
+	struct work_struct destroy;
+};
+
+static DEFINE_PER_CPU(struct sock_destroy_work, sock_destroy_workqueue);
+
+static void bpf_sock_destroy_fn(struct work_struct *work)
+{
+	struct sock_destroy_work *sd_work = container_of(work,
+			struct sock_destroy_work, destroy);
+	struct sock *sk = READ_ONCE(sd_work->sk);
+
+	sk = sd_work->sk;
+	// TODO: revert the diag_destroy API changes, we'll
+	// keep the existing locking behavior.
+	sk->sk_prot->diag_destroy(sk, ECONNABORTED, true);
+	sock_put(sk);
+}
+
+static int __init bpf_sock_destroy_workqueue_init(void)
+{
+	int cpu;
+	struct sock_destroy_work *work;
+
+	for_each_possible_cpu(cpu) {
+		work = per_cpu_ptr(&sock_destroy_workqueue, cpu);
+		INIT_WORK(&work->destroy, bpf_sock_destroy_fn);
+	}
+
+	return 0;
+}
+subsys_initcall(bpf_sock_destroy_workqueue_init);
+
 BPF_CALL_1(bpf_sock_destroy, struct sock *, sk)
 {
-	sk = sk_to_full_sk(sk);
+	struct sock_destroy_work *sd_work;
 
-	if (!sk || !sk_fullsock(sk))
-		return 0;
+	//sk = sk_to_full_sk(sk);
+
+	//if (!sk || !sk_fullsock(sk))
+	//	return -EINVAL;
 	if (!sk->sk_prot->diag_destroy)
 		return -EOPNOTSUPP;
 
-	/* Certain bpf contexts acquire sock lock already, so
-	 * diag destroy handlers will not try to acquire
-	 * the lock again.
-	 */
-	lockdep_sock_is_held(sk);
+	sd_work = this_cpu_ptr(&sock_destroy_workqueue);
+	if (work_pending(&sd_work->destroy))
+		return -EBUSY;
 
-	return sk->sk_prot->diag_destroy(sk, ECONNABORTED, false);
+	if (!refcount_inc_not_zero(&sk->sk_refcnt)) {
+		return -EINVAL;
+	}
+
+	WRITE_ONCE(sd_work->sk, sk);
+	if (!queue_work(system_wq, &sd_work->destroy)) {
+		sock_put(sk);
+		return -EBUSY;
+	}
+
+	return 0;
+
 }
-
 const struct bpf_func_proto bpf_sock_destroy_proto = {
 	.func		= bpf_sock_destroy,
 	.gpl_only	= false,
