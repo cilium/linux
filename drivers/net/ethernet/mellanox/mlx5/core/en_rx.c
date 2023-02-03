@@ -1564,6 +1564,73 @@ mlx5e_skb_from_cqe_linear(struct mlx5e_rq *rq, struct mlx5_cqe64 *cqe,
 	return skb;
 }
 
+static void
+mlx5e_fill_skb_data(struct sk_buff *skb, struct mlx5e_rq *rq, struct mlx5e_dma_info *di,
+		    u32 data_bcnt, u32 data_offset)
+{
+	net_prefetchw(skb->data);
+
+	while (data_bcnt) {
+		u32 pg_consumed_bytes = data_bcnt;
+		unsigned int truesize;
+
+		if (test_bit(MLX5E_RQ_STATE_SHAMPO, &rq->state))
+			truesize = pg_consumed_bytes;
+		else
+			truesize = ALIGN(pg_consumed_bytes, BIT(rq->mpwqe.log_stride_sz));
+
+		mlx5e_add_skb_frag(rq, skb, di, data_offset,
+				   pg_consumed_bytes, truesize);
+
+		data_bcnt -= pg_consumed_bytes;
+		data_offset = 0;
+		di++;
+	}
+}
+
+static struct sk_buff *
+mlx5e_skb_from_cqe_nonlinear2(struct mlx5e_rq *rq, struct mlx5e_wqe_frag_info *wi,
+			     u32 cqe_bcnt)
+{
+	struct mlx5e_rq_frag_info *frag_info = &rq->wqe.info.arr[0];
+	u16 rx_headroom = rq->buff.headroom;
+	struct mlx5e_dma_info *di = wi->di;
+	u32 frag_consumed_bytes;
+	struct sk_buff *skb;
+	void *va;
+
+	frag_consumed_bytes = min_t(u32, frag_info->frag_size, cqe_bcnt);
+	dma_sync_single_range_for_cpu(rq->pdev, di->addr, wi->offset,
+				      MLX5_SKB_FRAG_SZ(frag_consumed_bytes + rx_headroom), DMA_FROM_DEVICE);
+
+	va = page_address(di->page);
+	net_prefetchw(va);
+	net_prefetch(va + rx_headroom);
+	skb = mlx5e_build_linear_skb(rq, va, MLX5_SKB_FRAG_SZ(frag_consumed_bytes + rx_headroom), rx_headroom, frag_consumed_bytes, 0);
+	if (!skb)
+		return NULL;
+	page_ref_inc(di->page);
+	pr_debug("%p 1 copy %u rx_headroom %u cqe_bcnt %u frag_consumed_bytes %u wi->offset %u skb->head %p skb->data %p skb->tail %u\n", skb, frag_info->frag_size, rx_headroom, cqe_bcnt, frag_consumed_bytes, wi->offset, skb->head, skb->data, skb->tail);
+	cqe_bcnt -= frag_consumed_bytes;
+	frag_info++;
+	wi++;
+
+	while (cqe_bcnt) {
+		di = wi->di;
+
+		pr_debug("%p 2 copy %u cqe_bcnt %u wi->offset %u\n", skb, frag_info->frag_size, cqe_bcnt, wi->offset);
+		frag_consumed_bytes = min_t(u32, frag_info->frag_size, cqe_bcnt);
+		mlx5e_add_skb_frag(rq, skb, di, 0,
+				   frag_consumed_bytes, frag_consumed_bytes);
+
+		cqe_bcnt -= frag_consumed_bytes;
+		frag_info++;
+		wi++;
+	}
+
+	return skb;
+}
+
 static struct sk_buff *
 mlx5e_skb_from_cqe_nonlinear(struct mlx5e_rq *rq, struct mlx5_cqe64 *cqe,
 			     struct mlx5e_wqe_frag_info *wi, u32 cqe_bcnt)
@@ -1579,6 +1646,9 @@ mlx5e_skb_from_cqe_nonlinear(struct mlx5e_rq *rq, struct mlx5_cqe64 *cqe,
 	struct sk_buff *skb;
 	u32 truesize;
 	void *va;
+
+	/* use nonlinear2 for header split */
+	return mlx5e_skb_from_cqe_nonlinear2(rq, wi, cqe_bcnt);
 
 	va = page_address(di->page) + wi->offset;
 	frag_consumed_bytes = min_t(u32, frag_info->frag_size, cqe_bcnt);
@@ -1844,30 +1914,6 @@ const struct mlx5e_rx_handlers mlx5e_rx_handlers_rep = {
 	.handle_rx_cqe_mpwqe = mlx5e_handle_rx_cqe_mpwrq_rep,
 };
 #endif
-
-static void
-mlx5e_fill_skb_data(struct sk_buff *skb, struct mlx5e_rq *rq, struct mlx5e_dma_info *di,
-		    u32 data_bcnt, u32 data_offset)
-{
-	net_prefetchw(skb->data);
-
-	while (data_bcnt) {
-		u32 pg_consumed_bytes = min_t(u32, PAGE_SIZE - data_offset, data_bcnt);
-		unsigned int truesize;
-
-		if (test_bit(MLX5E_RQ_STATE_SHAMPO, &rq->state))
-			truesize = pg_consumed_bytes;
-		else
-			truesize = ALIGN(pg_consumed_bytes, BIT(rq->mpwqe.log_stride_sz));
-
-		mlx5e_add_skb_frag(rq, skb, di, data_offset,
-				   pg_consumed_bytes, truesize);
-
-		data_bcnt -= pg_consumed_bytes;
-		data_offset = 0;
-		di++;
-	}
-}
 
 static struct sk_buff *
 mlx5e_skb_from_cqe_mpwrq_nonlinear(struct mlx5e_rq *rq, struct mlx5e_mpw_info *wi,

@@ -408,7 +408,7 @@ static int mlx5e_max_nonlinear_mtu(int first_frag_size, int frag_size, bool xdp)
 	return first_frag_size + (MLX5E_MAX_RX_FRAGS - 2) * frag_size + PAGE_SIZE;
 }
 
-#define DEFAULT_FRAG_SIZE (2048)
+#define DEFAULT_FRAG_SIZE (4096)
 
 static int mlx5e_build_rq_frags_info(struct mlx5_core_dev *mdev,
 				     struct mlx5e_params *params,
@@ -457,7 +457,11 @@ static int mlx5e_build_rq_frags_info(struct mlx5_core_dev *mdev,
 		}
 	}
 
-	i = 0;
+	info->arr[0].frag_size = 86;
+	info->arr[0].frag_stride = roundup_pow_of_two(PAGE_SIZE);
+	buf_size += 86;
+	pr_debug("preparing total headers\n");
+	i = 1;
 	while (buf_size < byte_count) {
 		int frag_size = byte_count - buf_size;
 
