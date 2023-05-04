@@ -6,12 +6,12 @@
 #include <linux/filter.h>
 
 static int bpf_mprog_replace(struct bpf_mprog_entry *entry,
-			     struct bpf_prog *nprog,
+			     struct bpf_prog *nprog, u32 nid,
 			     struct bpf_prog *rprog, u32 aflags)
 {
 	struct bpf_prog_item *item;
 	struct bpf_prog *oprog;
-	u32 iflags;
+	u32 iflags, id;
 	int i;
 
 	for (i = 0; i < bpf_mprog_max(); i++) {
@@ -22,6 +22,9 @@ static int bpf_mprog_replace(struct bpf_mprog_entry *entry,
 		if (oprog != rprog)
 			continue;
 		iflags = item->flags;
+		id = item->id;
+		if (id != nid)
+			return -EBUSY;
 		if ((iflags & BPF_F_FIRST) !=
 		    (aflags & BPF_F_FIRST)) {
 			iflags = bpf_mprog_flags(iflags, aflags,
@@ -38,16 +41,16 @@ static int bpf_mprog_replace(struct bpf_mprog_entry *entry,
 			    rprog != bpf_mprog_last(entry))
 				return -EACCES;
 		}
-		WRITE_ONCE(item->prog, nprog);
-		item->flags = iflags;
-		bpf_prog_put(oprog);
+		bpf_mprog_write(item, nprog, iflags, id);
+		if (!id)
+			bpf_prog_put(oprog);
 		return 0;
 	}
 	return -ENOENT;
 }
 
 static int bpf_mprog_head_tail(struct bpf_mprog_entry *entry,
-			       struct bpf_prog *nprog,
+			       struct bpf_prog *nprog, u32 nid,
 			       struct bpf_prog *rprog, u32 aflags)
 {
 	struct bpf_prog_item *item;
@@ -67,8 +70,8 @@ static int bpf_mprog_head_tail(struct bpf_mprog_entry *entry,
 				return -EBUSY;
 			bpf_mprog_entry_clear(peer);
 			item = &peer->items[0];
-			WRITE_ONCE(item->prog, nprog);
-			item->flags = BPF_F_FIRST | BPF_F_LAST;
+			bpf_mprog_write(item, nprog,
+					BPF_F_FIRST | BPF_F_LAST, nid);
 			return BPF_MPROG_SWAP;
 		}
 		if (aflags & BPF_F_BEFORE) {
@@ -80,8 +83,7 @@ static int bpf_mprog_head_tail(struct bpf_mprog_entry *entry,
 			return -ENOSPC;
 		bpf_mprog_entry_clear(peer);
 		item = &peer->items[0];
-		WRITE_ONCE(item->prog, nprog);
-		item->flags = BPF_F_FIRST;
+		bpf_mprog_write(item, nprog, BPF_F_FIRST, nid);
 		memcpy(&peer->items[1], &entry->items[0],
 		       items * sizeof(*item));
 		return BPF_MPROG_SWAP;
@@ -102,8 +104,7 @@ static int bpf_mprog_head_tail(struct bpf_mprog_entry *entry,
 		}
 		bpf_mprog_entry_clear(peer);
 		item = &peer->items[items];
-		WRITE_ONCE(item->prog, nprog);
-		item->flags = BPF_F_LAST;
+		bpf_mprog_write(item, nprog, BPF_F_LAST, nid);
 		memcpy(&peer->items[0], &entry->items[0],
 		       items * sizeof(*item));
 		return BPF_MPROG_SWAP;
@@ -112,14 +113,14 @@ static int bpf_mprog_head_tail(struct bpf_mprog_entry *entry,
 }
 
 static int bpf_mprog_add(struct bpf_mprog_entry *entry,
-			 struct bpf_prog *nprog,
+			 struct bpf_prog *nprog, u32 nid,
 			 struct bpf_prog *rprog, u32 aflags)
 {
 	bool found = false;
 	struct bpf_prog_item *item, *tmp;
 	struct bpf_mprog_entry *peer;
 	struct bpf_prog *oprog;
-	u32 iflags, items;
+	u32 iflags, id, items;
 	int i, j;
 
 	items = bpf_mprog_total(entry);
@@ -131,23 +132,24 @@ static int bpf_mprog_add(struct bpf_mprog_entry *entry,
 		item = &entry->items[i];
 		tmp  = &peer->items[j];
 		iflags = item->flags;
+		id = item->id;
 		oprog = READ_ONCE(item->prog);
 		if (!oprog) {
 			if (i == j) {
 				if (i > 0) {
 					item = &entry->items[i - 1];
 					iflags = item->flags;
+					id = item->id;
 					oprog = READ_ONCE(item->prog);
 					if (iflags & BPF_F_LAST) {
 						if (iflags & BPF_F_FIRST)
 							return -EBUSY;
-						WRITE_ONCE(tmp->prog, oprog);
-						tmp->flags = iflags;
+						bpf_mprog_write(tmp, oprog,
+								iflags, id);
 						tmp = &peer->items[--j];
 					}
 				}
-				WRITE_ONCE(tmp->prog, nprog);
-				tmp->flags = 0;
+				bpf_mprog_write(tmp, nprog, 0, nid);
 			}
 			break;
 		}
@@ -158,23 +160,21 @@ static int bpf_mprog_add(struct bpf_mprog_entry *entry,
 			if (aflags & BPF_F_BEFORE) {
 				if (iflags & BPF_F_FIRST)
 					return -EBUSY;
-				WRITE_ONCE(tmp->prog, nprog);
+				bpf_mprog_write(tmp, nprog, 0, nid);
 				tmp = &peer->items[++j];
 				goto next;
 			}
 			if (aflags & BPF_F_AFTER) {
 				if (iflags & BPF_F_LAST)
 					return -EBUSY;
-				WRITE_ONCE(tmp->prog, oprog);
-				tmp->flags = iflags;
+				bpf_mprog_write(tmp, oprog, iflags, id);
 				tmp = &peer->items[++j];
-				WRITE_ONCE(tmp->prog, nprog);
+				bpf_mprog_write(tmp, nprog, 0, nid);
 				continue;
 			}
 		}
 next:
-		WRITE_ONCE(tmp->prog, oprog);
-		tmp->flags = iflags;
+		bpf_mprog_write(tmp, oprog, iflags, id);
 	}
 	if (rprog && !found)
 		return -ENOENT;
@@ -182,14 +182,13 @@ next:
 }
 
 static int bpf_mprog_del(struct bpf_mprog_entry *entry,
-			 struct bpf_prog *dprog,
+			 struct bpf_prog *dprog, u32 did,
 			 struct bpf_prog *rprog, u32 dflags)
 {
 	struct bpf_prog_item *item, *tmp;
 	struct bpf_mprog_entry *peer;
 	struct bpf_prog *oprog;
 	int i, j, ret;
-	u32 iflags;
 
 	if (dflags & BPF_F_FIRST) {
 		oprog = bpf_mprog_first(entry);
@@ -205,7 +204,6 @@ static int bpf_mprog_del(struct bpf_mprog_entry *entry,
 	}
 	for (i = 0; i < bpf_mprog_max(); i++) {
 		item = &entry->items[i];
-		iflags = item->flags;
 		oprog = READ_ONCE(item->prog);
 		if (!oprog)
 			break;
@@ -238,16 +236,17 @@ static int bpf_mprog_del(struct bpf_mprog_entry *entry,
 	for (i = 0, j = 0; i < bpf_mprog_max(); i++) {
 		item = &entry->items[i];
 		tmp  = &peer->items[j];
-		iflags = item->flags;
 		oprog = READ_ONCE(item->prog);
 		if (!oprog)
 			break;
 		if (oprog != dprog) {
-			WRITE_ONCE(tmp->prog, oprog);
-			tmp->flags = iflags;
+			bpf_mprog_write(tmp, oprog, item->flags, item->id);
 			j++;
 		} else {
-			bpf_mprog_mark_ref(entry, dprog);
+			if (item->id != did)
+				return -EBUSY;
+			if (!item->id)
+				bpf_mprog_mark_ref(entry, dprog);
 			ret = BPF_MPROG_SWAP;
 		}
 	}
@@ -257,7 +256,7 @@ static int bpf_mprog_del(struct bpf_mprog_entry *entry,
 }
 
 int bpf_mprog_attach(struct bpf_mprog_entry *entry, struct bpf_prog *nprog,
-		     u32 expected_revision, u32 aflags, u32 relobj)
+		     u32 nid, u32 expected_revision, u32 aflags, u32 relobj)
 {
 	struct bpf_prog *rprog;
 	int ret;
@@ -275,11 +274,11 @@ int bpf_mprog_attach(struct bpf_mprog_entry *entry, struct bpf_prog *nprog,
 		goto out;
 	}
 	if (aflags & BPF_F_REPLACE)
-		ret = bpf_mprog_replace(entry, nprog, rprog, aflags);
+		ret = bpf_mprog_replace(entry, nprog, nid, rprog, aflags);
 	else if (aflags & (BPF_F_FIRST | BPF_F_LAST))
-		ret = bpf_mprog_head_tail(entry, nprog, rprog, aflags);
+		ret = bpf_mprog_head_tail(entry, nprog, nid, rprog, aflags);
 	else
-		ret = bpf_mprog_add(entry, nprog, rprog, aflags);
+		ret = bpf_mprog_add(entry, nprog, nid, rprog, aflags);
 out:
 	if (rprog)
 		bpf_prog_put(rprog);
@@ -287,7 +286,7 @@ out:
 }
 
 int bpf_mprog_detach(struct bpf_mprog_entry *entry, struct bpf_prog *dprog,
-		     u32 expected_revision, u32 dflags, u32 relobj)
+		     u32 did, u32 expected_revision, u32 dflags, u32 relobj)
 {
 	struct bpf_prog *rprog;
 	int ret;
@@ -304,7 +303,7 @@ int bpf_mprog_detach(struct bpf_mprog_entry *entry, struct bpf_prog *dprog,
 		ret = -EINVAL;
 		goto out;
 	}
-	ret = bpf_mprog_del(entry, dprog, rprog, dflags);
+	ret = bpf_mprog_del(entry, dprog, did, rprog, dflags);
 out:
 	if (rprog)
 		bpf_prog_put(rprog);
@@ -349,16 +348,15 @@ int bpf_mprog_query(const union bpf_attr *attr, union bpf_attr __user *uattr,
 		id = prog->aux->id;
 		if (copy_to_user(uprog_id + i, &id, sizeof(id)))
 			return -EFAULT;
-		flags = item->flags;
-		if (uprog_af &&
-		    copy_to_user(uprog_af + i, &flags, sizeof(flags)))
-			return -EFAULT;
-		id = 0;
+		id = item->id;
 		if (ulink_id &&
 		    copy_to_user(ulink_id + i, &id, sizeof(id)))
 			return -EFAULT;
-		flags = 0;
-		if (ulink_af &&
+		flags = item->flags;
+		if (uprog_af && !id &&
+		    copy_to_user(uprog_af + i, &flags, sizeof(flags)))
+			return -EFAULT;
+		if (ulink_af && id &&
 		    copy_to_user(ulink_af + i, &flags, sizeof(flags)))
 			return -EFAULT;
 		if (i + 1 == count)

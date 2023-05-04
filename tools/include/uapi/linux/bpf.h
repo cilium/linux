@@ -1054,7 +1054,7 @@ enum bpf_link_type {
 	BPF_LINK_TYPE_KPROBE_MULTI = 8,
 	BPF_LINK_TYPE_STRUCT_OPS = 9,
 	BPF_LINK_TYPE_NETFILTER = 10,
-
+	BPF_LINK_TYPE_TCX = 11,
 	MAX_BPF_LINK_TYPE,
 };
 
@@ -1591,6 +1591,13 @@ union bpf_attr {
 				__s32		priority;
 				__u32		flags;
 			} netfilter;
+			struct {
+				union {
+					__u32	relative_fd;
+					__u32	relative_id;
+				};
+				__u32		expected_revision;
+			} tcx;
 		};
 	} link_create;
 

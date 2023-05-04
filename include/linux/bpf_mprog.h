@@ -12,6 +12,7 @@
 struct bpf_prog_item {
 	struct bpf_prog *prog;
 	u32 flags;
+	u32 id;
 };
 
 struct bpf_mprog_entry {
@@ -149,6 +150,14 @@ static inline u64 bpf_mprog_revision(struct bpf_mprog_entry *entry)
 	return atomic_read(&entry->parent->revision);
 }
 
+static inline void bpf_mprog_write(struct bpf_prog_item *item,
+				   struct bpf_prog *prog, u32 flags, u32 id)
+{
+	WRITE_ONCE(item->prog, prog);
+	item->flags = flags;
+	item->id = id;
+}
+
 static inline u32 bpf_mprog_total(struct bpf_mprog_entry *entry)
 {
 	const struct bpf_prog_item *item;
@@ -185,9 +194,9 @@ bpf_mprog_relative_prog(u32 relobj, u32 flags, enum bpf_prog_type type)
 }
 
 int bpf_mprog_attach(struct bpf_mprog_entry *entry, struct bpf_prog *nprog,
-		     u32 expected_revision, u32 aflags, u32 relobj);
+		     u32 nid, u32 expected_revision, u32 aflags, u32 relobj);
 int bpf_mprog_detach(struct bpf_mprog_entry *entry, struct bpf_prog *dprog,
-		     u32 expected_revision, u32 dflags, u32 relobj);
+		     u32 did, u32 expected_revision, u32 dflags, u32 relobj);
 
 int bpf_mprog_query(const union bpf_attr *attr, union bpf_attr __user *uattr,
 		    struct bpf_mprog_entry *entry);
