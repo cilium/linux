@@ -22,6 +22,20 @@ static __u32 id_from_prog_fd(int fd)
 	return prog_info.id;
 }
 
+static __u32 id_from_link_fd(int fd)
+{
+	struct bpf_link_info link_info = {};
+	__u32 link_info_len = sizeof(link_info);
+	int err;
+
+	err = bpf_link_get_info_by_fd(fd, &link_info, &link_info_len);
+	if (!ASSERT_OK(err, "id_from_link_fd"))
+		return 0;
+
+	ASSERT_NEQ(link_info.id, 0, "link_info.id");
+	return link_info.id;
+}
+
 static void __assert_mprog_count(int target, int expected, bool miniq)
 {
 	__u32 count = 0, attach_flags = 0;
@@ -1487,4 +1501,137 @@ void serial_test_tc_link_opts_invalid(void)
 {
 	test_tc_link_opts_invalid_target(BPF_TCX_INGRESS);
 	test_tc_link_opts_invalid_target(BPF_TCX_EGRESS);
+}
+
+/* Test:
+ *
+ * Basic test which attaches a link to ingress/egress, validates
+ * that the link got attached, runs traffic through the programs,
+ * validates that traffic has been seen, and detaches everything
+ * again. Links are attached without special flags.
+ */
+void serial_test_tc_link_basic(void)
+{
+	DECLARE_LIBBPF_OPTS(bpf_prog_query_opts,  optq);
+	struct bpf_link_info link_info;
+	__u32 link_info_len = sizeof(link_info);
+	__u32 fd1, fd2, pid1, pid2, lid1, lid2;
+	struct test_tc_link *skel;
+	struct bpf_link *link;
+	__u32 prog_ids[2];
+	__u32 link_ids[2];
+	int err;
+
+	skel = test_tc_link__open_and_load();
+	if (!ASSERT_OK_PTR(skel, "skel_load"))
+		goto cleanup;
+
+	fd1 = bpf_program__fd(skel->progs.tc1);
+	fd2 = bpf_program__fd(skel->progs.tc2);
+
+	pid1 = id_from_prog_fd(fd1);
+	pid2 = id_from_prog_fd(fd2);
+
+	ASSERT_NEQ(pid1, pid2, "prog_ids_1_2");
+
+	assert_mprog_count(BPF_TCX_INGRESS, 0);
+	assert_mprog_count(BPF_TCX_EGRESS, 0);
+
+	ASSERT_EQ(skel->bss->seen_tc1, false, "seen_tc1");
+	ASSERT_EQ(skel->bss->seen_tc2, false, "seen_tc2");
+
+	link = bpf_program__attach_tcx(skel->progs.tc1, loopback, 0, 0);
+	if (!ASSERT_OK_PTR(link, "link_attach"))
+		goto cleanup;
+	skel->links.tc1 = link;
+
+	assert_mprog_count(BPF_TCX_INGRESS, 1);
+	assert_mprog_count(BPF_TCX_EGRESS, 0);
+
+	ASSERT_OK(system(ping_cmd), ping_cmd);
+
+	ASSERT_EQ(skel->bss->seen_tc1, true, "seen_tc1");
+	ASSERT_EQ(skel->bss->seen_tc2, false, "seen_tc2");
+
+	skel->bss->seen_tc1 = false;
+	skel->bss->seen_tc2 = false;
+
+	link = bpf_program__attach_tcx(skel->progs.tc2, loopback, 0, 0);
+	if (!ASSERT_OK_PTR(link, "link_attach"))
+		goto cleanup;
+	skel->links.tc2 = link;
+
+	assert_mprog_count(BPF_TCX_INGRESS, 1);
+	assert_mprog_count(BPF_TCX_EGRESS, 1);
+
+	lid1 = id_from_link_fd(bpf_link__fd(skel->links.tc1));
+	lid2 = id_from_link_fd(bpf_link__fd(skel->links.tc2));
+
+	ASSERT_NEQ(lid1, lid2, "link_ids_1_2");
+
+	memset(prog_ids, 0, sizeof(prog_ids));
+	memset(link_ids, 0, sizeof(link_ids));
+	optq.prog_ids = prog_ids;
+	optq.link_ids = link_ids;
+	optq.count = ARRAY_SIZE(prog_ids);
+
+	err = bpf_prog_query_opts(loopback, BPF_TCX_INGRESS, &optq);
+	if (!ASSERT_OK(err, "prog_query"))
+		goto cleanup;
+
+	ASSERT_EQ(optq.count, 1, "count");
+	ASSERT_EQ(optq.revision, 2, "revision");
+	ASSERT_EQ(optq.prog_ids[0], pid1, "prog_ids[0]");
+	ASSERT_EQ(optq.prog_ids[1], 0, "prog_ids[1]");
+	ASSERT_EQ(optq.link_ids[0], lid1, "link_ids[0]");
+	ASSERT_EQ(optq.link_ids[1], 0, "link_ids[1]");
+
+	memset(prog_ids, 0, sizeof(prog_ids));
+	memset(link_ids, 0, sizeof(link_ids));
+	optq.prog_ids = prog_ids;
+	optq.link_ids = link_ids;
+	optq.count = ARRAY_SIZE(prog_ids);
+
+	err = bpf_prog_query_opts(loopback, BPF_TCX_EGRESS, &optq);
+	if (!ASSERT_OK(err, "prog_query"))
+		goto cleanup;
+
+	ASSERT_EQ(optq.count, 1, "count");
+	ASSERT_EQ(optq.revision, 2, "revision");
+	ASSERT_EQ(optq.prog_ids[0], pid2, "prog_ids[0]");
+	ASSERT_EQ(optq.prog_ids[1], 0, "prog_ids[1]");
+	ASSERT_EQ(optq.link_ids[0], lid2, "link_ids[0]");
+	ASSERT_EQ(optq.link_ids[1], 0, "link_ids[1]");
+
+	ASSERT_OK(system(ping_cmd), ping_cmd);
+
+	ASSERT_EQ(skel->bss->seen_tc1, true, "seen_tc1");
+	ASSERT_EQ(skel->bss->seen_tc2, true, "seen_tc2");
+
+	memset(&link_info, 0, sizeof(link_info));
+	err = bpf_link_get_info_by_fd(bpf_link__fd(skel->links.tc1),
+				      &link_info, &link_info_len);
+	ASSERT_OK(err, "id_from_link_fd");
+
+	ASSERT_EQ(link_info.type, BPF_LINK_TYPE_TCX, "link_type");
+	ASSERT_EQ(link_info.prog_id, pid1, "link_prog_id");
+	ASSERT_EQ(link_info.tcx.ifindex, loopback, "link_ifindex");
+	ASSERT_EQ(link_info.tcx.attach_type, BPF_TCX_INGRESS, "link_attach_type");
+	ASSERT_EQ(link_info.tcx.flags, 0, "link_flags");
+
+	memset(&link_info, 0, sizeof(link_info));
+	err = bpf_link_get_info_by_fd(bpf_link__fd(skel->links.tc2),
+				      &link_info, &link_info_len);
+	ASSERT_OK(err, "id_from_link_fd");
+
+	ASSERT_EQ(link_info.type, BPF_LINK_TYPE_TCX, "link_type");
+	ASSERT_EQ(link_info.prog_id, pid2, "link_prog_id");
+	ASSERT_EQ(link_info.tcx.ifindex, loopback, "link_ifindex");
+	ASSERT_EQ(link_info.tcx.attach_type, BPF_TCX_EGRESS, "link_attach_type");
+	ASSERT_EQ(link_info.tcx.flags, 0, "link_flags");
+cleanup:
+	test_tc_link__destroy(skel);
+
+	assert_mprog_count(BPF_TCX_INGRESS, 0);
+	assert_mprog_count(BPF_TCX_EGRESS, 0);
 }
