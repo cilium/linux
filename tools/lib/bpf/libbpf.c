@@ -11566,11 +11566,10 @@ static int attach_lsm(const struct bpf_program *prog, long cookie, struct bpf_li
 }
 
 static struct bpf_link *
-bpf_program__attach_fd(const struct bpf_program *prog, int target_fd, int btf_id,
-		       const char *target_name)
+bpf_program__attach_fd_opts(const struct bpf_program *prog,
+			    const struct bpf_link_create_opts *opts,
+			    int target_fd, const char *target_name)
 {
-	DECLARE_LIBBPF_OPTS(bpf_link_create_opts, opts,
-			    .target_btf_id = btf_id);
 	enum bpf_attach_type attach_type;
 	char errmsg[STRERR_BUFSIZE];
 	struct bpf_link *link;
@@ -11588,7 +11587,7 @@ bpf_program__attach_fd(const struct bpf_program *prog, int target_fd, int btf_id
 	link->detach = &bpf_link__detach_fd;
 
 	attach_type = bpf_program__expected_attach_type(prog);
-	link_fd = bpf_link_create(prog_fd, target_fd, attach_type, &opts);
+	link_fd = bpf_link_create(prog_fd, target_fd, attach_type, opts);
 	if (link_fd < 0) {
 		link_fd = -errno;
 		free(link);
@@ -11599,6 +11598,16 @@ bpf_program__attach_fd(const struct bpf_program *prog, int target_fd, int btf_id
 	}
 	link->fd = link_fd;
 	return link;
+}
+
+static struct bpf_link *
+bpf_program__attach_fd(const struct bpf_program *prog, int target_fd, int btf_id,
+		       const char *target_name)
+{
+	DECLARE_LIBBPF_OPTS(bpf_link_create_opts, opts,
+			    .target_btf_id = btf_id);
+
+	return bpf_program__attach_fd_opts(prog, &opts, target_fd, target_name);
 }
 
 struct bpf_link *
@@ -11617,6 +11626,29 @@ struct bpf_link *bpf_program__attach_xdp(const struct bpf_program *prog, int ifi
 {
 	/* target_fd/target_ifindex use the same field in LINK_CREATE */
 	return bpf_program__attach_fd(prog, ifindex, 0, "xdp");
+}
+
+struct bpf_link *
+bpf_program__attach_tcx_revision(const struct bpf_program *prog, int ifindex,
+				 __u32 flags, __u32 relative_object,
+				 __u32 expected_revision)
+{
+	DECLARE_LIBBPF_OPTS(bpf_link_create_opts, opts,
+		.tcx.expected_revision = expected_revision,
+		.tcx.relative_fd = relative_object,
+		.flags = flags,
+	);
+
+	/* target_fd/target_ifindex use the same field in LINK_CREATE */
+	return bpf_program__attach_fd_opts(prog, &opts, ifindex, "tc");
+}
+
+struct bpf_link *
+bpf_program__attach_tcx(const struct bpf_program *prog, int ifindex,
+			__u32 flags, __u32 relative_object)
+{
+	return bpf_program__attach_tcx_revision(prog, ifindex, flags,
+						relative_object, 0);
 }
 
 struct bpf_link *bpf_program__attach_freplace(const struct bpf_program *prog,

@@ -715,6 +715,13 @@ bpf_program__attach_netns(const struct bpf_program *prog, int netns_fd);
 LIBBPF_API struct bpf_link *
 bpf_program__attach_xdp(const struct bpf_program *prog, int ifindex);
 LIBBPF_API struct bpf_link *
+bpf_program__attach_tcx(const struct bpf_program *prog, int ifindex,
+			__u32 flags, __u32 relative_object);
+LIBBPF_API struct bpf_link *
+bpf_program__attach_tcx_revision(const struct bpf_program *prog, int ifindex,
+				 __u32 flags, __u32 relative_object,
+				 __u32 expected_revision);
+LIBBPF_API struct bpf_link *
 bpf_program__attach_freplace(const struct bpf_program *prog,
 			     int target_fd, const char *attach_func_name);
 
