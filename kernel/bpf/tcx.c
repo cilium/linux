@@ -198,6 +198,51 @@ out:
 	rtnl_unlock();
 }
 
+static int tcx_link_update(struct bpf_link *l, struct bpf_prog *nprog,
+			   struct bpf_prog *oprog)
+{
+	struct tcx_link *link = container_of(l, struct tcx_link, link);
+	bool ingress = link->location == BPF_TCX_INGRESS;
+	struct net_device *dev = link->dev;
+	struct bpf_mprog_entry *entry;
+	int ret = 0;
+
+	rtnl_lock();
+	if (!link->dev) {
+		ret = -ENOLINK;
+		goto out;
+	}
+	if (oprog && l->prog != oprog) {
+		ret = -EPERM;
+		goto out;
+	}
+	oprog = l->prog;
+	if (oprog == nprog) {
+		bpf_prog_put(nprog);
+		goto out;
+	}
+	entry = dev_tcx_entry_fetch(dev, ingress);
+	if (!entry) {
+		ret = -ENOENT;
+		goto out;
+	}
+	ret = bpf_mprog_attach(entry, nprog, l->id, 0,
+			       BPF_F_REPLACE | BPF_F_ID | link->flags,
+			       l->prog->aux->id);
+	if (ret >= 0) {
+		if (ret == BPF_MPROG_SWAP)
+			tcx_entry_update(dev, bpf_mprog_peer(entry), ingress);
+		bpf_mprog_commit(entry);
+		tcx_skeys_inc(ingress);
+		oprog = xchg(&l->prog, nprog);
+		bpf_prog_put(oprog);
+		ret = 0;
+	}
+out:
+	rtnl_unlock();
+	return ret;
+}
+
 static void tcx_link_dealloc(struct bpf_link *l)
 {
 	struct tcx_link *link = container_of(l, struct tcx_link, link);
@@ -208,6 +253,7 @@ static void tcx_link_dealloc(struct bpf_link *l)
 static const struct bpf_link_ops tcx_link_lops = {
 	.release	= tcx_link_release,
 	.dealloc	= tcx_link_dealloc,
+	.update_prog	= tcx_link_update,
 };
 
 int tcx_link_attach(const union bpf_attr *attr, struct bpf_prog *prog)
