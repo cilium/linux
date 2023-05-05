@@ -250,10 +250,46 @@ static void tcx_link_dealloc(struct bpf_link *l)
 	kfree(link);
 }
 
+static void tcx_link_fdinfo(const struct bpf_link *l, struct seq_file *seq)
+{
+	struct tcx_link *link = container_of(l, struct tcx_link, link);
+	u32 ifindex = 0;
+
+	rtnl_lock();
+	if (link->dev)
+		ifindex = link->dev->ifindex;
+	rtnl_unlock();
+
+	seq_printf(seq, "ifindex:\t%u\n", ifindex);
+	seq_printf(seq, "attach_type:\t%u (%s)\n",
+		   link->location,
+		   link->location == BPF_TCX_INGRESS ? "ingress" : "egress");
+	seq_printf(seq, "flags:\t%u\n", link->flags);
+}
+
+static int tcx_link_fill_info(const struct bpf_link *l,
+			      struct bpf_link_info *info)
+{
+	struct tcx_link *link = container_of(l, struct tcx_link, link);
+	u32 ifindex = 0;
+
+	rtnl_lock();
+	if (link->dev)
+		ifindex = link->dev->ifindex;
+	rtnl_unlock();
+
+	info->tcx.ifindex = ifindex;
+	info->tcx.attach_type = link->location;
+	info->tcx.flags = link->flags;
+	return 0;
+}
+
 static const struct bpf_link_ops tcx_link_lops = {
 	.release	= tcx_link_release,
 	.dealloc	= tcx_link_dealloc,
 	.update_prog	= tcx_link_update,
+	.show_fdinfo	= tcx_link_fdinfo,
+	.fill_link_info	= tcx_link_fill_info,
 };
 
 int tcx_link_attach(const union bpf_attr *attr, struct bpf_prog *prog)

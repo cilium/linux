@@ -6467,6 +6467,11 @@ struct bpf_link_info {
 			__s32 priority;
 			__u32 flags;
 		} netfilter;
+		struct {
+			__u32 ifindex;
+			__u32 attach_type;
+			__u32 flags;
+		} tcx;
 	};
 } __attribute__((aligned(8)));
 
