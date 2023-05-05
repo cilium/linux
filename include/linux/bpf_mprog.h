@@ -28,6 +28,11 @@ struct bpf_mprog_entry_pair {
 	atomic_t			revision;
 };
 
+struct bpf_tuple {
+	struct bpf_prog *prog;
+	struct bpf_link *link;
+};
+
 static inline struct bpf_mprog_entry *
 bpf_mprog_peer(const struct bpf_mprog_entry *entry)
 {
@@ -68,7 +73,9 @@ static inline bool bpf_mprog_flags_ok(u32 flags, bool attach)
 {
 	if ((flags & BPF_F_REPLACE) && !attach)
 		return false;
-	if ((flags & BPF_F_REPLACE) && (flags & (BPF_F_BEFORE | BPF_F_AFTER)))
+	if ((flags & BPF_F_REPLACE) && (flags & (BPF_F_BEFORE | BPF_F_AFTER | BPF_F_LINK)))
+		return false;
+	if ((flags & BPF_F_LINK) && !(flags & (BPF_F_BEFORE | BPF_F_AFTER)))
 		return false;
 	if ((flags & BPF_F_FIRST) && (flags & BPF_F_AFTER))
 		return false;
@@ -172,25 +179,58 @@ static inline u32 bpf_mprog_total(struct bpf_mprog_entry *entry)
 	return num;
 }
 
-static inline struct bpf_prog *
-bpf_mprog_relative_prog(u32 relobj, u32 flags, enum bpf_prog_type type)
+static inline int
+bpf_mprog_tuple_relative(struct bpf_tuple *tuple,
+			 u32 relobj, u32 flags,
+			 enum bpf_prog_type type)
 {
-	struct bpf_prog *tmp;
+	struct bpf_prog *ptmp;
+	struct bpf_link *ltmp;
 
-	if (flags & BPF_F_ID) {
-		tmp = bpf_prog_by_id(relobj);
+	memset(tuple, 0, sizeof(*tuple));
+	if (flags & BPF_F_LINK) {
+		if (flags & BPF_F_ID) {
+			ltmp = bpf_link_by_id(relobj);
+		} else {
+			if (!relobj)
+				return -EINVAL;
+			ltmp = bpf_link_get_from_fd(relobj);
+		}
+		if (IS_ERR(ltmp))
+			return PTR_ERR(ltmp);
+		if (ltmp->prog->type != type) {
+			bpf_link_put(ltmp);
+			return -EINVAL;
+		}
+		tuple->link = ltmp;
+		tuple->prog = ltmp->prog;
 	} else {
-		if (!relobj)
-			return NULL;
-		tmp = bpf_prog_get(relobj);
+		if (flags & BPF_F_ID) {
+			ptmp = bpf_prog_by_id(relobj);
+		} else {
+			if (!relobj)
+				return 0;
+			ptmp = bpf_prog_get(relobj);
+		}
+		if (IS_ERR(ptmp))
+			return PTR_ERR(ptmp);
+		if (ptmp->type != type) {
+			bpf_prog_put(ptmp);
+			return -EINVAL;
+		}
+		tuple->link = NULL;
+		tuple->prog = ptmp;
 	}
-	if (IS_ERR(tmp))
-		return ERR_CAST(tmp);
-	if (tmp->type != type) {
-		bpf_prog_put(tmp);
-		return ERR_PTR(-EINVAL);
-	}
-	return tmp;
+	return 0;
+}
+
+static inline void
+bpf_mprog_tuple_put(struct bpf_tuple *tuple)
+{
+	if (tuple->link)
+		bpf_link_put(tuple->link);
+	else if (tuple->prog)
+		bpf_prog_put(tuple->prog);
 }
 
 int bpf_mprog_attach(struct bpf_mprog_entry *entry, struct bpf_prog *nprog,

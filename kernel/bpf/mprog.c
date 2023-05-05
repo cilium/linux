@@ -51,7 +51,8 @@ static int bpf_mprog_replace(struct bpf_mprog_entry *entry,
 
 static int bpf_mprog_head_tail(struct bpf_mprog_entry *entry,
 			       struct bpf_prog *nprog, u32 nid,
-			       struct bpf_prog *rprog, u32 aflags)
+			       struct bpf_prog *rprog, u32 rid,
+			       u32 aflags)
 {
 	struct bpf_prog_item *item;
 	struct bpf_mprog_entry *peer;
@@ -76,7 +77,8 @@ static int bpf_mprog_head_tail(struct bpf_mprog_entry *entry,
 		}
 		if (aflags & BPF_F_BEFORE) {
 			oprog = READ_ONCE(item->prog);
-			if (oprog != rprog)
+			if (oprog != rprog ||
+			    (rid && item->id != rid))
 				return -EBUSY;
 		}
 		if (items >= bpf_mprog_max())
@@ -96,7 +98,8 @@ static int bpf_mprog_head_tail(struct bpf_mprog_entry *entry,
 				return -EBUSY;
 			if (aflags & BPF_F_AFTER) {
 				oprog = READ_ONCE(item->prog);
-				if (oprog != rprog)
+				if (oprog != rprog ||
+				    (rid && item->id != rid))
 					return -EBUSY;
 			}
 			if (items >= bpf_mprog_max())
@@ -114,7 +117,8 @@ static int bpf_mprog_head_tail(struct bpf_mprog_entry *entry,
 
 static int bpf_mprog_add(struct bpf_mprog_entry *entry,
 			 struct bpf_prog *nprog, u32 nid,
-			 struct bpf_prog *rprog, u32 aflags)
+			 struct bpf_prog *rprog, u32 rid,
+			 u32 aflags)
 {
 	bool found = false;
 	struct bpf_prog_item *item, *tmp;
@@ -154,7 +158,7 @@ static int bpf_mprog_add(struct bpf_mprog_entry *entry,
 			break;
 		}
 		if (aflags & (BPF_F_BEFORE | BPF_F_AFTER)) {
-			if (oprog != rprog)
+			if (oprog != rprog || (rid && id != rid))
 				goto next;
 			found = true;
 			if (aflags & BPF_F_BEFORE) {
@@ -183,7 +187,8 @@ next:
 
 static int bpf_mprog_del(struct bpf_mprog_entry *entry,
 			 struct bpf_prog *dprog, u32 did,
-			 struct bpf_prog *rprog, u32 dflags)
+			 struct bpf_prog *rprog, u32 rid,
+			 u32 dflags)
 {
 	struct bpf_prog_item *item, *tmp;
 	struct bpf_mprog_entry *peer;
@@ -208,7 +213,7 @@ static int bpf_mprog_del(struct bpf_mprog_entry *entry,
 		if (!oprog)
 			break;
 		if (dflags & (BPF_F_BEFORE | BPF_F_AFTER)) {
-			if (oprog != rprog)
+			if (oprog != rprog || (rid && item->id != rid))
 				continue;
 			if (dflags & BPF_F_BEFORE) {
 				item = &entry->items[--i];
@@ -258,17 +263,21 @@ static int bpf_mprog_del(struct bpf_mprog_entry *entry,
 int bpf_mprog_attach(struct bpf_mprog_entry *entry, struct bpf_prog *nprog,
 		     u32 nid, u32 expected_revision, u32 aflags, u32 relobj)
 {
+	struct bpf_tuple rtuple;
 	struct bpf_prog *rprog;
 	int ret;
+	u32 rid;
 
 	if (expected_revision &&
 	    expected_revision != bpf_mprog_revision(entry))
 		return -ESTALE;
 	if (!bpf_mprog_flags_ok(aflags, true))
 		return -EINVAL;
-	rprog = bpf_mprog_relative_prog(relobj, aflags, nprog->type);
-	if (IS_ERR(rprog))
-		return PTR_ERR(rprog);
+	ret = bpf_mprog_tuple_relative(&rtuple, relobj, aflags, nprog->type);
+	if (ret)
+		return ret;
+	rprog = rtuple.prog;
+	rid = rtuple.link ? rtuple.link->id : 0;
 	if (!bpf_mprog_rprog_ok(aflags, rprog)) {
 		ret = -EINVAL;
 		goto out;
@@ -276,37 +285,39 @@ int bpf_mprog_attach(struct bpf_mprog_entry *entry, struct bpf_prog *nprog,
 	if (aflags & BPF_F_REPLACE)
 		ret = bpf_mprog_replace(entry, nprog, nid, rprog, aflags);
 	else if (aflags & (BPF_F_FIRST | BPF_F_LAST))
-		ret = bpf_mprog_head_tail(entry, nprog, nid, rprog, aflags);
+		ret = bpf_mprog_head_tail(entry, nprog, nid, rprog, rid, aflags);
 	else
-		ret = bpf_mprog_add(entry, nprog, nid, rprog, aflags);
+		ret = bpf_mprog_add(entry, nprog, nid, rprog, rid, aflags);
 out:
-	if (rprog)
-		bpf_prog_put(rprog);
+	bpf_mprog_tuple_put(&rtuple);
 	return ret;
 }
 
 int bpf_mprog_detach(struct bpf_mprog_entry *entry, struct bpf_prog *dprog,
 		     u32 did, u32 expected_revision, u32 dflags, u32 relobj)
 {
+	struct bpf_tuple rtuple;
 	struct bpf_prog *rprog;
 	int ret;
+	u32 rid;
 
 	if (expected_revision &&
 	    expected_revision != bpf_mprog_revision(entry))
 		return -ESTALE;
 	if (!bpf_mprog_flags_ok(dflags, false))
 		return -EINVAL;
-	rprog = bpf_mprog_relative_prog(relobj, dflags, dprog->type);
-	if (IS_ERR(rprog))
-		return PTR_ERR(rprog);
+	ret = bpf_mprog_tuple_relative(&rtuple, relobj, dflags, dprog->type);
+	if (ret)
+		return ret;
+	rprog = rtuple.prog;
+	rid = rtuple.link ? rtuple.link->id : 0;
 	if (!bpf_mprog_rprog_ok(dflags, rprog)) {
 		ret = -EINVAL;
 		goto out;
 	}
-	ret = bpf_mprog_del(entry, dprog, did, rprog, dflags);
+	ret = bpf_mprog_del(entry, dprog, did, rprog, rid, dflags);
 out:
-	if (rprog)
-		bpf_prog_put(rprog);
+	bpf_mprog_tuple_put(&rtuple);
 	return ret;
 }
 
