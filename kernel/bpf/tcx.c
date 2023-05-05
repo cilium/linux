@@ -284,8 +284,15 @@ static int tcx_link_fill_info(const struct bpf_link *l,
 	return 0;
 }
 
+static int tcx_link_detach(struct bpf_link *l)
+{
+	tcx_link_release(l);
+	return 0;
+}
+
 static const struct bpf_link_ops tcx_link_lops = {
 	.release	= tcx_link_release,
+	.detach		= tcx_link_detach,
 	.dealloc	= tcx_link_dealloc,
 	.update_prog	= tcx_link_update,
 	.show_fdinfo	= tcx_link_fdinfo,
