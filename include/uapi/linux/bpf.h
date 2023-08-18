@@ -1059,6 +1059,7 @@ enum bpf_link_type {
 	BPF_LINK_TYPE_STRUCT_OPS = 9,
 	BPF_LINK_TYPE_NETFILTER = 10,
 	BPF_LINK_TYPE_TCX = 11,
+	BPF_LINK_TYPE_META = 12,
 	MAX_BPF_LINK_TYPE,
 };
 
@@ -1626,6 +1627,13 @@ union bpf_attr {
 				};
 				__u64		expected_revision;
 			} tcx;
+			struct {
+				union {
+					__u32	relative_fd;
+					__u32	relative_id;
+				};
+				__u64		expected_revision;
+			} meta;
 		};
 	} link_create;
 
@@ -6535,6 +6543,9 @@ struct bpf_link_info {
 			__u32 ifindex;
 			__u32 attach_type;
 		} tcx;
+		struct {
+			__u32 ifindex;
+		} meta;
 	};
 } __attribute__((aligned(8)));
 
