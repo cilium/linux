@@ -715,10 +715,11 @@ struct mlx5e_rq {
 	struct dim         dim; /* Dynamic Interrupt Moderation */
 
 	/* XDP */
-	struct bpf_prog __rcu *xdp_prog;
+	struct bpf_mprog_entry __rcu *xdp_active;
 	struct mlx5e_xdpsq    *xdpsq;
 	DECLARE_BITMAP(flags, 8);
 	struct page_pool      *page_pool;
+	struct bpf_mprog_bundle	bundle;
 
 	/* AF_XDP zero-copy */
 	struct xsk_buff_pool  *xsk_pool;

@@ -1680,7 +1680,7 @@ mlx5e_skb_from_cqe_linear(struct mlx5e_rq *rq, struct mlx5e_wqe_frag_info *wi,
 		net_prefetchw(va); /* xdp_frame data area */
 		mlx5e_fill_mxbuf(rq, cqe, va, rx_headroom, rq->buff.frame0_sz,
 				 cqe_bcnt, &mxbuf);
-		if (mlx5e_xdp_handle(rq, prog, &mxbuf))
+		if (mlx5e_xdp_handle(rq, &mxbuf))
 			return NULL; /* page/packet was consumed by XDP */
 
 		rx_headroom = mxbuf.xdp.data - mxbuf.xdp.data_hard_start;

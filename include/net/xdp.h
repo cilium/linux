@@ -490,6 +490,26 @@ static inline void xdp_clear_features_flag(struct net_device *dev)
 	xdp_set_features_flag(dev, 0);
 }
 
+static __always_inline u32
+xdp_run(const struct bpf_mprog_entry *entry, struct xdp_buff *xdp)
+{
+        const struct bpf_mprog_fp *fp;
+        const struct bpf_prog *prog;
+        int ret = XDP_NEXT;
+
+        bpf_mprog_foreach_prog(entry, fp, prog) {
+                ret = __bpf_prog_run(prog, xdp, BPF_DISPATCHER_FUNC(xdp));
+                if (ret != XDP_NEXT)
+                        break;
+        }
+	if (static_branch_unlikely(&bpf_master_redirect_enabled_key)) {
+		if (ret == XDP_TX && netif_is_bond_slave(xdp->rxq->dev))
+			ret = xdp_master_redirect(xdp);
+	}
+	return ret;
+}
+
+
 static __always_inline u32 bpf_prog_run_xdp(const struct bpf_prog *prog,
 					    struct xdp_buff *xdp)
 {
@@ -500,8 +520,8 @@ static __always_inline u32 bpf_prog_run_xdp(const struct bpf_prog *prog,
 	u32 act = __bpf_prog_run(prog, xdp, BPF_DISPATCHER_FUNC(xdp));
 
 	if (static_branch_unlikely(&bpf_master_redirect_enabled_key)) {
-		if (act == XDP_TX && netif_is_bond_slave(xdp->rxq->dev))
-			act = xdp_master_redirect(xdp);
+		if (ret == XDP_TX && netif_is_bond_slave(xdp->rxq->dev))
+			ret = xdp_master_redirect(xdp);
 	}
 
 	return act;

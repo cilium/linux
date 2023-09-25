@@ -262,14 +262,13 @@ const struct xdp_metadata_ops mlx5e_xdp_metadata_ops = {
 };
 
 /* returns true if packet was consumed by xdp */
-bool mlx5e_xdp_handle(struct mlx5e_rq *rq,
-		      struct bpf_prog *prog, struct mlx5e_xdp_buff *mxbuf)
+bool mlx5e_xdp_handle(struct mlx5e_rq *rq, struct mlx5e_xdp_buff *mxbuf)
 {
 	struct xdp_buff *xdp = &mxbuf->xdp;
 	u32 act;
 	int err;
 
-	act = bpf_prog_run_xdp(prog, xdp);
+	act = xdp_run(rcu_dereference(rq->xdp_active), xdp);
 	switch (act) {
 	case XDP_PASS:
 		return false;

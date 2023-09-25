@@ -1646,6 +1646,13 @@ union bpf_attr {
 				__u64		expected_revision;
 			} tcx;
 			struct {
+				union {
+					__u32	relative_fd;
+					__u32	relative_id;
+				};
+				__u64		expected_revision;
+			} xdp;
+			struct {
 				__aligned_u64	path;
 				__aligned_u64	offsets;
 				__aligned_u64	ref_ctr_offsets;
@@ -6303,6 +6310,7 @@ enum xdp_action {
 	XDP_PASS,
 	XDP_TX,
 	XDP_REDIRECT,
+	XDP_NEXT,
 };
 
 /* user accessible metadata for XDP packet hook
