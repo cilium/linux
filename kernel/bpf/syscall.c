@@ -3802,7 +3802,6 @@ static int bpf_prog_attach(const union bpf_attr *attr)
 {
 	enum bpf_prog_type ptype;
 	struct bpf_prog *prog;
-	u32 mask;
 	int ret;
 
 	if (CHECK_ATTR(BPF_PROG_ATTACH))
@@ -3811,10 +3810,18 @@ static int bpf_prog_attach(const union bpf_attr *attr)
 	ptype = attach_type_to_prog_type(attr->attach_type);
 	if (ptype == BPF_PROG_TYPE_UNSPEC)
 		return -EINVAL;
-	mask = bpf_mprog_supported(ptype) ?
-	       BPF_F_ATTACH_MASK_MPROG : BPF_F_ATTACH_MASK_BASE;
-	if (attr->attach_flags & ~mask)
-		return -EINVAL;
+
+	if (bpf_mprog_supported(ptype)) {
+		if (attr->attach_flags & ~BPF_F_ATTACH_MASK_MPROG)
+			return -EINVAL;
+	} else {
+		if (attr->attach_flags & ~BPF_F_ATTACH_MASK_BASE)
+			return -EINVAL;
+		if (attr->relative_fd || attr->relative_id)
+			return -EINVAL;
+		if (attr->expected_revision)
+			return -EINVAL;
+	}
 
 	prog = bpf_prog_get_type(attr->attach_bpf_fd, ptype);
 	if (IS_ERR(prog))
@@ -3873,6 +3880,9 @@ static int bpf_prog_detach(const union bpf_attr *attr)
 	if (CHECK_ATTR(BPF_PROG_DETACH))
 		return -EINVAL;
 
+	if (attr->replace_bpf_fd)
+		return -EINVAL;
+
 	ptype = attach_type_to_prog_type(attr->attach_type);
 	if (bpf_mprog_supported(ptype)) {
 		if (ptype == BPF_PROG_TYPE_UNSPEC)
@@ -3884,6 +3894,8 @@ static int bpf_prog_detach(const union bpf_attr *attr)
 			if (IS_ERR(prog))
 				return PTR_ERR(prog);
 		}
+	} else if (attr->attach_flags || attr->relative_fd || attr->expected_revision) {
+		return -EINVAL;
 	}
 
 	switch (ptype) {
