@@ -25,6 +25,7 @@ struct netkit {
 	enum netkit_mode mode;
 	bool primary;
 	u32 headroom;
+	u32 tailroom;
 };
 
 struct netkit_link {
@@ -163,6 +164,29 @@ out:
 	rcu_read_unlock();
 }
 
+static void netkit_set_tailroom(struct net_device *dev, int tailroom)
+{
+	struct netkit *nk = netdev_priv(dev), *nk2;
+	struct net_device *peer;
+
+	if (tailroom < 0)
+		tailroom = NET_SKB_PAD;
+
+	rcu_read_lock();
+	peer = rcu_dereference(nk->peer);
+	if (unlikely(!peer))
+		goto out;
+
+	nk2 = netdev_priv(peer);
+	nk->tailroom = tailroom;
+	tailroom = max(nk->tailroom, nk2->tailroom);
+
+	peer->needed_tailroom = tailroom;
+	dev->needed_tailroom = tailroom;
+out:
+	rcu_read_unlock();
+}
+
 static struct net_device *netkit_peer_dev(struct net_device *dev)
 {
 	struct netkit *nk = netdev_priv(dev);
@@ -176,6 +200,7 @@ static const struct net_device_ops netkit_netdev_ops = {
 	.ndo_start_xmit		= netkit_xmit,
 	.ndo_set_rx_mode	= netkit_set_multicast,
 	.ndo_set_headroom	= netkit_set_headroom,
+	.ndo_set_tailroom	= netkit_set_tailroom,
 	.ndo_get_iflink		= netkit_get_iflink,
 	.ndo_get_peer_dev	= netkit_peer_dev,
 	.ndo_features_check	= passthru_features_check,
@@ -404,7 +429,9 @@ static int netkit_new_link(struct net *src_net, struct net_device *dev,
 	bpf_mprog_bundle_init(&nk->bundle);
 	RCU_INIT_POINTER(nk->active, NULL);
 	rcu_assign_pointer(nk->peer, dev);
+
 	netif_inherit_headroom(peer, dev);
+	netif_inherit_tailroom(peer, dev);
 	return 0;
 err_configure_peer:
 	unregister_netdevice(peer);
