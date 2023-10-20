@@ -1360,6 +1360,8 @@ struct netdev_net_notifier {
  *	appropriate rx headroom value allows avoiding skb head copy on
  *	forward. Setting a negative value resets the rx headroom to the
  *	default value.
+ * void (*ndo_set_tailroom)(struct net_device *dev, int needed_tailroom);
+ *	description TODO
  * int (*ndo_bpf)(struct net_device *dev, struct netdev_bpf *bpf);
  *	This function is used to set or query state related to XDP on the
  *	netdevice and manage BPF offload. See definition of
@@ -1619,6 +1621,8 @@ struct net_device_ops {
 						       struct sk_buff *skb);
 	void			(*ndo_set_headroom)(struct net_device *dev,
 						    int needed_headroom);
+	void			(*ndo_set_tailroom)(struct net_device *dev,
+						    int needed_tailroom);
 	int			(*ndo_bpf)(struct net_device *dev,
 					   struct netdev_bpf *bpf);
 	int			(*ndo_xdp_xmit)(struct net_device *dev, int n,
@@ -2536,6 +2540,10 @@ struct netdev_queue *netdev_core_pick_tx(struct net_device *dev,
 #define NETDEV_MAX_HEADROOM	512
 #define NETDEV_RESET_HEADROOM	-1
 
+#define NETDEV_MIN_TAILROOM	NETDEV_MIN_HEADROOM
+#define NETDEV_MAX_TAILROOM	NETDEV_MAX_HEADROOM
+#define NETDEV_RESET_TAILROOM	NETDEV_RESET_HEADROOM
+
 /* returns the headroom that the master device needs to take in account
  * when forwarding to this dev
  */
@@ -2553,6 +2561,17 @@ static inline void netdev_set_headroom(struct net_device *dev, int new_hr)
 static inline void netdev_reset_headroom(struct net_device *dev)
 {
 	netdev_set_headroom(dev, NETDEV_RESET_HEADROOM);
+}
+
+static inline void netdev_set_tailroom(struct net_device *dev, int new_tr)
+{
+	if (dev->netdev_ops->ndo_set_tailroom)
+		dev->netdev_ops->ndo_set_tailroom(dev, new_tr);
+}
+
+static inline void netdev_reset_tailroom(struct net_device *dev)
+{
+	netdev_set_tailroom(dev, NETDEV_RESET_TAILROOM);
 }
 
 static inline void *netdev_get_ml_priv(struct net_device *dev,
@@ -5013,6 +5032,8 @@ void netif_inherit_tso_max(struct net_device *to,
 			   const struct net_device *from);
 
 void netif_inherit_headroom(struct net_device *to,
+			    const struct net_device *from);
+void netif_inherit_tailroom(struct net_device *to,
 			    const struct net_device *from);
 
 static inline bool netif_is_macsec(const struct net_device *dev)

@@ -1081,6 +1081,7 @@ static noinline size_t if_nlmsg_size(const struct net_device *dev,
 	       + nla_total_size(4) /* IFLA_WEIGHT */
 	       + nla_total_size(4) /* IFLA_MTU */
 	       + nla_total_size(4) /* IFLA_HEADROOM */
+	       + nla_total_size(4) /* IFLA_TAILROOM */
 	       + nla_total_size(4) /* IFLA_LINK */
 	       + nla_total_size(4) /* IFLA_MASTER */
 	       + nla_total_size(1) /* IFLA_CARRIER */
@@ -1848,6 +1849,7 @@ static int rtnl_fill_ifinfo(struct sk_buff *skb,
 	    nla_put_u32(skb, IFLA_PROMISCUITY, dev->promiscuity) ||
 	    nla_put_u32(skb, IFLA_ALLMULTI, dev->allmulti) ||
 	    nla_put_u32(skb, IFLA_HEADROOM, dev->needed_headroom) ||
+	    nla_put_u32(skb, IFLA_TAILROOM, dev->needed_tailroom) ||
 	    nla_put_u32(skb, IFLA_NUM_TX_QUEUES, dev->num_tx_queues) ||
 	    nla_put_u32(skb, IFLA_GSO_MAX_SEGS, dev->gso_max_segs) ||
 	    nla_put_u32(skb, IFLA_GSO_MAX_SIZE, dev->gso_max_size) ||
@@ -1971,6 +1973,7 @@ static const struct nla_policy ifla_policy[IFLA_MAX+1] = {
 	[IFLA_MAP]		= { .len = sizeof(struct rtnl_link_ifmap) },
 	[IFLA_MTU]		= { .type = NLA_U32 },
 	[IFLA_HEADROOM]		= { .type = NLA_U32 },
+	[IFLA_TAILROOM]		= { .type = NLA_U32 },
 	[IFLA_LINK]		= { .type = NLA_U32 },
 	[IFLA_MASTER]		= { .type = NLA_U32 },
 	[IFLA_CARRIER]		= { .type = NLA_U8 },
@@ -3423,6 +3426,17 @@ struct net_device *rtnl_create_link(struct net *net, const char *ifname,
 			return ERR_PTR(err);
 		}
 		dev->needed_headroom = headroom;
+	}
+	if (tb[IFLA_TAILROOM]) {
+		u32 tailroom = nla_get_u32(tb[IFLA_TAILROOM]);
+		int err;
+
+		err = dev_validate_tailroom(dev, tailroom, extack);
+		if (err) {
+			free_netdev(dev);
+			return ERR_PTR(err);
+		}
+		dev->needed_tailroom = tailroom;
 	}
 	if (tb[IFLA_ADDRESS]) {
 		__dev_addr_set(dev, nla_data(tb[IFLA_ADDRESS]),

@@ -3074,6 +3074,17 @@ void netif_inherit_headroom(struct net_device *to, const struct net_device *from
 EXPORT_SYMBOL(netif_inherit_headroom);
 
 /**
+ * netif_inherit_tailroom() - copy tailroom requirement
+ * @to:		netdev to update
+ * @from:	netdev from which to copy the tailroom
+ */
+void netif_inherit_tailroom(struct net_device *to, const struct net_device *from)
+{
+	netdev_set_tailroom(to, from->needed_tailroom);
+}
+EXPORT_SYMBOL(netif_inherit_tailroom);
+
+/**
  * netif_get_num_default_rss_queues - default number of RSS queues
  *
  * Default value is the number of physical cores if there are only 1 or 2, or
@@ -8712,6 +8723,25 @@ int dev_validate_headroom(struct net_device *dev, int new_headroom,
 	}
 	if (new_headroom > NETDEV_MAX_HEADROOM) {
 		NL_SET_ERR_MSG(extack, "headroom greater than device maximum");
+		return -EINVAL;
+	}
+	return 0;
+}
+
+int dev_validate_tailroom(struct net_device *dev, int new_tailroom,
+			  struct netlink_ext_ack *extack)
+{
+	if (!dev->netdev_ops->ndo_set_tailroom) {
+		NL_SET_ERR_MSG(extack, "device unable to configure tailroom");
+		return -EOPNOTSUPP;
+	}
+	if (new_tailroom < NETDEV_MIN_TAILROOM &&
+	    new_tailroom != NETDEV_RESET_TAILROOM) {
+		NL_SET_ERR_MSG(extack, "tailroom less than device minimum");
+		return -EINVAL;
+	}
+	if (new_tailroom > NETDEV_MAX_TAILROOM) {
+		NL_SET_ERR_MSG(extack, "tailroom greater than device maximum");
 		return -EINVAL;
 	}
 	return 0;
