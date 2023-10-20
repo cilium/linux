@@ -1354,7 +1354,7 @@ struct netdev_net_notifier {
  *	This function is used to get egress tunnel information for given skb.
  *	This is useful for retrieving outer tunnel header parameters while
  *	sampling packet.
- * void (*ndo_set_rx_headroom)(struct net_device *dev, int needed_headroom);
+ * void (*ndo_set_headroom)(struct net_device *dev, int needed_headroom);
  *	This function is used to specify the headroom that the skb must
  *	consider when allocation skb during packet reception. Setting
  *	appropriate rx headroom value allows avoiding skb head copy on
@@ -1617,8 +1617,8 @@ struct net_device_ops {
 	int			(*ndo_get_iflink)(const struct net_device *dev);
 	int			(*ndo_fill_metadata_dst)(struct net_device *dev,
 						       struct sk_buff *skb);
-	void			(*ndo_set_rx_headroom)(struct net_device *dev,
-						       int needed_headroom);
+	void			(*ndo_set_headroom)(struct net_device *dev,
+						    int needed_headroom);
 	int			(*ndo_bpf)(struct net_device *dev,
 					   struct netdev_bpf *bpf);
 	int			(*ndo_xdp_xmit)(struct net_device *dev, int n,
@@ -2544,16 +2544,15 @@ static inline unsigned netdev_get_fwd_headroom(struct net_device *dev)
 	return dev->priv_flags & IFF_PHONY_HEADROOM ? 0 : dev->needed_headroom;
 }
 
-static inline void netdev_set_rx_headroom(struct net_device *dev, int new_hr)
+static inline void netdev_set_headroom(struct net_device *dev, int new_hr)
 {
-	if (dev->netdev_ops->ndo_set_rx_headroom)
-		dev->netdev_ops->ndo_set_rx_headroom(dev, new_hr);
+	if (dev->netdev_ops->ndo_set_headroom)
+		dev->netdev_ops->ndo_set_headroom(dev, new_hr);
 }
 
-/* set the device rx headroom to the dev's default */
-static inline void netdev_reset_rx_headroom(struct net_device *dev)
+static inline void netdev_reset_headroom(struct net_device *dev)
 {
-	netdev_set_rx_headroom(dev, NETDEV_RESET_HEADROOM);
+	netdev_set_headroom(dev, NETDEV_RESET_HEADROOM);
 }
 
 static inline void *netdev_get_ml_priv(struct net_device *dev,

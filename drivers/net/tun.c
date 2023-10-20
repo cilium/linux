@@ -1255,7 +1255,7 @@ static const struct net_device_ops tun_netdev_ops = {
 	.ndo_start_xmit		= tun_net_xmit,
 	.ndo_fix_features	= tun_net_fix_features,
 	.ndo_select_queue	= tun_select_queue,
-	.ndo_set_rx_headroom	= tun_set_headroom,
+	.ndo_set_headroom	= tun_set_headroom,
 	.ndo_get_stats64	= tun_net_get_stats64,
 	.ndo_change_carrier	= tun_net_change_carrier,
 };
@@ -1343,7 +1343,7 @@ static const struct net_device_ops tap_netdev_ops = {
 	.ndo_validate_addr	= eth_validate_addr,
 	.ndo_select_queue	= tun_select_queue,
 	.ndo_features_check	= passthru_features_check,
-	.ndo_set_rx_headroom	= tun_set_headroom,
+	.ndo_set_headroom	= tun_set_headroom,
 	.ndo_get_stats64	= dev_get_tstats64,
 	.ndo_bpf		= tun_xdp,
 	.ndo_xdp_xmit		= tun_xdp_xmit,

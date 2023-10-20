@@ -2242,7 +2242,7 @@ static void ovs_update_headroom(struct datapath *dp, unsigned int new_headroom)
 	for (i = 0; i < DP_VPORT_HASH_BUCKETS; i++) {
 		hlist_for_each_entry_rcu(vport, &dp->ports[i], dp_hash_node,
 					 lockdep_ovsl_is_held())
-			netdev_set_rx_headroom(vport->dev, new_headroom);
+			netdev_set_headroom(vport->dev, new_headroom);
 	}
 }
 
@@ -2325,7 +2325,7 @@ restart:
 	if (new_headroom > dp->max_headroom)
 		ovs_update_headroom(dp, new_headroom);
 	else
-		netdev_set_rx_headroom(vport->dev, dp->max_headroom);
+		netdev_set_headroom(vport->dev, dp->max_headroom);
 
 	BUG_ON(err < 0);
 	ovs_unlock();
@@ -2427,7 +2427,7 @@ static int ovs_vport_cmd_del(struct sk_buff *skb, struct genl_info *info)
 	if (netdev_get_fwd_headroom(vport->dev) == dp->max_headroom)
 		update_headroom = true;
 
-	netdev_reset_rx_headroom(vport->dev);
+	netdev_reset_headroom(vport->dev);
 	ovs_dp_detach_port(vport);
 
 	if (update_headroom) {

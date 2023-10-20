@@ -3069,7 +3069,7 @@ EXPORT_SYMBOL(netif_inherit_tso_max);
  */
 void netif_inherit_headroom(struct net_device *to, const struct net_device *from)
 {
-	netdev_set_rx_headroom(to, from->needed_headroom);
+	netdev_set_headroom(to, from->needed_headroom);
 }
 EXPORT_SYMBOL(netif_inherit_headroom);
 
@@ -8701,7 +8701,7 @@ EXPORT_SYMBOL(dev_change_flags);
 int dev_validate_headroom(struct net_device *dev, int new_headroom,
 			  struct netlink_ext_ack *extack)
 {
-	if (!dev->netdev_ops->ndo_set_rx_headroom) {
+	if (!dev->netdev_ops->ndo_set_headroom) {
 		NL_SET_ERR_MSG(extack, "device unable to configure headroom");
 		return -EOPNOTSUPP;
 	}

@@ -316,7 +316,7 @@ static void update_headroom(struct net_bridge *br, int new_hr)
 	struct net_bridge_port *p;
 
 	list_for_each_entry(p, &br->port_list, list)
-		netdev_set_rx_headroom(p->dev, new_hr);
+		netdev_set_headroom(p->dev, new_hr);
 
 	br->dev->needed_headroom = new_hr;
 }
@@ -351,7 +351,7 @@ static void del_nbp(struct net_bridge_port *p)
 	list_del_rcu(&p->list);
 	if (netdev_get_fwd_headroom(dev) == br->dev->needed_headroom)
 		update_headroom(br, get_max_headroom(br));
-	netdev_reset_rx_headroom(dev);
+	netdev_reset_headroom(dev);
 
 	nbp_vlan_flush(p);
 	br_fdb_delete_by_port(br, p, 0, 1);
@@ -659,7 +659,7 @@ int br_add_if(struct net_bridge *br, struct net_device *dev,
 	if (br_hr < dev_hr)
 		update_headroom(br, dev_hr);
 	else
-		netdev_set_rx_headroom(dev, br_hr);
+		netdev_set_headroom(dev, br_hr);
 
 	if (br_fdb_add_local(br, p, dev->dev_addr, 0))
 		netdev_err(dev, "failed insert local address bridge forwarding table\n");
