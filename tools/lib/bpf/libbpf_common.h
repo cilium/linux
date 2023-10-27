@@ -48,6 +48,21 @@
 #define ___libbpf_cnt(...) ___libbpf_nth(__VA_ARGS__, 6, 5, 4, 3, 2, 1)
 #define ___libbpf_overload(NAME, ...) ___libbpf_select(NAME, ___libbpf_cnt(__VA_ARGS__))(__VA_ARGS__)
 
+/* See commit 7829fb09a2b4 ("lib: make memzero_explicit more robust against
+ * dead store elimination") for details. This is to tell compiler that
+ * ptr is used after the memset, so that it cannot make any assumptions
+ * to optimize the prior memset away.
+ */
+#ifndef barrier_data
+#define barrier_data(ptr) __asm__ __volatile__("": :"r"(ptr) :"memory")
+#endif
+
+static inline void libbpf_memzero_explicit(void *x, size_t count)
+{
+	memset(x, 0, count);
+	barrier_data(x);
+}
+
 /* Helper macro to declare and initialize libbpf options struct
  *
  * This dance with uninitialized declaration, followed by memset to zero,
@@ -63,7 +78,7 @@
  */
 #define LIBBPF_OPTS(TYPE, NAME, ...)					    \
 	struct TYPE NAME = ({ 						    \
-		memset(&NAME, 0, sizeof(struct TYPE));			    \
+		libbpf_memzero_explicit(&NAME, sizeof(NAME));		    \
 		(struct TYPE) {						    \
 			.sz = sizeof(struct TYPE),			    \
 			__VA_ARGS__					    \
@@ -79,7 +94,7 @@
  */
 #define LIBBPF_OPTS_RESET(NAME, ...)					    \
 	do {								    \
-		memset(&NAME, 0, sizeof(NAME));				    \
+		libbpf_memzero_explicit(&NAME, sizeof(NAME));		    \
 		NAME = (typeof(NAME)) {					    \
 			.sz = sizeof(NAME),				    \
 			__VA_ARGS__					    \
