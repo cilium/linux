@@ -160,6 +160,18 @@ static inline void tcf_set_drop_reason(struct tcf_result *res,
 	res->drop_reason = reason;
 }
 
+static inline void tcf_set_result(struct tcf_result *to,
+				  const struct tcf_result *from)
+{
+	/* tcf_result's drop_reason which is the last member must be
+	 * preserved and cannot be copied from the cls'es tcf_result
+	 * template given this is carried all the way and potentially
+	 * set to a concrete tc drop reason upon error or intentional
+	 * drop. See tcf_set_drop_reason() locations.
+	 */
+	memcpy(to, from, offsetof(typeof(*to), drop_reason));
+}
+
 static inline void
 __tcf_bind_filter(struct Qdisc *q, struct tcf_result *r, unsigned long base)
 {

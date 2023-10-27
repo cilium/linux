@@ -37,7 +37,7 @@ TC_INDIRECT_SCOPE int mall_classify(struct sk_buff *skb,
 	if (tc_skip_sw(head->flags))
 		return -1;
 
-	*res = head->res;
+	tcf_set_result(res, &head->res);
 	__this_cpu_inc(head->pf->rhit);
 	return tcf_exts_exec(skb, &head->exts, res);
 }

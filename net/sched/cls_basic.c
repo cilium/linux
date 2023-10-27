@@ -50,7 +50,7 @@ TC_INDIRECT_SCOPE int basic_classify(struct sk_buff *skb,
 		if (!tcf_em_tree_match(skb, &f->ematches, NULL))
 			continue;
 		__this_cpu_inc(f->pf->rhit);
-		*res = f->res;
+		tcf_set_result(res, &f->res);
 		r = tcf_exts_exec(skb, &f->exts, res);
 		if (r < 0)
 			continue;

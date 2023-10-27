@@ -172,7 +172,7 @@ next_knode:
 check_terminal:
 			if (n->sel.flags & TC_U32_TERMINAL) {
 
-				*res = n->res;
+				tcf_set_result(res, &n->res);
 				if (!tcf_match_indev(skb, n->ifindex)) {
 					n = rcu_dereference_bh(n->next);
 					goto next_knode;

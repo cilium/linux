@@ -341,7 +341,7 @@ TC_INDIRECT_SCOPE int fl_classify(struct sk_buff *skb,
 
 		f = fl_mask_lookup(mask, &skb_key);
 		if (f && !tc_skip_sw(f->flags)) {
-			*res = f->res;
+			tcf_set_result(res, &f->res);
 			return tcf_exts_exec(skb, &f->exts, res);
 		}
 	}

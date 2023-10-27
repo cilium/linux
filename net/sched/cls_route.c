@@ -109,7 +109,7 @@ static inline int route4_hash_wild(void)
 
 #define ROUTE4_APPLY_RESULT()					\
 {								\
-	*res = f->res;						\
+	tcf_set_result(res, &f->res);				\
 	if (tcf_exts_has_actions(&f->exts)) {			\
 		int r = tcf_exts_exec(skb, &f->exts, res);	\
 		if (r < 0) {					\
@@ -152,7 +152,7 @@ TC_INDIRECT_SCOPE int route4_classify(struct sk_buff *skb,
 			goto failure;
 		}
 
-		*res = f->res;
+		tcf_set_result(res, &f->res);
 		spin_unlock(&fastmap_lock);
 		return 0;
 	}

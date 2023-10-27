@@ -124,7 +124,7 @@ TC_INDIRECT_SCOPE int cls_bpf_classify(struct sk_buff *skb,
 			res->class   = 0;
 			res->classid = filter_res;
 		} else {
-			*res = prog->res;
+			tcf_set_result(res, &prog->res);
 		}
 
 		ret = tcf_exts_exec(skb, &prog->exts, res);

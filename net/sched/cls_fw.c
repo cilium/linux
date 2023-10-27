@@ -63,7 +63,7 @@ TC_INDIRECT_SCOPE int fw_classify(struct sk_buff *skb,
 		for (f = rcu_dereference_bh(head->ht[fw_hash(id)]); f;
 		     f = rcu_dereference_bh(f->next)) {
 			if (f->id == id) {
-				*res = f->res;
+				tcf_set_result(res, &f->res);
 				if (!tcf_match_indev(skb, f->ifindex))
 					continue;
 				r = tcf_exts_exec(skb, &f->exts, res);
