@@ -81,6 +81,7 @@
 #include <net/xdp.h>
 #include <net/mptcp.h>
 #include <net/netfilter/nf_conntrack_bpf.h>
+#include <net/netkit.h>
 #include <linux/un.h>
 
 #include "dev.h"
@@ -2486,7 +2487,8 @@ int skb_do_redirect(struct sk_buff *skb)
 		if (unlikely(!ops->ndo_get_peer_dev ||
 			     !skb_at_tc_ingress(skb)))
 			goto out_drop;
-		dev = ops->ndo_get_peer_dev(dev);
+		dev = INDIRECT_CALL_1(ops->ndo_get_peer_dev,
+				      netkit_peer_dev, dev);
 		if (unlikely(!dev ||
 			     !(dev->flags & IFF_UP) ||
 			     net_eq(net, dev_net(dev))))

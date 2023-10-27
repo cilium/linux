@@ -169,7 +169,7 @@ out:
 	rcu_read_unlock();
 }
 
-static struct net_device *netkit_peer_dev(struct net_device *dev)
+struct net_device *netkit_peer_dev(struct net_device *dev)
 {
 	return rcu_dereference(netkit_priv(dev)->peer);
 }
