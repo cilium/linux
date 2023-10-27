@@ -5240,6 +5240,30 @@ extern struct list_head ptype_base[PTYPE_HASH_SIZE] __read_mostly;
 
 extern struct net_device *blackhole_netdev;
 
+#if IS_BUILTIN(CONFIG_NETKIT)
+struct net_device *netkit_peer_dev(struct net_device *dev);
+#endif
+#if IS_BUILTIN(CONFIG_VETH)
+struct net_device *veth_peer_dev(struct net_device *dev);
+#endif
+static inline struct net_device *netdev_get_peer(struct net_device *dev)
+{
+	const struct net_device_ops *ops = dev->netdev_ops;
+
+	if (likely(ops->ndo_get_peer_dev)) {
+#if IS_BUILTIN(CONFIG_NETKIT)
+		if (likely(ops->ndo_get_peer_dev == netkit_peer_dev))
+			return netkit_peer_dev(dev);
+#endif
+#if IS_BUILTIN(CONFIG_VETH)
+		if (likely(ops->ndo_get_peer_dev == veth_peer_dev))
+			return veth_peer_dev(dev);
+#endif
+		return ops->ndo_get_peer_dev(dev);
+	}
+	return NULL;
+}
+
 /* Note: Avoid these macros in fast path, prefer per-cpu or per-queue counters. */
 #define DEV_STATS_INC(DEV, FIELD) atomic_long_inc(&(DEV)->stats.__##FIELD)
 #define DEV_STATS_ADD(DEV, FIELD, VAL) 	\

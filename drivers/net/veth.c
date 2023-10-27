@@ -462,7 +462,7 @@ static int veth_select_rxq(struct net_device *dev)
 	return smp_processor_id() % dev->real_num_rx_queues;
 }
 
-static struct net_device *veth_peer_dev(struct net_device *dev)
+struct net_device *veth_peer_dev(struct net_device *dev)
 {
 	struct veth_priv *priv = netdev_priv(dev);
 

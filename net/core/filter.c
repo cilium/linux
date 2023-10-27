@@ -2481,12 +2481,9 @@ int skb_do_redirect(struct sk_buff *skb)
 	if (unlikely(!dev))
 		goto out_drop;
 	if (flags & BPF_F_PEER) {
-		const struct net_device_ops *ops = dev->netdev_ops;
-
-		if (unlikely(!ops->ndo_get_peer_dev ||
-			     !skb_at_tc_ingress(skb)))
+		if (unlikely(!skb_at_tc_ingress(skb)))
 			goto out_drop;
-		dev = ops->ndo_get_peer_dev(dev);
+		dev = netdev_get_peer(dev);
 		if (unlikely(!dev ||
 			     !(dev->flags & IFF_UP) ||
 			     net_eq(net, dev_net(dev))))
