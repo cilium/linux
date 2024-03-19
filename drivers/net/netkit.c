@@ -178,6 +178,23 @@ out:
 	rcu_read_unlock();
 }
 
+static int netkit_set_mtu(struct net_device *dev, int mtu)
+{
+	struct netkit *nk = netkit_priv(dev);
+	struct net_device *peer;
+
+	rcu_read_lock();
+	peer = rcu_dereference(nk->peer);
+	if (unlikely(!peer))
+		goto out;
+	if (nk->primary)
+		WRITE_ONCE(peer->mtu, mtu);
+out:
+	WRITE_ONCE(dev->mtu, mtu);
+	rcu_read_unlock();
+	return 0;
+}
+
 INDIRECT_CALLABLE_SCOPE struct net_device *netkit_peer_dev(struct net_device *dev)
 {
 	return rcu_dereference(netkit_priv(dev)->peer);
@@ -198,6 +215,7 @@ static const struct net_device_ops netkit_netdev_ops = {
 	.ndo_start_xmit		= netkit_xmit,
 	.ndo_set_rx_mode	= netkit_set_multicast,
 	.ndo_set_rx_headroom	= netkit_set_headroom,
+	.ndo_change_mtu		= netkit_set_mtu,
 	.ndo_get_iflink		= netkit_get_iflink,
 	.ndo_get_peer_dev	= netkit_peer_dev,
 	.ndo_get_stats64	= netkit_get_stats,
