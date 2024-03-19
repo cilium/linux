@@ -16,13 +16,13 @@
 #define DRV_NAME "netkit"
 
 struct netkit {
-	/* Needed in fast-path */
+	__cacheline_group_begin(netkit_fastpath);
 	struct net_device __rcu *peer;
 	struct bpf_mprog_entry __rcu *active;
 	enum netkit_action policy;
 	struct bpf_mprog_bundle	bundle;
+	__cacheline_group_end(netkit_fastpath);
 
-	/* Needed in slow-path */
 	enum netkit_mode mode;
 	bool primary;
 	u32 headroom;
@@ -941,6 +941,11 @@ static __init int netkit_init(void)
 		     (int)NETKIT_PASS != (int)TCX_PASS ||
 		     (int)NETKIT_DROP != (int)TCX_DROP ||
 		     (int)NETKIT_REDIRECT != (int)TCX_REDIRECT);
+
+	CACHELINE_ASSERT_GROUP_MEMBER(struct netkit, netkit_fastpath, peer);
+	CACHELINE_ASSERT_GROUP_MEMBER(struct netkit, netkit_fastpath, active);
+	CACHELINE_ASSERT_GROUP_MEMBER(struct netkit, netkit_fastpath, policy);
+	CACHELINE_ASSERT_GROUP_MEMBER(struct netkit, netkit_fastpath, bundle);
 
 	return rtnl_link_register(&netkit_link_ops);
 }
