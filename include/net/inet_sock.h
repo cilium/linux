@@ -417,13 +417,20 @@ static inline bool inet_get_convert_csum(struct sock *sk)
 	return !!inet_sk(sk)->convert_csum;
 }
 
+static inline bool inet_addr_valid(__be32 addr, int addr_type)
+{
+	return addr == htonl(INADDR_ANY) ||
+	       addr_type == RTN_LOCAL ||
+	       addr_type == RTN_MULTICAST ||
+	       addr_type == RTN_BROADCAST;
+}
 
 static inline bool inet_can_nonlocal_bind(struct net *net,
 					  struct inet_sock *inet)
 {
 	return READ_ONCE(net->ipv4.sysctl_ip_nonlocal_bind) ||
-		test_bit(INET_FLAGS_FREEBIND, &inet->inet_flags) ||
-		test_bit(INET_FLAGS_TRANSPARENT, &inet->inet_flags);
+	       test_bit(INET_FLAGS_FREEBIND, &inet->inet_flags) ||
+	       test_bit(INET_FLAGS_TRANSPARENT, &inet->inet_flags);
 }
 
 static inline bool inet_addr_valid_or_nonlocal(struct net *net,
@@ -432,10 +439,6 @@ static inline bool inet_addr_valid_or_nonlocal(struct net *net,
 					       int addr_type)
 {
 	return inet_can_nonlocal_bind(net, inet) ||
-		addr == htonl(INADDR_ANY) ||
-		addr_type == RTN_LOCAL ||
-		addr_type == RTN_MULTICAST ||
-		addr_type == RTN_BROADCAST;
+	       inet_addr_valid(addr, addr_type);
 }
-
 #endif	/* _INET_SOCK_H */
