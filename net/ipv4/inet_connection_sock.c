@@ -563,8 +563,12 @@ int inet_csk_get_port(struct sock *sk, unsigned short snum)
 		}
 
 		if (check_bind_conflict && inet_use_bhash2_on_bind(sk)) {
-			if (inet_bhash2_addr_any_conflict(sk, port, l3mdev, true, true))
-				goto fail_unlock;
+			if (inet_bhash2_addr_any_conflict(sk, port, l3mdev, true, true)) {
+				if (inet_overlap_any(sk))
+					check_bind_conflict = false;
+				else
+					goto fail_unlock;
+			}
 		}
 
 		head2 = inet_bhashfn_portaddr(hinfo, sk, net, port);

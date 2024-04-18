@@ -915,6 +915,7 @@ int do_ip_setsockopt(struct sock *sk, int level, int optname,
 	case IP_MINTTL:
 	case IP_NODEFRAG:
 	case IP_BIND_ADDRESS_NO_PORT:
+	case IP_BIND_OVERLAP_ANY:
 	case IP_UNICAST_IF:
 	case IP_MULTICAST_TTL:
 	case IP_MULTICAST_ALL:
@@ -1022,6 +1023,9 @@ int do_ip_setsockopt(struct sock *sk, int level, int optname,
 		return 0;
 	case IP_BIND_ADDRESS_NO_PORT:
 		inet_assign_bit(BIND_ADDRESS_NO_PORT, sk, val);
+		return 0;
+	case IP_BIND_OVERLAP_ANY:
+		inet_assign_bit(BIND_OVERLAP_ANY, sk, val);
 		return 0;
 	case IP_TTL:
 		if (optlen < 1)

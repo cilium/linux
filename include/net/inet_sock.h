@@ -275,6 +275,7 @@ enum {
 	INET_FLAGS_RTALERT_ISOLATE = 28,
 	INET_FLAGS_SNDFLOW	= 29,
 	INET_FLAGS_RTALERT	= 30,
+	INET_FLAGS_BIND_OVERLAP_ANY = 31,
 };
 
 /* cmsg flags for inet */
@@ -433,12 +434,26 @@ static inline bool inet_can_nonlocal_bind(struct net *net,
 	       test_bit(INET_FLAGS_TRANSPARENT, &inet->inet_flags);
 }
 
+static inline bool inet_can_overlap_any(struct inet_sock *inet)
+{
+	return test_bit(INET_FLAGS_TRANSPARENT, &inet->inet_flags) &&
+	       test_bit(INET_FLAGS_BIND_OVERLAP_ANY, &inet->inet_flags);
+}
+
 static inline bool inet_addr_valid_or_nonlocal(struct net *net,
 					       struct inet_sock *inet,
 					       __be32 addr,
 					       int addr_type)
 {
+	if (inet_can_overlap_any(inet))
+		return !inet_addr_valid(addr, addr_type);
+
 	return inet_can_nonlocal_bind(net, inet) ||
 	       inet_addr_valid(addr, addr_type);
+}
+
+static inline bool inet_overlap_any(struct sock *sk)
+{
+	return inet_can_overlap_any(inet_sk(sk));
 }
 #endif	/* _INET_SOCK_H */
