@@ -934,13 +934,12 @@ static inline void iph_to_flow_copy_v6addrs(struct flow_keys *flow,
 }
 
 #if IS_ENABLED(CONFIG_IPV6)
-
 static inline bool ipv6_can_nonlocal_bind(struct net *net,
 					  struct inet_sock *inet)
 {
-	return net->ipv6.sysctl.ip_nonlocal_bind ||
-		test_bit(INET_FLAGS_FREEBIND, &inet->inet_flags) ||
-		test_bit(INET_FLAGS_TRANSPARENT, &inet->inet_flags);
+	return READ_ONCE(net->ipv6.sysctl.ip_nonlocal_bind) ||
+	       test_bit(INET_FLAGS_FREEBIND, &inet->inet_flags) ||
+	       test_bit(INET_FLAGS_TRANSPARENT, &inet->inet_flags);
 }
 
 /* Sysctl settings for net ipv6.auto_flowlabels */
