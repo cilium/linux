@@ -934,12 +934,33 @@ static inline void iph_to_flow_copy_v6addrs(struct flow_keys *flow,
 }
 
 #if IS_ENABLED(CONFIG_IPV6)
+int ipv6_chk_addr(struct net *net, const struct in6_addr *addr,
+		  const struct net_device *dev, int strict);
+
 static inline bool ipv6_can_nonlocal_bind(struct net *net,
 					  struct inet_sock *inet)
 {
 	return READ_ONCE(net->ipv6.sysctl.ip_nonlocal_bind) ||
 	       test_bit(INET_FLAGS_FREEBIND, &inet->inet_flags) ||
 	       test_bit(INET_FLAGS_TRANSPARENT, &inet->inet_flags);
+}
+
+static inline bool ipv6_can_overlap_any(struct inet_sock *inet)
+{
+	return test_bit(INET_FLAGS_TRANSPARENT, &inet->inet_flags) &&
+	       test_bit(INET_FLAGS_BIND_OVERLAP_ANY, &inet->inet_flags);
+}
+
+static inline bool ipv6_addr_valid_or_nonlocal(struct net *net,
+					       struct inet_sock *inet,
+					       const struct in6_addr *addr,
+					       const struct net_device *dev)
+{
+	if (ipv6_can_overlap_any(inet))
+		return !ipv6_chk_addr(net, addr, dev, 0);
+
+	return ipv6_can_nonlocal_bind(net, inet) ||
+	       ipv6_chk_addr(net, addr, dev, 0);
 }
 
 /* Sysctl settings for net ipv6.auto_flowlabels */

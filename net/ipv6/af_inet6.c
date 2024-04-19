@@ -380,9 +380,9 @@ static int __inet6_bind(struct sock *sk, struct sockaddr *uaddr, int addr_len,
 			 */
 			v4addr = LOOPBACK4_IPV6;
 			if (!(addr_type & IPV6_ADDR_MULTICAST))	{
-				if (!ipv6_can_nonlocal_bind(net, inet) &&
-				    !ipv6_chk_addr(net, &addr->sin6_addr,
-						   dev, 0)) {
+				if (!ipv6_addr_valid_or_nonlocal(net, inet,
+								 &addr->sin6_addr,
+								 dev)) {
 					err = -EADDRNOTAVAIL;
 					goto out_unlock;
 				}
