@@ -86,6 +86,7 @@ static netdev_tx_t netkit_xmit(struct sk_buff *skb, struct net_device *dev)
 	case NETKIT_NEXT:
 	case NETKIT_PASS:
 		skb->protocol = eth_type_trans(skb, skb->dev);
+		skb->pkt_type = PACKET_HOST;
 		skb_postpull_rcsum(skb, eth_hdr(skb), ETH_HLEN);
 		if (likely(__netif_rx(skb) == NET_RX_SUCCESS)) {
 			dev_sw_netstats_tx_add(dev, 1, len);
