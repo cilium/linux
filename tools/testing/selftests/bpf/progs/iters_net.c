@@ -14,6 +14,7 @@
 char _license[] SEC("license") = "GPL";
 
 pid_t target_pid;
+__u64 cookie;
 int count;
 bool seen;
 
@@ -21,7 +22,7 @@ SEC("fentry/" SYS_PREFIX "sys_getpgid")
 int foo(void *ctx)
 {
 	struct task_struct *cur_task = bpf_get_current_task_btf();
-	struct net *net, *init = bpf_init_net();
+	struct net *net, *init = bpf_net_init();
 
 	if (cur_task->pid == target_pid) {
 		bpf_for_each(net, net) {
