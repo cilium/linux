@@ -1075,3 +1075,77 @@ static int __init task_iter_init(void)
 	return bpf_iter_reg_target(&task_vma_reg_info);
 }
 late_initcall(task_iter_init);
+
+// WIP
+#include <net/net_namespace.h>
+
+struct bpf_iter_net {
+	__u64 __opaque[3];
+} __attribute__((aligned(8)));
+
+struct bpf_iter_net_kern {
+	struct net **net_array;
+	netns_tracker ns_tracker;
+	u32 len;
+	u32 pos;
+} __attribute__((aligned(8)));
+
+__bpf_kfunc_start_defs();
+
+void *realloc_array(void *arr, size_t old_n, size_t new_n, size_t size, gfp_t flags, bool free_old);
+
+__bpf_kfunc int bpf_iter_net_new(struct bpf_iter_net *it)
+{
+	struct bpf_iter_net_kern *kit = (void *)it;
+	struct net *net, **tmp;
+	u32 i;
+
+	BUILD_BUG_ON(sizeof(struct bpf_iter_net_kern) > sizeof(struct bpf_iter_net));
+	BUILD_BUG_ON(__alignof__(struct bpf_iter_net_kern) !=
+					__alignof__(struct bpf_iter_net));
+	kit->len = kit->pos = 0;
+	kit->net_array = NULL;
+	rcu_read_lock();
+	for_each_net_rcu(net) {
+		tmp = realloc_array(kit->net_array, kit->len, kit->len + 1,
+				    sizeof(*kit->net_array), GFP_ATOMIC, false);
+		if (!tmp) {
+			rcu_read_unlock();
+			goto unwind;
+		}
+		kit->net_array = tmp;
+		kit->net_array[kit->len++] = get_net_track(net, &kit->ns_tracker,
+							   GFP_ATOMIC);
+	}
+	rcu_read_unlock();
+	return 0;
+unwind:
+	for (i = 0; i < kit->len; i++)
+		put_net_track(kit->net_array[i], &kit->ns_tracker);
+	kfree(kit->net_array);
+	return -ENOMEM;
+}
+
+__bpf_kfunc struct net *bpf_iter_net_next(struct bpf_iter_net *it)
+{
+	struct bpf_iter_net_kern *kit = (void *)it;
+	struct net *pos = NULL;
+
+	if (kit->pos < kit->len) {
+		pos = kit->net_array[kit->pos];
+		kit->pos++;
+	}
+	return pos;
+}
+
+__bpf_kfunc void bpf_iter_net_destroy(struct bpf_iter_net *it)
+{
+	struct bpf_iter_net_kern *kit = (void *)it;
+	u32 i;
+
+	for (i = 0; i < kit->len; i++)
+		put_net_track(kit->net_array[i], &kit->ns_tracker);
+	kfree(kit->net_array);
+}
+
+__bpf_kfunc_end_defs();

@@ -1228,12 +1228,14 @@ out:
 	return dst ? dst : ZERO_SIZE_PTR;
 }
 
+void *realloc_array(void *arr, size_t old_n, size_t new_n, size_t size, gfp_t flags, bool free_old);
+
 /* resize an array from old_n items to new_n items. the array is reallocated if it's too
  * small to hold new_n items. new items are zeroed out if the array grows.
  *
  * Contrary to krealloc_array, does not free arr if new_n is zero.
  */
-static void *realloc_array(void *arr, size_t old_n, size_t new_n, size_t size)
+void *realloc_array(void *arr, size_t old_n, size_t new_n, size_t size, gfp_t flags, bool free_old)
 {
 	size_t alloc_size;
 	void *new_arr;
@@ -1242,9 +1244,10 @@ static void *realloc_array(void *arr, size_t old_n, size_t new_n, size_t size)
 		goto out;
 
 	alloc_size = kmalloc_size_roundup(size_mul(new_n, size));
-	new_arr = krealloc(arr, alloc_size, GFP_KERNEL);
+	new_arr = krealloc(arr, alloc_size, flags);
 	if (!new_arr) {
-		kfree(arr);
+		if (free_old)
+			kfree(arr);
 		return NULL;
 	}
 	arr = new_arr;
@@ -1283,7 +1286,7 @@ static int copy_stack_state(struct bpf_func_state *dst, const struct bpf_func_st
 static int resize_reference_state(struct bpf_func_state *state, size_t n)
 {
 	state->refs = realloc_array(state->refs, state->acquired_refs, n,
-				    sizeof(struct bpf_reference_state));
+				    sizeof(struct bpf_reference_state), GFP_KERNEL, true);
 	if (!state->refs)
 		return -ENOMEM;
 
@@ -1305,7 +1308,7 @@ static int grow_stack_state(struct bpf_verifier_env *env, struct bpf_func_state 
 	if (old_n >= n)
 		return 0;
 
-	state->stack = realloc_array(state->stack, old_n, n, sizeof(struct bpf_stack_state));
+	state->stack = realloc_array(state->stack, old_n, n, sizeof(struct bpf_stack_state), GFP_KERNEL, true);
 	if (!state->stack)
 		return -ENOMEM;
 
