@@ -309,6 +309,7 @@ static void subtest_net_iters(void)
 	syscall(SYS_getpgid);
 
 	ASSERT_EQ(skel->bss->count, 1, "net_count");
+	ASSERT_EQ(skel->bss->seen, true, "net_seen");
 	iters_net__detach(skel);
 cleanup:
 	iters_net__destroy(skel);

@@ -463,5 +463,6 @@ struct bpf_iter_net;
 extern int bpf_iter_net_new(struct bpf_iter_net *it) __weak __ksym;
 extern struct net *bpf_iter_net_next(struct bpf_iter_net *it) __weak __ksym;
 extern void bpf_iter_net_destroy(struct bpf_iter_net *it) __weak __ksym;
+extern struct net *bpf_init_net(void) __weak __ksym;
 
 #endif
