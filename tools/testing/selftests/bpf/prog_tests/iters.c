@@ -20,6 +20,7 @@
 #include "iters_css_task.skel.h"
 #include "iters_css.skel.h"
 #include "iters_task_failure.skel.h"
+#include "iters_net.skel.h"
 
 static void subtest_num_iters(void)
 {
@@ -290,6 +291,29 @@ cleanup:
 	iters_css__destroy(skel);
 }
 
+static void subtest_net_iters(void)
+{
+	struct iters_net *skel;
+	int err;
+
+	skel = iters_net__open_and_load();
+	if (!ASSERT_OK_PTR(skel, "open_and_load"))
+		goto cleanup;
+
+	skel->bss->target_pid = getpid();
+
+	err = iters_net__attach(skel);
+	if (!ASSERT_OK(err, "iters_net__attach"))
+		goto cleanup;
+
+	syscall(SYS_getpgid);
+
+	ASSERT_EQ(skel->bss->count, 1, "net_count");
+	iters_net__detach(skel);
+cleanup:
+	iters_net__destroy(skel);
+}
+
 void test_iters(void)
 {
 	RUN_TESTS(iters_state_safety);
@@ -312,5 +336,7 @@ void test_iters(void)
 		subtest_css_task_iters();
 	if (test__start_subtest("css"))
 		subtest_css_iters();
+	if (test__start_subtest("net"))
+		subtest_net_iters();
 	RUN_TESTS(iters_task_failure);
 }
