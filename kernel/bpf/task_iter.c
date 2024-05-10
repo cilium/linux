@@ -1148,4 +1148,9 @@ __bpf_kfunc void bpf_iter_net_destroy(struct bpf_iter_net *it)
 	kfree(kit->net_array);
 }
 
+__bpf_kfunc struct net *bpf_init_net(void)
+{
+	return &init_net;
+}
+
 __bpf_kfunc_end_defs();
