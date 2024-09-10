@@ -351,9 +351,10 @@ int wg_socket_init(struct wg_device *wg, u16 port)
 	struct net *net;
 	int ret;
 	struct udp_tunnel_sock_cfg cfg = {
-		.sk_user_data = wg,
-		.encap_type = 1,
-		.encap_rcv = wg_receive
+		.sk_user_data	= wg,
+		.encap_type	= 1,
+		.encap_rcv	= wg_receive,
+		.gro_receive	= wg_gro_receive,
 	};
 	struct socket *new4 = NULL, *new6 = NULL;
 	struct udp_port_cfg port4 = {

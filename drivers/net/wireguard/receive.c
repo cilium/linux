@@ -14,7 +14,9 @@
 #include <linux/ip.h>
 #include <linux/ipv6.h>
 #include <linux/udp.h>
+
 #include <net/ip_tunnels.h>
+#include <net/gro.h>
 
 /* Must be called with bh disabled. */
 static void update_rx_stats(struct wg_peer *peer, size_t len)
@@ -583,4 +585,36 @@ void wg_packet_receive(struct wg_device *wg, struct sk_buff *skb)
 
 err:
 	dev_kfree_skb(skb);
+}
+
+static size_t wg_gro_candidate(struct sk_buff *skb)
+{
+	if (unlikely(skb->len < sizeof(struct message_header)))
+		return false;
+	if (SKB_TYPE_LE32(skb) == cpu_to_le32(MESSAGE_DATA) &&
+	    skb->len >= MESSAGE_MINIMUM_LENGTH)
+		return true;
+	return false;
+}
+
+struct sk_buff *wg_gro_receive(struct sock *sk,
+			       struct list_head *head,
+			       struct sk_buff *skb)
+{
+	struct wg_device *wg = sk->sk_user_data;
+	int offset = skb_gro_offset(skb);
+
+	if (!pskb_pull(skb, offset))
+		return NULL;
+	if (!wg_gro_candidate(skb))
+		goto out;
+	skb_mark_not_on_list(skb);
+	PACKET_CB(skb)->ds = ip_tunnel_get_dsfield(ip_hdr(skb), skb);
+	wg_packet_consume_data(wg, skb);
+	return ERR_PTR(-EINPROGRESS);
+out:
+	skb_push(skb, offset);
+	NAPI_GRO_CB(skb)->same_flow = 0;
+	NAPI_GRO_CB(skb)->flush = 1;
+	return NULL;
 }
