@@ -30,6 +30,9 @@ void wg_socket_set_peer_endpoint_from_skb(struct wg_peer *peer,
 					  const struct sk_buff *skb);
 void wg_socket_clear_peer_endpoint_src(struct wg_peer *peer);
 
+struct sk_buff *wg_gro_receive(struct sock *sk, struct list_head *head,
+			       struct sk_buff *skb);
+
 #if defined(CONFIG_DYNAMIC_DEBUG) || defined(DEBUG)
 #define net_dbg_skb_ratelimited(fmt, dev, skb, ...) do {                       \
 		struct endpoint __endpoint;                                    \
