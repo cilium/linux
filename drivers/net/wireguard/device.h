@@ -34,7 +34,7 @@ struct crypt_queue {
 struct prev_queue {
 	struct sk_buff *head, *tail, *peeked;
 	struct { struct sk_buff *next, *prev; } empty; // Match first 2 members of struct sk_buff.
-	atomic_t count;
+	//atomic_t count;
 };
 
 struct wg_device {
