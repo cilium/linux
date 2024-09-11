@@ -396,8 +396,8 @@ out_nokey:
 	/* We orphan the packets if we're waiting on a handshake, so that they
 	 * don't block a socket's pool.
 	 */
-	skb_queue_walk(&packets, skb)
-		skb_orphan(skb);
+	//skb_queue_walk(&packets, skb)
+	//	skb_orphan(skb);
 	/* Then we put them back on the top of the queue. We're not too
 	 * concerned about accidentally getting things a little out of order if
 	 * packets are being added really fast, because this queue is for before
