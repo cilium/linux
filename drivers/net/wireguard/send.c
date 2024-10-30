@@ -171,6 +171,7 @@ static bool encrypt_packet(struct sk_buff *skb, struct noise_keypair *keypair)
 	 * consistent over the inner packet.
 	 */
 	skb_get_hash(skb);
+	PACKET_CB(skb)->sport = udp_flow_src_port(dev_net(skb->dev), skb, 1, USHRT_MAX, false);
 
 	/* Calculate lengths. */
 	padding_len = calculate_skb_padding(skb);

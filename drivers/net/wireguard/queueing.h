@@ -61,6 +61,7 @@ struct packet_cb {
 	struct noise_keypair *keypair;
 	atomic_t state;
 	u32 mtu;
+	u16 sport;
 	u8 ds;
 };
 

@@ -14,6 +14,7 @@
 #include <linux/if_vlan.h>
 #include <linux/if_ether.h>
 #include <linux/inetdevice.h>
+#include <linux/minmax.h>
 #include <net/udp_tunnel.h>
 #include <net/ipv6.h>
 
@@ -21,11 +22,10 @@ static int send4(struct wg_device *wg, struct sk_buff *skb,
 		 struct endpoint *endpoint, u8 ds, struct dst_cache *cache)
 {
 	struct flowi4 fl = {
-		.saddr = endpoint->src4.s_addr,
-		.daddr = endpoint->addr4.sin_addr.s_addr,
-		.fl4_dport = endpoint->addr4.sin_port,
-		.flowi4_mark = wg->fwmark,
-		.flowi4_proto = IPPROTO_UDP
+		.saddr		= endpoint->src4.s_addr,
+		.daddr		= endpoint->addr4.sin_addr.s_addr,
+		.flowi4_mark	= wg->fwmark,
+		.flowi4_proto	= IPPROTO_UDP,
 	};
 	struct rtable *rt = NULL;
 	struct sock *sock;
@@ -43,8 +43,8 @@ static int send4(struct wg_device *wg, struct sk_buff *skb,
 		goto err;
 	}
 
-	fl.fl4_sport = inet_sk(sock)->inet_sport;
-
+	fl.fl4_dport = inet_sk(sock)->inet_sport;
+	fl.fl4_sport = PACKET_CB(skb)->sport ? : inet_sk(sock)->inet_sport;
 	if (cache)
 		rt = dst_cache_get_ip4(cache, &fl.saddr);
 
@@ -123,8 +123,7 @@ static int send6(struct wg_device *wg, struct sk_buff *skb,
 		goto err;
 	}
 
-	fl.fl6_sport = inet_sk(sock)->inet_sport;
-
+	fl.fl6_sport = PACKET_CB(skb)->sport ? : inet_sk(sock)->inet_sport;
 	if (cache)
 		dst = dst_cache_get_ip6(cache, &fl.saddr);
 
