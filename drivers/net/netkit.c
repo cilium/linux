@@ -9,11 +9,18 @@
 #include <linux/bpf_mprog.h>
 #include <linux/indirect_call_wrapper.h>
 
+#include <net/xdp_sock_drv.h>
 #include <net/netkit.h>
 #include <net/dst.h>
 #include <net/tcx.h>
 
 #define DRV_NAME "netkit"
+
+struct netkit_lower {
+	struct net_device *dev;
+	u32 queue_id_from;
+	u32 queue_id_to;
+};
 
 struct netkit {
 	/* Needed in fast-path */
@@ -25,6 +32,7 @@ struct netkit {
 
 	/* Needed in slow-path */
 	enum netkit_mode mode;
+	struct netkit_lower *lower;
 	bool primary;
 	u32 headroom;
 };
@@ -154,6 +162,48 @@ static int netkit_close(struct net_device *dev)
 	return 0;
 }
 
+static bool netkit_queue_valid(struct net_device *dev, u32 queue_id)
+{
+	struct netkit *nk = netkit_priv(dev);
+
+	return queue_id >= nk->lower->queue_id_from &&
+	       queue_id <= nk->lower->queue_id_to;
+}
+
+static int netkit_xdp(struct net_device *dev, struct netdev_bpf *xdp)
+{
+	struct netkit *nk = netkit_priv(dev);
+
+	if (!nk->lower || nk->primary)
+		return -EOPNOTSUPP;
+
+	switch (xdp->command) {
+	case XDP_SETUP_XSK_POOL:
+		if (!netkit_queue_valid(dev, xdp->xsk.queue_id))
+			return -EPERM;
+		break;
+	case XDP_SETUP_PROG:
+		return -EPERM;
+	default:
+		return -EINVAL;
+	}
+
+	return nk->lower->dev->netdev_ops->ndo_bpf(nk->lower->dev, xdp);
+}
+
+static int netkit_xsk_wakeup(struct net_device *dev, u32 queue_id, u32 flags)
+{
+	struct netkit *nk = netkit_priv(dev);
+
+	if (!nk->lower || nk->primary)
+		return -EOPNOTSUPP;
+	if (!netkit_queue_valid(dev, queue_id))
+		return -EPERM;
+
+	return nk->lower->dev->netdev_ops->ndo_xsk_wakeup(nk->lower->dev,
+							  queue_id, flags);
+}
+
 static int netkit_get_iflink(const struct net_device *dev)
 {
 	struct netkit *nk = netkit_priv(dev);
@@ -231,6 +281,8 @@ static const struct net_device_ops netkit_netdev_ops = {
 	.ndo_get_peer_dev	= netkit_peer_dev,
 	.ndo_get_stats64	= netkit_get_stats,
 	.ndo_uninit		= netkit_uninit,
+	.ndo_bpf		= netkit_xdp,
+	.ndo_xsk_wakeup		= netkit_xsk_wakeup,
 	.ndo_features_check	= passthru_features_check,
 };
 
@@ -339,6 +391,8 @@ static int netkit_new_link(struct net_device *dev,
 	struct nlattr **data = params->data;
 	enum netkit_mode mode = NETKIT_L3;
 	unsigned char ifname_assign_type;
+	struct netkit_lowerdev *ldev = NULL;
+	struct netkit_lower *lower = NULL;
 	struct nlattr **tb = params->tb;
 	u16 headroom = 0, tailroom = 0;
 	struct ifinfomsg *ifmp = NULL;
@@ -379,6 +433,8 @@ static int netkit_new_link(struct net_device *dev,
 			headroom = nla_get_u16(data[IFLA_NETKIT_HEADROOM]);
 		if (data[IFLA_NETKIT_TAILROOM])
 			tailroom = nla_get_u16(data[IFLA_NETKIT_TAILROOM]);
+		if (data[IFLA_NETKIT_LOWERDEV])
+			ldev = nla_data(data[IFLA_NETKIT_LOWERDEV]);
 	}
 
 	if (ifmp && tbp[IFLA_IFNAME]) {
@@ -392,10 +448,53 @@ static int netkit_new_link(struct net_device *dev,
 	    (tb[IFLA_ADDRESS] || tbp[IFLA_ADDRESS]))
 		return -EOPNOTSUPP;
 
+	if (ldev) {
+		lower = kzalloc(sizeof(*lower), GFP_KERNEL);
+		if (!lower)
+			return -ENOMEM;
+		lower->queue_id_from = ldev->queue_id_from;
+		lower->queue_id_to = ldev->queue_id_to;
+		lower->dev = dev_get_by_index(dev_net(dev), ldev->ifindex);
+		if (!lower->dev) {
+			kfree(lower);
+			return -ENODEV;
+		}
+		if (!lower->dev->netdev_ops->ndo_bpf ||
+		    !lower->dev->netdev_ops->ndo_xdp_xmit ||
+		    !lower->dev->netdev_ops->ndo_xsk_wakeup) {
+			NL_SET_ERR_MSG_ATTR(extack, data[IFLA_NETKIT_LOWERDEV],
+					    "Lower device does not support XDP");
+			err = -EOPNOTSUPP;
+			goto err_generic;
+		}
+		if (lower->dev->netdev_ops == &netkit_netdev_ops) {
+			NL_SET_ERR_MSG_ATTR(extack, data[IFLA_NETKIT_LOWERDEV],
+					    "Lower device cannot be netkit");
+			err = -EOPNOTSUPP;
+			goto err_generic;
+		}
+		if (lower->queue_id_from > lower->queue_id_to ||
+		    lower->queue_id_to >= lower->dev->real_num_tx_queues ||
+		    lower->queue_id_to >= lower->dev->real_num_rx_queues) {
+			NL_SET_ERR_MSG_ATTR(extack, data[IFLA_NETKIT_LOWERDEV],
+					    "Lower device queue selection invalid");
+			err = -EINVAL;
+			goto err_generic;
+		}
+		if ((lower->dev->xdp_features & NETDEV_XDP_ACT_XSK) != NETDEV_XDP_ACT_XSK) {
+			NL_SET_ERR_MSG_ATTR(extack, data[IFLA_NETKIT_LOWERDEV],
+					    "Lower device does not support AF_XDP zero-copy mode");
+			err = -EOPNOTSUPP;
+			goto err_generic;
+		}
+	}
+
 	peer = rtnl_create_link(peer_net, ifname, ifname_assign_type,
 				&netkit_link_ops, tbp, extack);
-	if (IS_ERR(peer))
-		return PTR_ERR(peer);
+	if (IS_ERR(peer)) {
+		err = PTR_ERR(peer);
+		goto err_generic;
+	}
 
 	netif_inherit_tso_max(peer, dev);
 	if (headroom) {
@@ -418,6 +517,7 @@ static int netkit_new_link(struct net_device *dev,
 	nk->scrub = scrub_peer;
 	nk->mode = mode;
 	nk->headroom = headroom;
+	nk->lower = lower;
 	bpf_mprog_bundle_init(&nk->bundle);
 
 	err = register_netdevice(peer);
@@ -444,6 +544,7 @@ static int netkit_new_link(struct net_device *dev,
 	nk->scrub = scrub_prim;
 	nk->mode = mode;
 	nk->headroom = headroom;
+	nk->lower = lower;
 	bpf_mprog_bundle_init(&nk->bundle);
 
 	err = register_netdevice(dev);
@@ -458,9 +559,14 @@ static int netkit_new_link(struct net_device *dev,
 	return 0;
 err_configure_peer:
 	unregister_netdevice(peer);
-	return err;
+	goto err_generic;
 err_register_peer:
 	free_netdev(peer);
+err_generic:
+	if (lower) {
+		dev_put(lower->dev);
+		kfree(lower);
+	}
 	return err;
 }
 
@@ -843,7 +949,20 @@ static void netkit_release_all(struct net_device *dev)
 
 static void netkit_uninit(struct net_device *dev)
 {
+	struct netkit *nk = netkit_priv(dev);
+	struct net_device *peer = rtnl_dereference(nk->peer);
+	struct netkit_lower *lower = nk->lower;
+
 	netkit_release_all(dev);
+	if (lower) {
+		dev_put(lower->dev);
+		kfree(lower);
+		nk->lower = NULL;
+		if (peer) {
+			nk = netkit_priv(peer);
+			nk->lower = NULL;
+		}
+	}
 }
 
 static void netkit_del_link(struct net_device *dev, struct list_head *head)
@@ -879,6 +998,7 @@ static int netkit_change_link(struct net_device *dev, struct nlattr *tb[],
 		{ IFLA_NETKIT_PEER_INFO,  "peer info" },
 		{ IFLA_NETKIT_HEADROOM,   "headroom" },
 		{ IFLA_NETKIT_TAILROOM,   "tailroom" },
+		{ IFLA_NETKIT_LOWERDEV,   "lower dev" },
 	};
 
 	if (!nk->primary) {
@@ -931,6 +1051,7 @@ static size_t netkit_get_size(const struct net_device *dev)
 	       nla_total_size(sizeof(u8))  + /* IFLA_NETKIT_PRIMARY */
 	       nla_total_size(sizeof(u16)) + /* IFLA_NETKIT_HEADROOM */
 	       nla_total_size(sizeof(u16)) + /* IFLA_NETKIT_TAILROOM */
+	       nla_total_size(sizeof(struct netkit_lowerdev)) + /* IFLA_NETKIT_LOWERDEV */
 	       0;
 }
 
@@ -951,7 +1072,15 @@ static int netkit_fill_info(struct sk_buff *skb, const struct net_device *dev)
 		return -EMSGSIZE;
 	if (nla_put_u16(skb, IFLA_NETKIT_TAILROOM, dev->needed_tailroom))
 		return -EMSGSIZE;
-
+	if (nk->lower) {
+		struct netkit_lowerdev ldev = {
+			.ifindex	= nk->lower->dev->ifindex,
+			.queue_id_from	= nk->lower->queue_id_from,
+			.queue_id_to	= nk->lower->queue_id_to,
+		};
+		if (nla_put(skb, IFLA_NETKIT_LOWERDEV, sizeof(ldev), &ldev))
+			return -EMSGSIZE;
+	}
 	if (peer) {
 		nk = netkit_priv(peer);
 		if (nla_put_u32(skb, IFLA_NETKIT_PEER_POLICY, nk->policy))
@@ -972,6 +1101,7 @@ static const struct nla_policy netkit_policy[IFLA_NETKIT_MAX + 1] = {
 	[IFLA_NETKIT_TAILROOM]		= { .type = NLA_U16 },
 	[IFLA_NETKIT_SCRUB]		= NLA_POLICY_MAX(NLA_U32, NETKIT_SCRUB_DEFAULT),
 	[IFLA_NETKIT_PEER_SCRUB]	= NLA_POLICY_MAX(NLA_U32, NETKIT_SCRUB_DEFAULT),
+	[IFLA_NETKIT_LOWERDEV]          = NLA_POLICY_EXACT_LEN(sizeof(struct netkit_lowerdev)),
 	[IFLA_NETKIT_PRIMARY]		= { .type = NLA_REJECT,
 					    .reject_message = "Primary attribute is read-only" },
 };

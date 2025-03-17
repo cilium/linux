@@ -1307,6 +1307,12 @@ enum netkit_scrub {
 	NETKIT_SCRUB_DEFAULT,
 };
 
+struct netkit_lowerdev {
+	__u32 ifindex;
+	__u32 queue_id_from;
+	__u32 queue_id_to;
+};
+
 enum {
 	IFLA_NETKIT_UNSPEC,
 	IFLA_NETKIT_PEER_INFO,
@@ -1318,6 +1324,7 @@ enum {
 	IFLA_NETKIT_PEER_SCRUB,
 	IFLA_NETKIT_HEADROOM,
 	IFLA_NETKIT_TAILROOM,
+	IFLA_NETKIT_LOWERDEV,
 	__IFLA_NETKIT_MAX,
 };
 #define IFLA_NETKIT_MAX	(__IFLA_NETKIT_MAX - 1)
