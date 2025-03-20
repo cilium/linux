@@ -169,32 +169,24 @@ int xp_assign_dev(struct xsk_buff_pool *pool,
 
 	force_zc = flags & XDP_ZEROCOPY;
 	force_copy = flags & XDP_COPY;
-
 	if (force_zc && force_copy)
 		return -EINVAL;
 
-	if (xsk_get_pool_from_qid(netdev, queue_id))
-		return -EBUSY;
-
-	pool->netdev = netdev;
-	pool->queue_id = queue_id;
 	err = xsk_reg_pool_at_qid(netdev, pool, queue_id);
 	if (err)
 		return err;
 
 	if (flags & XDP_USE_SG)
 		pool->umem->flags |= XDP_UMEM_SG_FLAG;
-
 	if (flags & XDP_USE_NEED_WAKEUP)
 		pool->uses_need_wakeup = true;
-	/* Tx needs to be explicitly woken up the first time.  Also
-	 * for supporting drivers that do not implement this
-	 * feature. They will always have to call sendto() or poll().
+	/* Tx needs to be explicitly woken up the first time. Also
+	 * for supporting drivers that do not implement this feature.
+	 * They will always have to call sendto() or poll().
 	 */
 	pool->cached_need_wakeup = XDP_WAKEUP_TX;
 
 	dev_hold(netdev);
-
 	if (force_copy)
 		/* For copy-mode, we are done. */
 		return 0;
@@ -203,12 +195,10 @@ int xp_assign_dev(struct xsk_buff_pool *pool,
 		err = -EOPNOTSUPP;
 		goto err_unreg_pool;
 	}
-
 	if (netdev->xdp_zc_max_segs == 1 && (flags & XDP_USE_SG)) {
 		err = -EOPNOTSUPP;
 		goto err_unreg_pool;
 	}
-
 	if (dev_get_min_mp_channel_count(netdev)) {
 		err = -EBUSY;
 		goto err_unreg_pool;
