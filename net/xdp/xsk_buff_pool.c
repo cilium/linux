@@ -54,6 +54,11 @@ int xp_alloc_tx_descs(struct xsk_buff_pool *pool, struct xdp_sock *xs)
 	return 0;
 }
 
+static bool xp_pool_bindable(struct xsk_buff_pool *pool)
+{
+	return dev_get_min_mp_channel_count(pool->netdev) == 0;
+}
+
 struct xsk_buff_pool *xp_create_and_assign_umem(struct xdp_sock *xs,
 						struct xdp_umem *umem)
 {
@@ -199,7 +204,7 @@ int xp_assign_dev(struct xsk_buff_pool *pool,
 		err = -EOPNOTSUPP;
 		goto err_unreg_pool;
 	}
-	if (dev_get_min_mp_channel_count(netdev)) {
+	if (!xp_pool_bindable(pool)) {
 		err = -EBUSY;
 		goto err_unreg_pool;
 	}
