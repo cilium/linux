@@ -10,6 +10,7 @@
 #include <linux/indirect_call_wrapper.h>
 
 #include <net/xdp_sock_drv.h>
+#include <net/netdev_rx_queue.h>
 #include <net/netkit.h>
 #include <net/dst.h>
 #include <net/tcx.h>
@@ -204,6 +205,64 @@ static int netkit_xsk_wakeup(struct net_device *dev, u32 queue_id, u32 flags)
 							  queue_id, flags);
 }
 
+static struct xsk_buff_pool *
+netkit_xsk_get_pool_from_qid(struct net_device *dev, u16 queue_id)
+{
+	struct netkit *nk = netkit_priv(dev);
+
+	if (!nk->lower || nk->primary)
+		return NULL;
+	if (!netkit_queue_valid(dev, queue_id))
+		return NULL;
+	if (queue_id < nk->lower->dev->real_num_rx_queues)
+		return nk->lower->dev->_rx[queue_id].pool;
+	if (queue_id < nk->lower->dev->real_num_tx_queues)
+		return nk->lower->dev->_tx[queue_id].pool;
+	return NULL;
+}
+
+static int netkit_xsk_reg_pool_at_qid(struct net_device *dev,
+				      struct xsk_buff_pool *pool,
+				      u16 queue_id)
+{
+	struct netkit *nk = netkit_priv(dev);
+
+	if (!nk->lower || nk->primary)
+		return -EOPNOTSUPP;
+	if (!netkit_queue_valid(dev, queue_id))
+		return -EPERM;
+	if (queue_id >= max_t(unsigned int,
+			      nk->lower->dev->real_num_rx_queues,
+			      nk->lower->dev->real_num_tx_queues))
+		return -EINVAL;
+	if (xsk_get_pool_from_qid(nk->lower->dev, queue_id))
+		return -EBUSY;
+
+	pool->netdev = nk->lower->dev;
+	pool->queue_id = queue_id;
+
+	if (queue_id < nk->lower->dev->real_num_rx_queues)
+		nk->lower->dev->_rx[queue_id].pool = pool;
+	if (queue_id < nk->lower->dev->real_num_tx_queues)
+		nk->lower->dev->_tx[queue_id].pool = pool;
+	return 0;
+}
+
+static void netkit_xsk_clear_pool_at_qid(struct net_device *dev,
+					 u16 queue_id)
+{
+	struct netkit *nk = netkit_priv(dev);
+
+	if (!nk->lower || nk->primary)
+		return;
+	if (!netkit_queue_valid(dev, queue_id))
+		return;
+	if (queue_id < nk->lower->dev->num_rx_queues)
+		nk->lower->dev->_rx[queue_id].pool = NULL;
+	if (queue_id < nk->lower->dev->num_tx_queues)
+		nk->lower->dev->_tx[queue_id].pool = NULL;
+}
+
 static int netkit_get_iflink(const struct net_device *dev)
 {
 	struct netkit *nk = netkit_priv(dev);
@@ -271,19 +330,22 @@ static void netkit_get_stats(struct net_device *dev,
 static void netkit_uninit(struct net_device *dev);
 
 static const struct net_device_ops netkit_netdev_ops = {
-	.ndo_open		= netkit_open,
-	.ndo_stop		= netkit_close,
-	.ndo_start_xmit		= netkit_xmit,
-	.ndo_set_rx_mode	= netkit_set_multicast,
-	.ndo_set_rx_headroom	= netkit_set_headroom,
-	.ndo_set_mac_address	= netkit_set_macaddr,
-	.ndo_get_iflink		= netkit_get_iflink,
-	.ndo_get_peer_dev	= netkit_peer_dev,
-	.ndo_get_stats64	= netkit_get_stats,
-	.ndo_uninit		= netkit_uninit,
-	.ndo_bpf		= netkit_xdp,
-	.ndo_xsk_wakeup		= netkit_xsk_wakeup,
-	.ndo_features_check	= passthru_features_check,
+	.ndo_open			= netkit_open,
+	.ndo_stop			= netkit_close,
+	.ndo_start_xmit			= netkit_xmit,
+	.ndo_set_rx_mode		= netkit_set_multicast,
+	.ndo_set_rx_headroom		= netkit_set_headroom,
+	.ndo_set_mac_address		= netkit_set_macaddr,
+	.ndo_get_iflink			= netkit_get_iflink,
+	.ndo_get_peer_dev		= netkit_peer_dev,
+	.ndo_get_stats64		= netkit_get_stats,
+	.ndo_uninit			= netkit_uninit,
+	.ndo_bpf			= netkit_xdp,
+	.ndo_xsk_wakeup			= netkit_xsk_wakeup,
+	.ndo_xsk_get_pool_from_qid	= netkit_xsk_get_pool_from_qid,
+	.ndo_xsk_reg_pool_at_qid	= netkit_xsk_reg_pool_at_qid,
+	.ndo_xsk_clear_pool_at_qid	= netkit_xsk_clear_pool_at_qid,
+	.ndo_features_check		= passthru_features_check,
 };
 
 static void netkit_get_drvinfo(struct net_device *dev,
