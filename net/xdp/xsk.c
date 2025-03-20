@@ -99,17 +99,22 @@ EXPORT_SYMBOL(xsk_uses_need_wakeup);
 struct xsk_buff_pool *xsk_get_pool_from_qid(struct net_device *dev,
 					    u16 queue_id)
 {
+	if (dev->netdev_ops->ndo_xsk_get_pool_from_qid)
+		return dev->netdev_ops->ndo_xsk_get_pool_from_qid(dev, queue_id);
+
 	if (queue_id < dev->real_num_rx_queues)
 		return dev->_rx[queue_id].pool;
 	if (queue_id < dev->real_num_tx_queues)
 		return dev->_tx[queue_id].pool;
-
 	return NULL;
 }
 EXPORT_SYMBOL(xsk_get_pool_from_qid);
 
 void xsk_clear_pool_at_qid(struct net_device *dev, u16 queue_id)
 {
+	if (dev->netdev_ops->ndo_xsk_clear_pool_at_qid)
+		return dev->netdev_ops->ndo_xsk_clear_pool_at_qid(dev, queue_id);
+
 	if (queue_id < dev->num_rx_queues)
 		dev->_rx[queue_id].pool = NULL;
 	if (queue_id < dev->num_tx_queues)
@@ -123,6 +128,10 @@ void xsk_clear_pool_at_qid(struct net_device *dev, u16 queue_id)
 int xsk_reg_pool_at_qid(struct net_device *dev, struct xsk_buff_pool *pool,
 			u16 queue_id)
 {
+	if (dev->netdev_ops->ndo_xsk_reg_pool_at_qid)
+		return dev->netdev_ops->ndo_xsk_reg_pool_at_qid(dev, pool,
+								queue_id);
+
 	if (queue_id >= max_t(unsigned int,
 			      dev->real_num_rx_queues,
 			      dev->real_num_tx_queues))
@@ -137,7 +146,6 @@ int xsk_reg_pool_at_qid(struct net_device *dev, struct xsk_buff_pool *pool,
 		dev->_rx[queue_id].pool = pool;
 	if (queue_id < dev->real_num_tx_queues)
 		dev->_tx[queue_id].pool = pool;
-
 	return 0;
 }
 

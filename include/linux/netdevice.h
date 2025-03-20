@@ -1644,7 +1644,13 @@ struct net_device_ops {
 	int			(*ndo_hwtstamp_set)(struct net_device *dev,
 						    struct kernel_hwtstamp_config *kernel_config,
 						    struct netlink_ext_ack *extack);
-
+	struct xsk_buff_pool *	(*ndo_xsk_get_pool_from_qid)(struct net_device *dev,
+							     u16 queue_id);
+	int			(*ndo_xsk_reg_pool_at_qid)(struct net_device *dev,
+							   struct xsk_buff_pool *pool,
+							   u16 queue_id);
+	void			(*ndo_xsk_clear_pool_at_qid)(struct net_device *dev,
+							     u16 queue_id);
 #if IS_ENABLED(CONFIG_NET_SHAPER)
 	/**
 	 * @net_shaper_ops: Device shaping offload operations
