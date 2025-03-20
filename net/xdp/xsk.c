@@ -141,6 +141,11 @@ int xsk_reg_pool_at_qid(struct net_device *dev, struct xsk_buff_pool *pool,
 			      dev->real_num_rx_queues,
 			      dev->real_num_tx_queues))
 		return -EINVAL;
+	if (xsk_get_pool_from_qid(dev, queue_id))
+		return -EBUSY;
+
+	pool->netdev = dev;
+	pool->queue_id = queue_id;
 
 	if (queue_id < dev->real_num_rx_queues)
 		dev->_rx[queue_id].pool = pool;
