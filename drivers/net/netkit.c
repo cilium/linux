@@ -580,6 +580,10 @@ static int netkit_new_link(struct net_device *dev,
 	nk->mode = mode;
 	nk->headroom = headroom;
 	nk->lower = lower;
+	if (nk->lower) {
+		peer->xdp_zc_max_segs = nk->lower->dev->xdp_zc_max_segs;
+		peer->xdp_features |= NETDEV_XDP_ACT_XSK;
+	}
 	bpf_mprog_bundle_init(&nk->bundle);
 
 	err = register_netdevice(peer);
