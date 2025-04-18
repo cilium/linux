@@ -2671,7 +2671,7 @@ int __udp4_lib_rcv(struct sk_buff *skb, struct udp_table *udptable,
 {
 	struct sock *sk = NULL;
 	struct udphdr *uh;
-	unsigned short ulen;
+	unsigned int ulen;
 	struct rtable *rt = skb_rtable(skb);
 	__be32 saddr, daddr;
 	struct net *net = dev_net(skb->dev);
@@ -2695,6 +2695,9 @@ int __udp4_lib_rcv(struct sk_buff *skb, struct udp_table *udptable,
 		goto short_packet;
 
 	if (proto == IPPROTO_UDP) {
+		if (!ulen)
+			ulen = skb->len;
+
 		/* UDP validates ulen. */
 		if (ulen < sizeof(*uh) || pskb_trim_rcsum(skb, ulen))
 			goto short_packet;
