@@ -925,12 +925,15 @@ static int udp_gro_complete_segment(struct sk_buff *skb)
 int udp_gro_complete(struct sk_buff *skb, int nhoff,
 		     udp_lookup_t lookup)
 {
-	__be16 newlen = htons(skb->len - nhoff);
+	unsigned int newlen = skb->len - nhoff;
 	struct udphdr *uh = (struct udphdr *)(skb->data + nhoff);
 	struct sock *sk;
 	int err;
 
-	uh->len = newlen;
+	if (newlen <= GRO_LEGACY_MAX_SIZE)
+		uh->len = htons(newlen);
+	else
+		uh->len = 0;
 
 	sk = INDIRECT_CALL_INET(lookup, udp6_lib_lookup_skb,
 				udp4_lib_lookup_skb, skb, uh->source, uh->dest);
