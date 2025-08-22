@@ -1299,6 +1299,12 @@ enum netkit_pairing {
 	NETKIT_DEVICE_SINGLE,
 };
 
+struct netkit_bind {
+	__u32 ifindex;
+	__u32 queue_id_from;
+	__u32 queue_id_to;
+};
+
 /* NETKIT_SCRUB_NONE leaves clearing skb->{mark,priority} up to
  * the BPF program if attached. This also means the latter can
  * consume the two fields if they were populated earlier.
@@ -1324,6 +1330,7 @@ enum {
 	IFLA_NETKIT_HEADROOM,
 	IFLA_NETKIT_TAILROOM,
 	IFLA_NETKIT_PAIRING,
+	IFLA_NETKIT_BIND,
 	__IFLA_NETKIT_MAX,
 };
 #define IFLA_NETKIT_MAX	(__IFLA_NETKIT_MAX - 1)

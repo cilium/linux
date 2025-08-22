@@ -15,6 +15,12 @@
 
 #define DRV_NAME "netkit"
 
+struct netkit_lower {
+	struct net_device *dev;
+	u32 queue_id_from;
+	u32 queue_id_to;
+};
+
 struct netkit {
 	__cacheline_group_begin(netkit_fastpath);
 	struct net_device __rcu *peer;
@@ -29,6 +35,7 @@ struct netkit {
 	enum netkit_pairing pair;
 	bool primary;
 	u32 headroom;
+	struct netkit_lower *lower;
 	__cacheline_group_end(netkit_slowpath);
 };
 
@@ -158,6 +165,14 @@ static int netkit_close(struct net_device *dev)
 	if (peer)
 		netif_carrier_off(peer);
 	return 0;
+}
+
+static bool netkit_queue_valid(struct net_device *dev, u32 queue_id)
+{
+	struct netkit *nk = netkit_priv(dev);
+
+	return queue_id >= nk->lower->queue_id_from &&
+	       queue_id <= nk->lower->queue_id_to;
 }
 
 static int netkit_get_iflink(const struct net_device *dev)
@@ -302,6 +317,18 @@ static struct net *netkit_get_link_net(const struct net_device *dev)
 	return peer ? dev_net(peer) : dev_net(dev);
 }
 
+static int netkit_check_lower_ndos(const struct net_device *dev,
+				   struct nlattr *tb,
+				   struct netlink_ext_ack *extack)
+{
+	if (dev->netdev_ops == &netkit_netdev_ops) {
+		NL_SET_ERR_MSG_ATTR(extack, tb,
+				    "Lower device cannot be netkit");
+		return -EOPNOTSUPP;
+	}
+	return 0;
+}
+
 static int netkit_check_policy(int policy, struct nlattr *tb,
 			       struct netlink_ext_ack *extack)
 {
@@ -345,6 +372,8 @@ static int netkit_new_link(struct net_device *dev,
 	enum netkit_action policy_peer = NETKIT_PASS;
 	struct nlattr **data = params->data;
 	enum netkit_mode mode = NETKIT_L3;
+	struct netkit_lower *lower = NULL;
+	struct netkit_bind *bind = NULL;
 	unsigned char ifname_assign_type;
 	struct nlattr **tb = params->tb;
 	u16 headroom = 0, tailroom = 0;
@@ -388,6 +417,8 @@ static int netkit_new_link(struct net_device *dev,
 			tailroom = nla_get_u16(data[IFLA_NETKIT_TAILROOM]);
 		if (data[IFLA_NETKIT_PAIRING])
 			pair = nla_get_u32(data[IFLA_NETKIT_PAIRING]);
+		if (data[IFLA_NETKIT_BIND])
+			bind = nla_data(data[IFLA_NETKIT_BIND]);
 	}
 
 	if (ifmp && tbp[IFLA_IFNAME]) {
@@ -402,6 +433,37 @@ static int netkit_new_link(struct net_device *dev,
 		return -EOPNOTSUPP;
 	if (tbp != tb && pair != NETKIT_DEVICE_PAIR)
 		return -EOPNOTSUPP;
+	if (bind && pair != NETKIT_DEVICE_SINGLE) {
+		NL_SET_ERR_MSG_ATTR(extack, data[IFLA_NETKIT_BIND],
+				    "Binding to lower device only in single device mode");
+		return -EOPNOTSUPP;
+	}
+
+	if (bind) {
+		lower = kzalloc(sizeof(*lower), GFP_KERNEL);
+		if (!lower)
+			return -ENOMEM;
+		lower->queue_id_from = bind->queue_id_from;
+		lower->queue_id_to = bind->queue_id_to;
+		lower->dev = dev_get_by_index(dev_net(dev), bind->ifindex);
+		if (!lower->dev) {
+			kfree(lower);
+			return -ENODEV;
+		}
+		if (netkit_check_lower_ndos(lower->dev, data[IFLA_NETKIT_BIND],
+					    extack)) {
+			err = -EOPNOTSUPP;
+			goto err_generic;
+		}
+		if (lower->queue_id_from > lower->queue_id_to ||
+		    lower->queue_id_to >= lower->dev->real_num_tx_queues ||
+		    lower->queue_id_to >= lower->dev->real_num_rx_queues) {
+			NL_SET_ERR_MSG_ATTR(extack, data[IFLA_NETKIT_BIND],
+					    "Binding to lower device queue selection invalid");
+			err = -EINVAL;
+			goto err_generic;
+		}
+	}
 
 	if (pair == NETKIT_DEVICE_PAIR) {
 		peer = rtnl_create_link(peer_net, ifname, ifname_assign_type,
@@ -425,6 +487,7 @@ static int netkit_new_link(struct net_device *dev,
 		nk->scrub = scrub_peer;
 		nk->mode = mode;
 		nk->pair = pair;
+		nk->lower = NULL;
 		nk->headroom = headroom;
 		bpf_mprog_bundle_init(&nk->bundle);
 
@@ -457,6 +520,7 @@ static int netkit_new_link(struct net_device *dev,
 	nk->scrub = scrub_prim;
 	nk->mode = mode;
 	nk->pair = pair;
+	nk->lower = lower;
 	nk->headroom = headroom;
 	bpf_mprog_bundle_init(&nk->bundle);
 
@@ -474,9 +538,14 @@ static int netkit_new_link(struct net_device *dev,
 err_configure_peer:
 	if (peer)
 		unregister_netdevice(peer);
-	return err;
+	goto err_generic;
 err_register_peer:
 	free_netdev(peer);
+err_generic:
+	if (lower) {
+		dev_put(lower->dev);
+		kfree(lower);
+	}
 	return err;
 }
 
@@ -858,7 +927,15 @@ static void netkit_release_all(struct net_device *dev)
 
 static void netkit_uninit(struct net_device *dev)
 {
+	struct netkit *nk = netkit_priv(dev);
+	struct netkit_lower *lower = nk->lower;
+
 	netkit_release_all(dev);
+	if (lower) {
+		dev_put(lower->dev);
+		kfree(lower);
+		nk->lower = NULL;
+	}
 }
 
 static void netkit_del_link(struct net_device *dev, struct list_head *head)
@@ -895,6 +972,7 @@ static int netkit_change_link(struct net_device *dev, struct nlattr *tb[],
 		{ IFLA_NETKIT_HEADROOM,   "headroom" },
 		{ IFLA_NETKIT_TAILROOM,   "tailroom" },
 		{ IFLA_NETKIT_PAIRING,    "pairing" },
+		{ IFLA_NETKIT_BIND,       "bound device" },
 	};
 
 	if (!nk->primary) {
@@ -948,6 +1026,7 @@ static size_t netkit_get_size(const struct net_device *dev)
 	       nla_total_size(sizeof(u16)) + /* IFLA_NETKIT_HEADROOM */
 	       nla_total_size(sizeof(u16)) + /* IFLA_NETKIT_TAILROOM */
 	       nla_total_size(sizeof(u32)) + /* IFLA_NETKIT_PAIRING */
+	       nla_total_size(sizeof(struct netkit_bind)) + /* IFLA_NETKIT_BIND */
 	       0;
 }
 
@@ -970,7 +1049,15 @@ static int netkit_fill_info(struct sk_buff *skb, const struct net_device *dev)
 		return -EMSGSIZE;
 	if (nla_put_u32(skb, IFLA_NETKIT_PAIRING, nk->pair))
 		return -EMSGSIZE;
-
+	if (nk->lower) {
+		struct netkit_bind bind = {
+			.ifindex	= nk->lower->dev->ifindex,
+			.queue_id_from	= nk->lower->queue_id_from,
+			.queue_id_to	= nk->lower->queue_id_to,
+		};
+		if (nla_put(skb, IFLA_NETKIT_BIND, sizeof(bind), &bind))
+			return -EMSGSIZE;
+	}
 	if (peer) {
 		nk = netkit_priv(peer);
 		if (nla_put_u32(skb, IFLA_NETKIT_PEER_POLICY, nk->policy))
@@ -992,6 +1079,7 @@ static const struct nla_policy netkit_policy[IFLA_NETKIT_MAX + 1] = {
 	[IFLA_NETKIT_SCRUB]		= NLA_POLICY_MAX(NLA_U32, NETKIT_SCRUB_DEFAULT),
 	[IFLA_NETKIT_PEER_SCRUB]	= NLA_POLICY_MAX(NLA_U32, NETKIT_SCRUB_DEFAULT),
 	[IFLA_NETKIT_PAIRING]		= NLA_POLICY_MAX(NLA_U32, NETKIT_DEVICE_SINGLE),
+	[IFLA_NETKIT_BIND]		= NLA_POLICY_EXACT_LEN(sizeof(struct netkit_bind)),
 	[IFLA_NETKIT_PRIMARY]		= { .type = NLA_REJECT,
 					    .reject_message = "Primary attribute is read-only" },
 };
