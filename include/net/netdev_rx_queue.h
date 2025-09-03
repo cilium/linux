@@ -72,6 +72,8 @@ static inline void netdev_rx_queue_peer(struct net_device *src_dev,
 {
 	dev_hold(src_dev);
 	__netdev_rx_queue_peer(src_rxq, dst_rxq);
+	if (dst_rxq->dev->netdev_ops->ndo_peer_queues)
+		dst_rxq->dev->netdev_ops->ndo_peer_queues(dst_rxq->dev, dst_rxq);
 }
 
 static inline void __netdev_rx_queue_unpeer(struct netdev_rx_queue *src_rxq,
@@ -85,6 +87,8 @@ static inline void netdev_rx_queue_unpeer(struct net_device *src_dev,
 					  struct netdev_rx_queue *src_rxq,
 					  struct netdev_rx_queue *dst_rxq)
 {
+	if (dst_rxq->dev->netdev_ops->ndo_unpeer_queues)
+		dst_rxq->dev->netdev_ops->ndo_unpeer_queues(dst_rxq->dev, dst_rxq);
 	__netdev_rx_queue_unpeer(src_rxq, dst_rxq);
 	dev_put(src_dev);
 }

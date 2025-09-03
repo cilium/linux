@@ -65,6 +65,7 @@ struct macsec_context;
 struct macsec_ops;
 struct netdev_config;
 struct netdev_name_node;
+struct netdev_rx_queue;
 struct sd_flow_limit;
 struct sfp_bus;
 /* 802.11 specific */
@@ -1404,6 +1405,15 @@ struct netdev_net_notifier {
  *			   struct kernel_hwtstamp_config *kernel_config,
  *			   struct netlink_ext_ack *extack);
  *	Change the hardware timestamping parameters for NIC device.
+ *
+ * void (*ndo_peer_queues)(struct net_device *dev, struct netdev_rx_queue *rxq);
+ *	Custom callback for drivers when a physical queue gets peered with
+ *	a virtual one, so that device drivers can update exposed device flags.
+ *
+ * void (*ndo_unpeer_queues)(struct net_device *dev, struct netdev_rx_queue *rxq);
+ *	Custom callback for drivers when a physical queue gets unpeered with
+ *	a virtual one, so that device drivers can update exposed device flags.
+ *	Reverse operation of ndo_peer_queues.
  */
 struct net_device_ops {
 	int			(*ndo_init)(struct net_device *dev);
@@ -1651,7 +1661,10 @@ struct net_device_ops {
 	int			(*ndo_hwtstamp_set)(struct net_device *dev,
 						    struct kernel_hwtstamp_config *kernel_config,
 						    struct netlink_ext_ack *extack);
-
+	void			(*ndo_peer_queues)(struct net_device *dev,
+						   struct netdev_rx_queue *rxq);
+	void			(*ndo_unpeer_queues)(struct net_device *dev,
+						     struct netdev_rx_queue *rxq);
 #if IS_ENABLED(CONFIG_NET_SHAPER)
 	/**
 	 * @net_shaper_ops: Device shaping offload operations
