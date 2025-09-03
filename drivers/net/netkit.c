@@ -11,6 +11,7 @@
 
 #include <net/netdev_queues.h>
 #include <net/netdev_rx_queue.h>
+#include <net/xdp_sock_drv.h>
 #include <net/netkit.h>
 #include <net/dst.h>
 #include <net/tcx.h>
@@ -234,6 +235,122 @@ static void netkit_get_stats(struct net_device *dev,
 	stats->tx_dropped = DEV_STATS_READ(dev, tx_dropped);
 }
 
+static int netkit_xsk(struct net_device *dev, struct netdev_bpf *xdp)
+{
+	struct netkit *nk = netkit_priv(dev);
+	struct netdev_bpf xdp_lower;
+	struct netdev_rx_queue *rxq;
+	struct net_device *phys;
+
+	switch (xdp->command) {
+	case XDP_SETUP_XSK_POOL:
+		if (nk->pair == NETKIT_DEVICE_PAIR)
+			return -EOPNOTSUPP;
+		if (xdp->xsk.queue_id >= dev->real_num_rx_queues)
+			return -EINVAL;
+
+		rxq = __netif_get_rx_queue(dev, xdp->xsk.queue_id);
+		if (!rxq->peer)
+			return -EOPNOTSUPP;
+
+		phys = rxq->peer->dev;
+		if (!phys->netdev_ops->ndo_bpf ||
+		    !phys->netdev_ops->ndo_xdp_xmit ||
+		    !phys->netdev_ops->ndo_xsk_wakeup)
+			return -EOPNOTSUPP;
+
+		memcpy(&xdp_lower, xdp, sizeof(xdp_lower));
+		xdp_lower.xsk.queue_id = get_netdev_rx_queue_index(rxq->peer);
+		break;
+	case XDP_SETUP_PROG:
+		return -EPERM;
+	default:
+		return -EINVAL;
+	}
+
+	return phys->netdev_ops->ndo_bpf(phys, &xdp_lower);
+}
+
+static int netkit_xsk_wakeup(struct net_device *dev, u32 queue_id, u32 flags)
+{
+	struct netdev_rx_queue *rxq;
+	struct net_device *phys;
+
+	if (queue_id >= dev->real_num_rx_queues)
+		return -EINVAL;
+
+	rxq = __netif_get_rx_queue(dev, queue_id);
+	if (!rxq->peer)
+		return -EOPNOTSUPP;
+
+	phys = rxq->peer->dev;
+	if (!phys->netdev_ops->ndo_xsk_wakeup)
+		return -EOPNOTSUPP;
+
+	return phys->netdev_ops->ndo_xsk_wakeup(phys,
+			get_netdev_rx_queue_index(rxq->peer), flags);
+}
+
+static bool netkit_xdp_supported(const struct net_device *dev)
+{
+	bool xdp_ok = IS_ENABLED(CONFIG_XDP_SOCKETS);
+
+	if (!dev->netdev_ops->ndo_bpf ||
+	    !dev->netdev_ops->ndo_xdp_xmit ||
+	    !dev->netdev_ops->ndo_xsk_wakeup)
+		xdp_ok = false;
+	if ((dev->xdp_features & NETDEV_XDP_ACT_XSK) != NETDEV_XDP_ACT_XSK)
+		xdp_ok = false;
+	return xdp_ok;
+}
+
+static void netkit_expose_xdp(struct net_device *dev, bool xdp_ok,
+			      u32 xdp_zc_max_segs)
+{
+	if (xdp_ok) {
+		dev->xdp_zc_max_segs = xdp_zc_max_segs;
+		xdp_set_features_flag_locked(dev, NETDEV_XDP_ACT_XSK);
+	} else {
+		dev->xdp_zc_max_segs = 1;
+		xdp_set_features_flag_locked(dev, 0);
+	}
+}
+
+static void netkit_calculate_xdp(struct net_device *dev,
+				 struct netdev_rx_queue *rxq, bool skip_rxq)
+{
+	struct netdev_rx_queue *src_rxq, *dst_rxq;
+	struct net_device *src_dev;
+	u32 xdp_zc_max_segs = ~0;
+	bool xdp_ok = false;
+	int i;
+
+	for (i = 1; i < dev->real_num_rx_queues; i++) {
+		dst_rxq = __netif_get_rx_queue(dev, i);
+		if (dst_rxq == rxq && skip_rxq)
+			continue;
+		src_rxq = dst_rxq->peer;
+		src_dev = src_rxq->dev;
+		xdp_zc_max_segs = min(xdp_zc_max_segs, src_dev->xdp_zc_max_segs);
+		xdp_ok = netkit_xdp_supported(src_dev) &&
+			 (i == 1 ? true : xdp_ok);
+	}
+
+	netkit_expose_xdp(dev, xdp_ok, xdp_zc_max_segs);
+}
+
+static void netkit_peer_queues(struct net_device *dev,
+			       struct netdev_rx_queue *rxq)
+{
+	netkit_calculate_xdp(dev, rxq, false);
+}
+
+static void netkit_unpeer_queues(struct net_device *dev,
+				 struct netdev_rx_queue *rxq)
+{
+	netkit_calculate_xdp(dev, rxq, true);
+}
+
 static void netkit_uninit(struct net_device *dev);
 
 static const struct net_device_ops netkit_netdev_ops = {
@@ -247,6 +364,10 @@ static const struct net_device_ops netkit_netdev_ops = {
 	.ndo_get_peer_dev	= netkit_peer_dev,
 	.ndo_get_stats64	= netkit_get_stats,
 	.ndo_uninit		= netkit_uninit,
+	.ndo_peer_queues	= netkit_peer_queues,
+	.ndo_unpeer_queues	= netkit_unpeer_queues,
+	.ndo_bpf		= netkit_xsk,
+	.ndo_xsk_wakeup		= netkit_xsk_wakeup,
 	.ndo_features_check	= passthru_features_check,
 };
 
