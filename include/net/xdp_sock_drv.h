@@ -29,7 +29,7 @@ bool xsk_tx_peek_desc(struct xsk_buff_pool *pool, struct xdp_desc *desc);
 u32 xsk_tx_peek_release_desc_batch(struct xsk_buff_pool *pool, u32 max);
 void xsk_tx_release(struct xsk_buff_pool *pool);
 struct xsk_buff_pool *xsk_get_pool_from_qid(struct net_device *dev,
-					    u16 queue_id);
+					    unsigned int queue_id);
 void xsk_set_rx_need_wakeup(struct xsk_buff_pool *pool);
 void xsk_set_tx_need_wakeup(struct xsk_buff_pool *pool);
 void xsk_clear_rx_need_wakeup(struct xsk_buff_pool *pool);
@@ -286,7 +286,7 @@ static inline void xsk_tx_release(struct xsk_buff_pool *pool)
 }
 
 static inline struct xsk_buff_pool *
-xsk_get_pool_from_qid(struct net_device *dev, u16 queue_id)
+xsk_get_pool_from_qid(struct net_device *dev, unsigned int queue_id)
 {
 	return NULL;
 }
