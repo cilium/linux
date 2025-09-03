@@ -23,6 +23,8 @@
 #include <linux/netdevice.h>
 #include <linux/rculist.h>
 #include <linux/vmalloc.h>
+
+#include <net/netdev_queues.h>
 #include <net/xdp_sock_drv.h>
 #include <net/busy_poll.h>
 #include <net/netdev_lock.h>
@@ -111,7 +113,7 @@ bool xsk_uses_need_wakeup(struct xsk_buff_pool *pool)
 EXPORT_SYMBOL(xsk_uses_need_wakeup);
 
 struct xsk_buff_pool *xsk_get_pool_from_qid(struct net_device *dev,
-					    u16 queue_id)
+					    unsigned int queue_id)
 {
 	if (queue_id < dev->real_num_rx_queues)
 		return dev->_rx[queue_id].pool;
@@ -122,12 +124,19 @@ struct xsk_buff_pool *xsk_get_pool_from_qid(struct net_device *dev,
 }
 EXPORT_SYMBOL(xsk_get_pool_from_qid);
 
-void xsk_clear_pool_at_qid(struct net_device *dev, u16 queue_id)
+void xsk_clear_pool_at_qid(struct net_device *dev, unsigned int queue_id)
 {
+	bool needs_unlock = false;
+
+	if (queue_id < dev->real_num_rx_queues)
+		WARN_ON_ONCE(!netif_get_rx_queue_peer_locked(&dev, &queue_id,
+							     &needs_unlock));
 	if (queue_id < dev->num_rx_queues)
 		dev->_rx[queue_id].pool = NULL;
 	if (queue_id < dev->num_tx_queues)
 		dev->_tx[queue_id].pool = NULL;
+	if (needs_unlock)
+		netdev_unlock(dev);
 }
 
 /* The buffer pool is stored both in the _rx struct and the _tx struct as we do
@@ -135,14 +144,26 @@ void xsk_clear_pool_at_qid(struct net_device *dev, u16 queue_id)
  * This might also change during run time.
  */
 int xsk_reg_pool_at_qid(struct net_device *dev, struct xsk_buff_pool *pool,
-			u16 queue_id)
+			unsigned int queue_id)
 {
+	bool needs_unlock = false;
+	int ret = 0;
+
 	if (queue_id >= max_t(unsigned int,
 			      dev->real_num_rx_queues,
 			      dev->real_num_tx_queues))
 		return -EINVAL;
 	if (xsk_get_pool_from_qid(dev, queue_id))
 		return -EBUSY;
+	if (queue_id < dev->real_num_rx_queues) {
+		if (!netif_get_rx_queue_peer_locked(&dev, &queue_id,
+						    &needs_unlock))
+			return -EBUSY;
+	}
+	if (xsk_get_pool_from_qid(dev, queue_id)) {
+		ret = -EBUSY;
+		goto out;
+	}
 
 	pool->netdev = dev;
 	pool->queue_id = queue_id;
@@ -151,8 +172,10 @@ int xsk_reg_pool_at_qid(struct net_device *dev, struct xsk_buff_pool *pool,
 		dev->_rx[queue_id].pool = pool;
 	if (queue_id < dev->real_num_tx_queues)
 		dev->_tx[queue_id].pool = pool;
-
-	return 0;
+out:
+	if (needs_unlock)
+		netdev_unlock(dev);
+	return ret;
 }
 
 static int __xsk_rcv_zc(struct xdp_sock *xs, struct xdp_buff_xsk *xskb, u32 len,
