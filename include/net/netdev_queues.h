@@ -149,6 +149,7 @@ struct netdev_queue_mgmt_ops {
 						  int idx);
 	struct device *		(*ndo_queue_get_dma_dev)(struct net_device *dev,
 							 int idx);
+	int			(*ndo_queue_create)(struct net_device *dev);
 };
 
 bool netif_rxq_has_unreadable_mp(struct net_device *dev, int idx);
