@@ -106,6 +106,13 @@ static const struct nla_policy netdev_bind_tx_nl_policy[NETDEV_A_DMABUF_FD + 1] 
 	[NETDEV_A_DMABUF_FD] = { .type = NLA_U32, },
 };
 
+/* NETDEV_CMD_BIND_QUEUE - do */
+static const struct nla_policy netdev_bind_queue_nl_policy[NETDEV_A_QUEUE_PAIR_DST_IFINDEX + 1] = {
+	[NETDEV_A_QUEUE_PAIR_SRC_IFINDEX] = NLA_POLICY_MIN(NLA_U32, 1),
+	[NETDEV_A_QUEUE_PAIR_SRC_QUEUE_ID] = { .type = NLA_U32, },
+	[NETDEV_A_QUEUE_PAIR_DST_IFINDEX] = NLA_POLICY_MIN(NLA_U32, 1),
+};
+
 /* Ops table for netdev */
 static const struct genl_split_ops netdev_nl_ops[] = {
 	{
@@ -202,6 +209,13 @@ static const struct genl_split_ops netdev_nl_ops[] = {
 		.doit		= netdev_nl_bind_tx_doit,
 		.policy		= netdev_bind_tx_nl_policy,
 		.maxattr	= NETDEV_A_DMABUF_FD,
+		.flags		= GENL_CMD_CAP_DO,
+	},
+	{
+		.cmd		= NETDEV_CMD_BIND_QUEUE,
+		.doit		= netdev_nl_bind_queue_doit,
+		.policy		= netdev_bind_queue_nl_policy,
+		.maxattr	= NETDEV_A_QUEUE_PAIR_DST_IFINDEX,
 		.flags		= GENL_CMD_CAP_DO,
 	},
 };

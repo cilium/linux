@@ -1120,6 +1120,10 @@ err_genlmsg_free:
 	return err;
 }
 
+int netdev_nl_bind_queue_doit(struct sk_buff *skb, struct genl_info *info)
+{
+}
+
 void netdev_nl_sock_priv_init(struct netdev_nl_sock *priv)
 {
 	INIT_LIST_HEAD(&priv->bindings);

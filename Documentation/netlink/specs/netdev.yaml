@@ -561,6 +561,29 @@ attribute-sets:
         type: u32
         checks:
           min: 1
+  -
+    name: queue-pair
+    attributes:
+      -
+        name: src-ifindex
+        doc: netdev ifindex of the physical device
+        type: u32
+        checks:
+          min: 1
+      -
+        name: src-queue-id
+        doc: netdev queue id of the physical device
+        type: u32
+      -
+        name: dst-ifindex
+        doc: netdev ifindex of the virtual device
+        type: u32
+        checks:
+          min: 1
+      -
+        name: dst-queue-id
+        doc: netdev queue id of the virtual device
+        type: u32
 
 operations:
   list:
@@ -771,6 +794,20 @@ operations:
         reply:
           attributes:
             - id
+
+    -
+      name: bind-queue
+      doc: Bind a physical netdev queue to a virtual one
+      attribute-set: queue-pair
+      do:
+        request:
+          attributes:
+            - src-ifindex
+            - src-queue-id
+            - dst-ifindex
+        reply:
+          attributes:
+            - dst-queue-id
 
 kernel-family:
   headers: ["net/netdev_netlink.h"]
