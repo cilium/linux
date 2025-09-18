@@ -1122,6 +1122,123 @@ err_genlmsg_free:
 
 int netdev_nl_bind_queue_doit(struct sk_buff *skb, struct genl_info *info)
 {
+	u32 src_ifidx, src_qid, dst_ifidx, dst_qid;
+	struct netdev_rx_queue *src_rxq, *dst_rxq;
+	struct net_device *src_dev, *dst_dev;
+	struct netdev_nl_sock *priv;
+	struct sk_buff *rsp;
+	int err = 0;
+	void *hdr;
+
+	if (GENL_REQ_ATTR_CHECK(info, NETDEV_A_QUEUE_PAIR_SRC_IFINDEX) ||
+	    GENL_REQ_ATTR_CHECK(info, NETDEV_A_QUEUE_PAIR_SRC_QUEUE_ID) ||
+	    GENL_REQ_ATTR_CHECK(info, NETDEV_A_QUEUE_PAIR_DST_IFINDEX))
+		return -EINVAL;
+
+	src_ifidx = nla_get_u32(info->attrs[NETDEV_A_QUEUE_PAIR_SRC_IFINDEX]);
+	src_qid = nla_get_u32(info->attrs[NETDEV_A_QUEUE_PAIR_SRC_QUEUE_ID]);
+	dst_ifidx = nla_get_u32(info->attrs[NETDEV_A_QUEUE_PAIR_DST_IFINDEX]);
+	if (dst_ifidx == src_ifidx) {
+		NL_SET_ERR_MSG(info->extack,
+			       "Destination driver cannot be same as source driver");
+		return -EOPNOTSUPP;
+	}
+
+	priv = genl_sk_priv_get(&netdev_nl_family, NETLINK_CB(skb).sk);
+	if (IS_ERR(priv))
+		return PTR_ERR(priv);
+
+	rsp = genlmsg_new(GENLMSG_DEFAULT_SIZE, GFP_KERNEL);
+	if (!rsp)
+		return -ENOMEM;
+
+	hdr = genlmsg_iput(rsp, info);
+	if (!hdr) {
+		err = -EMSGSIZE;
+		goto err_genlmsg_free;
+	}
+
+	mutex_lock(&priv->lock);
+
+	src_dev = netdev_get_by_index_lock(genl_info_net(info), src_ifidx);
+	if (!src_dev) {
+		err = -ENODEV;
+		goto err_unlock_sock;
+	}
+	if (!netif_device_present(src_dev)) {
+		err = -ENODEV;
+		goto err_unlock_src_dev;
+	}
+	if (!src_dev->dev.parent) {
+		err = -EOPNOTSUPP;
+		NL_SET_ERR_MSG(info->extack,
+			       "Source driver is a virtual device");
+		goto err_unlock_src_dev;
+	}
+	if (!src_dev->queue_mgmt_ops) {
+		err = -EOPNOTSUPP;
+		NL_SET_ERR_MSG(info->extack,
+			       "Source driver does not support queue management operations");
+		goto err_unlock_src_dev;
+	}
+	if (src_qid >= src_dev->num_rx_queues) {
+		err = -ERANGE;
+		NL_SET_ERR_MSG(info->extack,
+			       "Source driver queue out of range");
+		goto err_unlock_src_dev;
+	}
+
+	src_rxq = __netif_get_rx_queue(src_dev, src_qid);
+	if (src_rxq->peer) {
+		err = -EBUSY;
+		NL_SET_ERR_MSG(info->extack,
+			       "Source driver queue already bound");
+		goto err_unlock_src_dev;
+	}
+
+	dst_dev = netdev_get_by_index_lock(genl_info_net(info), dst_ifidx);
+	if (!dst_dev) {
+		err = -ENODEV;
+		goto err_unlock_src_dev;
+	}
+	if (!dst_dev->queue_mgmt_ops ||
+	    !dst_dev->queue_mgmt_ops->ndo_queue_create) {
+		err = -EOPNOTSUPP;
+		NL_SET_ERR_MSG(info->extack,
+			       "Destination driver does not support queue management operations");
+		goto err_unlock_dst_dev;
+	}
+
+	err = dst_dev->queue_mgmt_ops->ndo_queue_create(dst_dev);
+	if (err <= 0) {
+		NL_SET_ERR_MSG(info->extack,
+			       "Destination driver unable to create a new queue");
+		goto err_unlock_dst_dev;
+	}
+
+	dst_qid = err - 1;
+	dst_rxq = __netif_get_rx_queue(dst_dev, dst_qid);
+
+	netdev_rx_queue_peer(src_dev, src_rxq, dst_rxq);
+
+	nla_put_u32(rsp, NETDEV_A_QUEUE_PAIR_DST_QUEUE_ID, dst_qid);
+	genlmsg_end(rsp, hdr);
+
+	netdev_unlock(dst_dev);
+	netdev_unlock(src_dev);
+	mutex_unlock(&priv->lock);
+
+	return genlmsg_reply(rsp, info);
+
+err_unlock_dst_dev:
+	netdev_unlock(dst_dev);
+err_unlock_src_dev:
+	netdev_unlock(src_dev);
+err_unlock_sock:
+	mutex_unlock(&priv->lock);
+err_genlmsg_free:
+	nlmsg_free(rsp);
+	return err;
 }
 
 void netdev_nl_sock_priv_init(struct netdev_nl_sock *priv)
