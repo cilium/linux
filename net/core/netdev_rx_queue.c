@@ -18,6 +18,50 @@ bool netif_rxq_has_unreadable_mp(struct net_device *dev, int idx)
 }
 EXPORT_SYMBOL(netif_rxq_has_unreadable_mp);
 
+void netdev_rx_queue_peer(struct net_device *src_dev,
+			  struct netdev_rx_queue *src_rxq,
+			  struct netdev_rx_queue *dst_rxq)
+{
+	netdev_assert_locked(src_dev);
+	netdev_assert_locked(dst_rxq->dev);
+
+	netdev_hold(src_dev, &src_rxq->dev_tracker, GFP_KERNEL);
+	__netdev_rx_queue_peer(src_rxq, dst_rxq);
+}
+
+void netdev_rx_queue_unpeer(struct net_device *src_dev,
+			    struct netdev_rx_queue *src_rxq,
+			    struct netdev_rx_queue *dst_rxq)
+{
+	netdev_assert_locked(src_dev);
+
+	/* The dst dev must not be visible anymore in netdev_get_by_index_lock
+	 * since this is called upon dst dev destruction. The src dev must be
+	 * locked however since it can live on.
+	 */
+	WARN_ON_ONCE(dst_rxq->dev->reg_state != NETREG_UNREGISTERED);
+
+	__netdev_rx_queue_unpeer(src_rxq, dst_rxq);
+	netdev_put(src_dev, &src_rxq->dev_tracker);
+}
+
+struct netdev_rx_queue *
+__netif_get_rx_queue_peer(struct net_device **dev, unsigned int *rxq_idx)
+{
+	struct netdev_rx_queue *rxq = __netif_get_rx_queue(*dev, *rxq_idx);
+
+	netdev_assert_locked(*dev);
+
+	if (rxq->peer) {
+		rxq = rxq->peer;
+		*rxq_idx = get_netdev_rx_queue_index(rxq);
+		*dev = rxq->dev;
+
+		netdev_assert_locked(*dev);
+	}
+	return rxq;
+}
+
 int netdev_rx_queue_restart(struct net_device *dev, unsigned int rxq_idx)
 {
 	struct netdev_rx_queue *rxq = __netif_get_rx_queue(dev, rxq_idx);

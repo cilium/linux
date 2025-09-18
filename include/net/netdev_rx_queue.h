@@ -28,6 +28,7 @@ struct netdev_rx_queue {
 #endif
 	struct napi_struct		*napi;
 	struct pp_memory_provider_params mp_params;
+	struct netdev_rx_queue		*peer;
 } ____cacheline_aligned_in_smp;
 
 /*
@@ -56,6 +57,35 @@ get_netdev_rx_queue_index(struct netdev_rx_queue *queue)
 	return index;
 }
 
-int netdev_rx_queue_restart(struct net_device *dev, unsigned int rxq);
+static inline void __netdev_rx_queue_peer(struct netdev_rx_queue *src_rxq,
+					  struct netdev_rx_queue *dst_rxq)
+{
+	src_rxq->peer = dst_rxq;
+	dst_rxq->peer = src_rxq;
+}
 
-#endif
+static inline void __netdev_rx_queue_unpeer(struct netdev_rx_queue *src_rxq,
+					    struct netdev_rx_queue *dst_rxq)
+{
+	src_rxq->peer = NULL;
+	dst_rxq->peer = NULL;
+}
+
+static inline bool netdev_rx_queue_peered(struct net_device *dev,
+					  u16 queue_id)
+{
+	if (queue_id < dev->real_num_rx_queues)
+		return dev->_rx[queue_id].peer;
+	return false;
+}
+
+void netdev_rx_queue_peer(struct net_device *src_dev,
+			  struct netdev_rx_queue *src_rxq,
+			  struct netdev_rx_queue *dst_rxq);
+void netdev_rx_queue_unpeer(struct net_device *src_dev,
+			    struct netdev_rx_queue *src_rxq,
+			    struct netdev_rx_queue *dst_rxq);
+int netdev_rx_queue_restart(struct net_device *dev, unsigned int rxq);
+struct netdev_rx_queue *__netif_get_rx_queue_peer(struct net_device **dev,
+						  unsigned int *rxq_idx);
+#endif /* _LINUX_NETDEV_RX_QUEUE_H */
