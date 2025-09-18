@@ -18,6 +18,65 @@ bool netif_rxq_has_unreadable_mp(struct net_device *dev, int idx)
 }
 EXPORT_SYMBOL(netif_rxq_has_unreadable_mp);
 
+void netdev_rx_queue_peer(struct net_device *src_dev,
+			  struct netdev_rx_queue *src_rxq,
+			  struct netdev_rx_queue *dst_rxq)
+{
+	netdev_assert_locked(src_dev);
+	netdev_assert_locked(dst_rxq->dev);
+
+	netdev_hold(src_dev, &src_rxq->dev_tracker, GFP_KERNEL);
+	__netdev_rx_queue_peer(src_rxq, dst_rxq);
+}
+
+void netdev_rx_queue_unpeer(struct net_device *src_dev,
+			    struct netdev_rx_queue *src_rxq,
+			    struct netdev_rx_queue *dst_rxq)
+{
+	WARN_ON_ONCE(READ_ONCE(dst_rxq->dev->reg_state) != NETREG_UNREGISTERING);
+	netdev_assert_locked(src_dev);
+
+	__netdev_rx_queue_unpeer(src_rxq, dst_rxq);
+	netdev_put(src_dev, &src_rxq->dev_tracker);
+}
+
+static struct netdev_rx_queue *
+__netif_get_rx_queue_peer(struct net_device **dev, unsigned int *rxq_idx,
+			  bool virt_to_phys_only)
+{
+	struct net_device *req_dev = *dev;
+	struct netdev_rx_queue *rxq = __netif_get_rx_queue(req_dev, *rxq_idx);
+
+	if (rxq->peer) {
+		if (virt_to_phys_only &&
+		    req_dev->dev.parent)
+			return NULL;
+		rxq = rxq->peer;
+		*rxq_idx = get_netdev_rx_queue_index(rxq);
+		*dev = rxq->dev;
+	}
+	return rxq;
+}
+
+struct netdev_rx_queue *
+netif_get_rx_queue_peer_locked(struct net_device **dev, unsigned int *rxq_idx,
+			       bool *needs_unlock)
+{
+	struct net_device *req_dev = *dev;
+	struct netdev_rx_queue *rxq;
+
+	/* Locking order is always from the virtual to the physical device
+	 * see netdev_nl_bind_queue_doit().
+	 */
+	netdev_assert_locked(req_dev);
+	rxq = __netif_get_rx_queue_peer(dev, rxq_idx, true);
+	if (rxq && req_dev != *dev) {
+		*needs_unlock = true;
+		netdev_lock(*dev);
+	}
+	return rxq;
+}
+
 int netdev_rx_queue_restart(struct net_device *dev, unsigned int rxq_idx)
 {
 	struct netdev_rx_queue *rxq = __netif_get_rx_queue(dev, rxq_idx);
