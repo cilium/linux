@@ -9,11 +9,19 @@
 #include <linux/bpf_mprog.h>
 #include <linux/indirect_call_wrapper.h>
 
+#include <net/netdev_queues.h>
+#include <net/netdev_rx_queue.h>
 #include <net/netkit.h>
 #include <net/dst.h>
 #include <net/tcx.h>
 
-#define DRV_NAME "netkit"
+#define NETKIT_DRV_NAME	"netkit"
+
+#define NETKIT_NUM_TX_QUEUES_MAX  1
+#define NETKIT_NUM_RX_QUEUES_MAX  2
+
+#define NETKIT_NUM_TX_QUEUES_REAL 1
+#define NETKIT_NUM_RX_QUEUES_REAL 1
 
 struct netkit {
 	__cacheline_group_begin(netkit_fastpath);
@@ -36,6 +44,8 @@ struct netkit_link {
 	struct bpf_link link;
 	struct net_device *dev;
 };
+
+static struct rtnl_link_ops netkit_link_ops;
 
 static __always_inline int
 netkit_run(const struct bpf_mprog_entry *entry, struct sk_buff *skb,
@@ -243,12 +253,68 @@ static const struct net_device_ops netkit_netdev_ops = {
 static void netkit_get_drvinfo(struct net_device *dev,
 			       struct ethtool_drvinfo *info)
 {
-	strscpy(info->driver, DRV_NAME, sizeof(info->driver));
+	strscpy(info->driver, NETKIT_DRV_NAME, sizeof(info->driver));
+}
+
+static void netkit_get_channels(struct net_device *dev,
+				struct ethtool_channels *channels)
+{
+	channels->max_rx = dev->num_rx_queues;
+	channels->max_tx = dev->num_tx_queues;
+	channels->max_other = 0;
+	channels->max_combined = 1;
+	channels->rx_count = dev->real_num_rx_queues;
+	channels->tx_count = dev->real_num_tx_queues;
+	channels->other_count = 0;
+	channels->combined_count = 0;
 }
 
 static const struct ethtool_ops netkit_ethtool_ops = {
 	.get_drvinfo		= netkit_get_drvinfo,
+	.get_channels		= netkit_get_channels,
 };
+
+static struct net_device *netkit_alloc(struct nlattr *tb[],
+				       const char *ifname,
+				       unsigned char name_assign_type,
+				       unsigned int num_tx_queues,
+				       unsigned int num_rx_queues)
+{
+	const struct rtnl_link_ops *ops = &netkit_link_ops;
+	struct net_device *dev;
+
+	if (num_tx_queues > NETKIT_NUM_TX_QUEUES_MAX ||
+	    num_rx_queues > NETKIT_NUM_RX_QUEUES_MAX)
+		return ERR_PTR(-EOPNOTSUPP);
+
+	dev = alloc_netdev_mqs(ops->priv_size, ifname,
+			       name_assign_type, ops->setup,
+			       num_tx_queues, num_rx_queues);
+	if (dev) {
+		dev->real_num_tx_queues = NETKIT_NUM_TX_QUEUES_REAL;
+		dev->real_num_rx_queues = NETKIT_NUM_RX_QUEUES_REAL;
+	}
+	return dev;
+}
+
+static void netkit_queue_unpeer(struct net_device *dev)
+{
+	struct netdev_rx_queue *src_rxq, *dst_rxq;
+	struct net_device *src_dev;
+	int i;
+
+	if (dev->real_num_rx_queues == 1)
+		return;
+	for (i = 1; i < dev->real_num_rx_queues; i++) {
+		dst_rxq = __netif_get_rx_queue(dev, i);
+		src_rxq = dst_rxq->peer;
+		src_dev = src_rxq->dev;
+
+		netdev_lock(src_dev);
+		netdev_rx_queue_unpeer(src_dev, src_rxq, dst_rxq);
+		netdev_unlock(src_dev);
+	}
+}
 
 static void netkit_setup(struct net_device *dev)
 {
@@ -329,8 +395,6 @@ static int netkit_validate(struct nlattr *tb[], struct nlattr *data[],
 		return -EADDRNOTAVAIL;
 	return 0;
 }
-
-static struct rtnl_link_ops netkit_link_ops;
 
 static int netkit_new_link(struct net_device *dev,
 			   struct rtnl_newlink_params *params,
@@ -865,6 +929,7 @@ static void netkit_release_all(struct net_device *dev)
 static void netkit_uninit(struct net_device *dev)
 {
 	netkit_release_all(dev);
+	netkit_queue_unpeer(dev);
 }
 
 static void netkit_del_link(struct net_device *dev, struct list_head *head)
@@ -1005,8 +1070,9 @@ static const struct nla_policy netkit_policy[IFLA_NETKIT_MAX + 1] = {
 };
 
 static struct rtnl_link_ops netkit_link_ops = {
-	.kind		= DRV_NAME,
+	.kind		= NETKIT_DRV_NAME,
 	.priv_size	= sizeof(struct netkit),
+	.alloc		= netkit_alloc,
 	.setup		= netkit_setup,
 	.newlink	= netkit_new_link,
 	.dellink	= netkit_del_link,
@@ -1042,4 +1108,4 @@ MODULE_DESCRIPTION("BPF-programmable network device");
 MODULE_AUTHOR("Daniel Borkmann <daniel@iogearbox.net>");
 MODULE_AUTHOR("Nikolay Aleksandrov <razor@blackwall.org>");
 MODULE_LICENSE("GPL");
-MODULE_ALIAS_RTNL_LINK(DRV_NAME);
+MODULE_ALIAS_RTNL_LINK(NETKIT_DRV_NAME);
