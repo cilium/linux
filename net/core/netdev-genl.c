@@ -393,6 +393,7 @@ netdev_nl_queue_fill_one(struct sk_buff *rsp, struct net_device *netdev,
 	struct pp_memory_provider_params *params;
 	struct netdev_rx_queue *rxq;
 	struct netdev_queue *txq;
+	struct nlattr *nest;
 	void *hdr;
 
 	hdr = genlmsg_iput(rsp, info);
@@ -410,6 +411,27 @@ netdev_nl_queue_fill_one(struct sk_buff *rsp, struct net_device *netdev,
 		if (nla_put_napi_id(rsp, rxq->napi))
 			goto nla_put_failure;
 
+		if (netdev_rx_queue_peered(netdev, q_idx)) {
+			struct netdev_rx_queue *p_rxq;
+			struct net_device *p_netdev = netdev;
+			u32 p_q_idx = q_idx;
+
+			nest = nla_nest_start(rsp, NETDEV_A_QUEUE_PEER);
+			if (!nest)
+				goto nla_put_failure;
+			p_rxq = __netif_get_rx_queue_peer(&p_netdev, &p_q_idx);
+			if (nla_put_u32(rsp, NETDEV_A_PEER_INFO_ID, p_q_idx) ||
+			    nla_put_u32(rsp, NETDEV_A_PEER_INFO_IFINDEX, p_netdev->ifindex))
+				goto nla_put_failure;
+			nla_nest_end(rsp, nest);
+
+			if (!netdev->dev.parent) {
+				netdev = p_netdev;
+				q_idx = p_q_idx;
+				rxq = p_rxq;
+			}
+		}
+
 		params = &rxq->mp_params;
 		if (params->mp_ops &&
 		    params->mp_ops->nl_fill(params->mp_priv, rsp, rxq))
@@ -419,7 +441,6 @@ netdev_nl_queue_fill_one(struct sk_buff *rsp, struct net_device *netdev,
 			if (nla_put_empty_nest(rsp, NETDEV_A_QUEUE_XSK))
 				goto nla_put_failure;
 #endif
-
 		break;
 	case NETDEV_QUEUE_TYPE_TX:
 		txq = netdev_get_tx_queue(netdev, q_idx);

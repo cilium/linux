@@ -298,6 +298,17 @@ attribute-sets:
     name: xsk-info
     attributes: []
   -
+    name: peer-info
+    attributes:
+      -
+        name: id
+        doc: Queue index of the netdevice to which the peer queue belongs.
+        type: u32
+      -
+        name: ifindex
+        doc: ifindex of the netdevice to which the peer queue belongs.
+        type: u32
+  -
     name: queue
     attributes:
       -
@@ -338,6 +349,11 @@ attribute-sets:
         doc: XSK information for this queue, if any.
         type: nest
         nested-attributes: xsk-info
+      -
+        name: peer
+        doc: Whether this queue was bound to another peer queue.
+        type: nest
+        nested-attributes: peer-info
   -
     name: qstats
     doc: |
@@ -706,6 +722,7 @@ operations:
             - dmabuf
             - io-uring
             - xsk
+            - peer
       dump:
         request:
           attributes:
