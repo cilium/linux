@@ -77,6 +77,14 @@ netif_get_rx_queue_peer_locked(struct net_device **dev, unsigned int *rxq_idx,
 	return rxq;
 }
 
+struct netdev_rx_queue *
+netif_get_rx_queue_peer_any(struct net_device **dev, unsigned int *rxq_idx)
+{
+	netdev_assert_locked(*dev);
+	/* Retrieves both virt-to-phys and phys-to-virt peering. */
+	return __netif_get_rx_queue_peer(dev, rxq_idx, false);
+}
+
 int netdev_rx_queue_restart(struct net_device *dev, unsigned int rxq_idx)
 {
 	struct netdev_rx_queue *rxq = __netif_get_rx_queue(dev, rxq_idx);
