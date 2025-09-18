@@ -1458,4 +1458,5 @@ struct ethtool_forced_speed_map {
 
 void
 ethtool_forced_speed_maps_init(struct ethtool_forced_speed_map *maps, u32 size);
+bool ethtool_channel_busy(struct net_device *dev, u32 channel);
 #endif /* _LINUX_ETHTOOL_H */
