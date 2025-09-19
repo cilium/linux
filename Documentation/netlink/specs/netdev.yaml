@@ -561,6 +561,46 @@ attribute-sets:
         type: u32
         checks:
           min: 1
+  -
+    name: queue-pair
+    attributes:
+      -
+        name: queue-type
+        doc: |
+          Queue type as rx, tx, for src-queue-id and dst-queue-id.
+          Currently only pairing queues of type rx is supported.
+        type: u32
+        enum: queue-type
+      -
+        name: src-ifindex
+        doc: |
+          Specifies the netdev ifindex of the physical device to pair
+          src-queue-id from.
+        type: u32
+        checks:
+          min: 1
+          max: s32-max
+      -
+        name: src-queue-id
+        doc: |
+          Specifies the netdev queue id of the physical device with
+          src-ifindex to pair a queue from.
+        type: u32
+      -
+        name: dst-ifindex
+        doc: |
+          Specifies the netdev ifindex of the virtual device to pair
+          a new queue with the src-queue-id from src-ifindex.
+        type: u32
+        checks:
+          min: 1
+          max: s32-max
+      -
+        name: dst-queue-id
+        doc: |
+          Specifies the new netdev queue id of the virtual device after
+          a successful pairing operation.
+        type: u32
 
 operations:
   list:
@@ -771,6 +811,26 @@ operations:
         reply:
           attributes:
             - id
+
+    -
+      name: bind-queue
+      doc: |
+        Bind a physical netdevice queue to a virtual one. The binding
+        creates a queue pair, where a queue can reference its peer queue.
+        This is useful for memory providers and AF_XDP operations which
+        take an ifindex and queue id to allow auch applications to bind
+        against virtual devices in containers.
+      attribute-set: queue-pair
+      do:
+        request:
+          attributes:
+            - queue-type
+            - src-ifindex
+            - src-queue-id
+            - dst-ifindex
+        reply:
+          attributes:
+            - dst-queue-id
 
 kernel-family:
   headers: ["net/netdev_netlink.h"]
