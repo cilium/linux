@@ -86,6 +86,6 @@ void netdev_rx_queue_unpeer(struct net_device *src_dev,
 			    struct netdev_rx_queue *src_rxq,
 			    struct netdev_rx_queue *dst_rxq);
 int netdev_rx_queue_restart(struct net_device *dev, unsigned int rxq);
-struct netdev_rx_queue *__netif_get_rx_queue_peer(struct net_device **dev,
-						  unsigned int *rxq_idx);
+struct netdev_rx_queue *netif_get_rx_queue_peer(struct net_device **dev,
+						unsigned int *rxq_idx);
 #endif /* _LINUX_NETDEV_RX_QUEUE_H */

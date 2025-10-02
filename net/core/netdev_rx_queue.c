@@ -46,18 +46,14 @@ void netdev_rx_queue_unpeer(struct net_device *src_dev,
 }
 
 struct netdev_rx_queue *
-__netif_get_rx_queue_peer(struct net_device **dev, unsigned int *rxq_idx)
+netif_get_rx_queue_peer(struct net_device **dev, unsigned int *rxq_idx)
 {
 	struct netdev_rx_queue *rxq = __netif_get_rx_queue(*dev, *rxq_idx);
-
-	netdev_assert_locked(*dev);
 
 	if (rxq->peer) {
 		rxq = rxq->peer;
 		*rxq_idx = get_netdev_rx_queue_index(rxq);
 		*dev = rxq->dev;
-
-		netdev_assert_locked(*dev);
 	}
 	return rxq;
 }
@@ -155,7 +151,7 @@ int __net_mp_open_rxq(struct net_device *dev, unsigned int rxq_idx,
 	}
 
 	rxq_idx = array_index_nospec(rxq_idx, dev->real_num_rx_queues);
-	rxq = __netif_get_rx_queue_peer(&dev, &rxq_idx);
+	rxq = netif_get_rx_queue_peer(&dev, &rxq_idx);
 
 	/* Check again since dev might have changed */
 	if (!netdev_need_ops_lock(dev))
@@ -215,7 +211,7 @@ void __net_mp_close_rxq(struct net_device *dev, unsigned int ifq_idx,
 	if (WARN_ON_ONCE(ifq_idx >= dev->real_num_rx_queues))
 		return;
 
-	rxq = __netif_get_rx_queue_peer(&dev, &ifq_idx);
+	rxq = netif_get_rx_queue_peer(&dev, &ifq_idx);
 
 	/* Callers holding a netdev ref may get here after we already
 	 * went thru shutdown via dev_memory_provider_uninstall().

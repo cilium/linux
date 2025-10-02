@@ -126,7 +126,7 @@ EXPORT_SYMBOL(xsk_get_pool_from_qid);
 void xsk_clear_pool_at_qid(struct net_device *dev, unsigned int queue_id)
 {
 	if (queue_id < dev->real_num_rx_queues)
-		__netif_get_rx_queue_peer(&dev, &queue_id);
+		netif_get_rx_queue_peer(&dev, &queue_id);
 	if (queue_id < dev->num_rx_queues)
 		dev->_rx[queue_id].pool = NULL;
 	if (queue_id < dev->num_tx_queues)
@@ -147,7 +147,7 @@ int xsk_reg_pool_at_qid(struct net_device *dev, struct xsk_buff_pool *pool,
 	if (xsk_get_pool_from_qid(dev, queue_id))
 		return -EBUSY;
 	if (queue_id < dev->real_num_rx_queues)
-		__netif_get_rx_queue_peer(&dev, &queue_id);
+		netif_get_rx_queue_peer(&dev, &queue_id);
 	if (xsk_get_pool_from_qid(dev, queue_id))
 		return -EBUSY;
 

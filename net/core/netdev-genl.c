@@ -420,7 +420,7 @@ netdev_nl_queue_fill_one(struct sk_buff *rsp, struct net_device *netdev,
 			nest = nla_nest_start(rsp, NETDEV_A_QUEUE_PEER);
 			if (!nest)
 				goto nla_put_failure;
-			p_rxq = __netif_get_rx_queue_peer(&p_netdev, &p_q_idx);
+			p_rxq = netif_get_rx_queue_peer(&p_netdev, &p_q_idx);
 			if (nla_put_u32(rsp, NETDEV_A_PEER_INFO_ID, p_q_idx) ||
 			    nla_put_u32(rsp, NETDEV_A_PEER_INFO_IFINDEX,
 					p_netdev->ifindex))
