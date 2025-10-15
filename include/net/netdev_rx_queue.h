@@ -92,4 +92,13 @@ netif_get_rx_queue_peer_locked(struct net_device **dev,
 			       unsigned int *rxq_idx);
 void netif_put_rx_queue_peer_locked(struct net_device *orig_dev,
 				    struct net_device *dev);
+
+enum netif_peer_dir {
+	NETIF_VIRT_TO_PHYS,
+	NETIF_PHYS_TO_VIRT,
+};
+
+struct netdev_rx_queue *
+__netif_get_rx_queue_peer(struct net_device **dev, unsigned int *rxq_idx,
+			  enum netif_peer_dir dir);
 #endif /* _LINUX_NETDEV_RX_QUEUE_H */

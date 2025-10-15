@@ -42,14 +42,25 @@ void netdev_rx_queue_unpeer(struct net_device *src_dev,
 	netdev_put(src_dev, &src_rxq->peer_tracker);
 }
 
-static struct netdev_rx_queue *
-__netif_get_rx_queue_peer(struct net_device **dev, unsigned int *rxq_idx)
+static bool netif_peer_dir_ok(const struct net_device *dev,
+			      enum netif_peer_dir dir)
+{
+	if (dir == NETIF_VIRT_TO_PHYS && !dev->dev.parent)
+		return true;
+	if (dir == NETIF_PHYS_TO_VIRT && dev->dev.parent)
+		return true;
+	return false;
+}
+
+struct netdev_rx_queue *
+__netif_get_rx_queue_peer(struct net_device **dev, unsigned int *rxq_idx,
+			  enum netif_peer_dir dir)
 {
 	struct net_device *orig_dev = *dev;
 	struct netdev_rx_queue *rxq = __netif_get_rx_queue(orig_dev, *rxq_idx);
 
 	if (rxq->peer) {
-		if (orig_dev->dev.parent)
+		if (!netif_peer_dir_ok(orig_dev, dir))
 			return NULL;
 		rxq = rxq->peer;
 		*rxq_idx = get_netdev_rx_queue_index(rxq);
@@ -68,7 +79,7 @@ netif_get_rx_queue_peer_locked(struct net_device **dev, unsigned int *rxq_idx)
 	 * see netdev_nl_bind_queue_doit().
 	 */
 	netdev_ops_assert_locked(orig_dev);
-	rxq = __netif_get_rx_queue_peer(dev, rxq_idx);
+	rxq = __netif_get_rx_queue_peer(dev, rxq_idx, NETIF_VIRT_TO_PHYS);
 	if (rxq && orig_dev != *dev)
 		netdev_lock(*dev);
 	return rxq;
