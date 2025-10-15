@@ -26,6 +26,16 @@ static const struct netlink_range_validation netdev_a_napi_defer_hard_irqs_range
 	.max	= S32_MAX,
 };
 
+static const struct netlink_range_validation netdev_a_queue_pair_src_ifindex_range = {
+	.min	= 1ULL,
+	.max	= S32_MAX,
+};
+
+static const struct netlink_range_validation netdev_a_queue_pair_dst_ifindex_range = {
+	.min	= 1ULL,
+	.max	= S32_MAX,
+};
+
 /* Common nested types */
 const struct nla_policy netdev_page_pool_info_nl_policy[NETDEV_A_PAGE_POOL_IFINDEX + 1] = {
 	[NETDEV_A_PAGE_POOL_ID] = NLA_POLICY_FULL_RANGE(NLA_UINT, &netdev_a_page_pool_id_range),
@@ -104,6 +114,14 @@ static const struct nla_policy netdev_napi_set_nl_policy[NETDEV_A_NAPI_THREADED 
 static const struct nla_policy netdev_bind_tx_nl_policy[NETDEV_A_DMABUF_FD + 1] = {
 	[NETDEV_A_DMABUF_IFINDEX] = NLA_POLICY_MIN(NLA_U32, 1),
 	[NETDEV_A_DMABUF_FD] = { .type = NLA_U32, },
+};
+
+/* NETDEV_CMD_BIND_QUEUE - do */
+static const struct nla_policy netdev_bind_queue_nl_policy[NETDEV_A_QUEUE_PAIR_DST_IFINDEX + 1] = {
+	[NETDEV_A_QUEUE_PAIR_QUEUE_TYPE] = NLA_POLICY_MAX(NLA_U32, 1),
+	[NETDEV_A_QUEUE_PAIR_SRC_IFINDEX] = NLA_POLICY_FULL_RANGE(NLA_U32, &netdev_a_queue_pair_src_ifindex_range),
+	[NETDEV_A_QUEUE_PAIR_SRC_QUEUE_ID] = { .type = NLA_U32, },
+	[NETDEV_A_QUEUE_PAIR_DST_IFINDEX] = NLA_POLICY_FULL_RANGE(NLA_U32, &netdev_a_queue_pair_dst_ifindex_range),
 };
 
 /* Ops table for netdev */
@@ -202,6 +220,13 @@ static const struct genl_split_ops netdev_nl_ops[] = {
 		.doit		= netdev_nl_bind_tx_doit,
 		.policy		= netdev_bind_tx_nl_policy,
 		.maxattr	= NETDEV_A_DMABUF_FD,
+		.flags		= GENL_CMD_CAP_DO,
+	},
+	{
+		.cmd		= NETDEV_CMD_BIND_QUEUE,
+		.doit		= netdev_nl_bind_queue_doit,
+		.policy		= netdev_bind_queue_nl_policy,
+		.maxattr	= NETDEV_A_QUEUE_PAIR_DST_IFINDEX,
 		.flags		= GENL_CMD_CAP_DO,
 	},
 };
