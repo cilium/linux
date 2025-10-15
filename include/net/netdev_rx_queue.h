@@ -90,4 +90,7 @@ struct netdev_rx_queue *
 netif_get_rx_queue_peer_locked(struct net_device **dev,
 			       unsigned int *rxq_idx,
 			       bool *needs_unlock);
+struct netdev_rx_queue *
+netif_get_rx_queue_peer_any(struct net_device **dev,
+			    unsigned int *rxq_idx);
 #endif /* _LINUX_NETDEV_RX_QUEUE_H */
