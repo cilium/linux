@@ -68,7 +68,7 @@ netif_get_rx_queue_peer_locked(struct net_device **dev, unsigned int *rxq_idx,
 	/* Locking order is always from the virtual to the physical device
 	 * see netdev_nl_bind_queue_doit().
 	 */
-	netdev_assert_locked(req_dev);
+	netdev_ops_assert_locked(req_dev);
 	rxq = __netif_get_rx_queue_peer(dev, rxq_idx, true);
 	if (rxq && req_dev != *dev) {
 		*needs_unlock = true;
@@ -80,7 +80,7 @@ netif_get_rx_queue_peer_locked(struct net_device **dev, unsigned int *rxq_idx,
 struct netdev_rx_queue *
 netif_get_rx_queue_peer_any(struct net_device **dev, unsigned int *rxq_idx)
 {
-	netdev_assert_locked(*dev);
+	netdev_ops_assert_locked(*dev);
 	/* Retrieves both virt-to-phys and phys-to-virt peering. */
 	return __netif_get_rx_queue_peer(dev, rxq_idx, false);
 }
