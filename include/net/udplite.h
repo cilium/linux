@@ -40,7 +40,7 @@ static inline int udplite_checksum_init(struct sk_buff *skb, struct udphdr *uh)
 		return 1;
 	}
 
-	cscov = ntohs(uh->len);
+	cscov = udp_get_len_short(uh);
 
 	if (cscov == 0)		 /* Indicates that full coverage is required. */
 		;
@@ -76,7 +76,7 @@ static inline __wsum udplite_csum(struct sk_buff *skb)
 		if (pcslen < len) {
 			if (pcslen > 0)
 				len = pcslen;
-			udp_hdr(skb)->len = htons(pcslen);
+			udp_set_len_short(udp_hdr(skb), pcslen);
 		}
 	}
 	skb->ip_summed = CHECKSUM_NONE;     /* no HW support for checksumming */

@@ -279,11 +279,11 @@ static struct sk_buff *__skb_udp_tunnel_segment(struct sk_buff *skb,
 		 * segment instead of the entire frame.
 		 */
 		if (gso_partial && skb_is_gso(skb)) {
-			uh->len = htons(skb_shinfo(skb)->gso_size +
-					SKB_GSO_CB(skb)->data_offset +
-					skb->head - (unsigned char *)uh);
+			udp_set_len_short(uh, skb_shinfo(skb)->gso_size +
+					  SKB_GSO_CB(skb)->data_offset +
+					  skb->head - (unsigned char *)uh);
 		} else {
-			uh->len = htons(len);
+			udp_set_len_short(uh, len);
 		}
 
 		if (!need_csum)
@@ -469,7 +469,7 @@ static struct sk_buff *__udp_gso_segment_list(struct sk_buff *skb,
 	if (IS_ERR(skb))
 		return skb;
 
-	udp_hdr(skb)->len = htons(sizeof(struct udphdr) + mss);
+	udp_set_len_short(udp_hdr(skb), sizeof(struct udphdr) + mss);
 
 	if (is_ipv6)
 		return __udpv6_gso_segment_list_csum(skb);
@@ -487,7 +487,7 @@ struct sk_buff *__udp_gso_segment(struct sk_buff *gso_skb,
 	unsigned int mss;
 	bool copy_dtor;
 	__sum16 check;
-	__be16 newlen;
+	u16 newlen;
 	int ret = 0;
 
 	mss = skb_shinfo(gso_skb)->gso_size;
@@ -571,8 +571,8 @@ struct sk_buff *__udp_gso_segment(struct sk_buff *gso_skb,
 			(skb_shinfo(gso_skb)->tx_flags & SKBTX_ANY_TSTAMP);
 
 	/* compute checksum adjustment based on old length versus new */
-	newlen = htons(sizeof(*uh) + mss);
-	check = csum16_add(csum16_sub(uh->check, uh->len), newlen);
+	newlen = sizeof(*uh) + mss;
+	check = csum16_add(csum16_sub(uh->check, uh->len), htons(newlen));
 
 	for (;;) {
 		if (copy_dtor) {
@@ -584,7 +584,7 @@ struct sk_buff *__udp_gso_segment(struct sk_buff *gso_skb,
 		if (!seg->next)
 			break;
 
-		uh->len = newlen;
+		udp_set_len_short(uh, newlen);
 		uh->check = check;
 
 		if (seg->ip_summed == CHECKSUM_PARTIAL)
@@ -598,11 +598,10 @@ struct sk_buff *__udp_gso_segment(struct sk_buff *gso_skb,
 	}
 
 	/* last packet can be partial gso_size, account for that in checksum */
-	newlen = htons(skb_tail_pointer(seg) - skb_transport_header(seg) +
-		       seg->data_len);
-	check = csum16_add(csum16_sub(uh->check, uh->len), newlen);
+	newlen = skb_tail_pointer(seg) - skb_transport_header(seg) + seg->data_len;
+	check = csum16_add(csum16_sub(uh->check, uh->len), htons(newlen));
 
-	uh->len = newlen;
+	udp_set_len_short(uh, newlen);
 	uh->check = check;
 
 	if (seg->ip_summed == CHECKSUM_PARTIAL)
@@ -714,7 +713,7 @@ static struct sk_buff *udp_gro_receive_segment(struct list_head *head,
 	}
 
 	/* Do not deal with padded or malicious packets, sorry ! */
-	ulen = ntohs(uh->len);
+	ulen = udp_get_len_short(uh);
 	if (ulen <= sizeof(*uh) || ulen != skb_gro_len(skb)) {
 		NAPI_GRO_CB(skb)->flush = 1;
 		return NULL;
@@ -747,7 +746,7 @@ static struct sk_buff *udp_gro_receive_segment(struct list_head *head,
 		 * On len mismatch merge the first packet shorter than gso_size,
 		 * otherwise complete the GRO packet.
 		 */
-		if (ulen > ntohs(uh2->len) || flush) {
+		if (ulen > udp_get_len_short(uh2) || flush) {
 			pp = p;
 		} else {
 			if (NAPI_GRO_CB(skb)->is_flist) {
@@ -770,7 +769,7 @@ static struct sk_buff *udp_gro_receive_segment(struct list_head *head,
 			}
 		}
 
-		if (ret || ulen != ntohs(uh2->len) ||
+		if (ret || ulen != udp_get_len_short(uh2) ||
 		    NAPI_GRO_CB(p)->count >= UDP_GRO_CNT_MAX)
 			pp = p;
 
@@ -922,12 +921,12 @@ static int udp_gro_complete_segment(struct sk_buff *skb)
 int udp_gro_complete(struct sk_buff *skb, int nhoff,
 		     udp_lookup_t lookup)
 {
-	__be16 newlen = htons(skb->len - nhoff);
+	unsigned int newlen = skb->len - nhoff;
 	struct udphdr *uh = (struct udphdr *)(skb->data + nhoff);
 	struct sock *sk;
 	int err;
 
-	uh->len = newlen;
+	udp_set_len_short(uh, newlen);
 
 	sk = INDIRECT_CALL_INET(lookup, udp6_lib_lookup_skb,
 				udp4_lib_lookup_skb, skb, uh->source, uh->dest);
@@ -965,7 +964,7 @@ INDIRECT_CALLABLE_SCOPE int udp4_gro_complete(struct sk_buff *skb, int nhoff)
 
 	/* do fraglist only if there is no outer UDP encap (or we already processed it) */
 	if (NAPI_GRO_CB(skb)->is_flist && !NAPI_GRO_CB(skb)->encap_mark) {
-		uh->len = htons(skb->len - nhoff);
+		udp_set_len_short(uh, skb->len - nhoff);
 
 		skb_shinfo(skb)->gso_type |= (SKB_GSO_FRAGLIST|SKB_GSO_UDP_L4);
 		skb_shinfo(skb)->gso_segs = NAPI_GRO_CB(skb)->count;

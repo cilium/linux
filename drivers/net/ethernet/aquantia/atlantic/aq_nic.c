@@ -702,8 +702,8 @@ unsigned int aq_nic_map_skb(struct aq_nic_s *self, struct sk_buff *skb,
 			dx_buff->is_gso_udp = 1U;
 			dx_buff->len_l4 = sizeof(struct udphdr);
 			/* UDP GSO Hardware does not replace packet length. */
-			udp_hdr(skb)->len = htons(dx_buff->mss +
-						  dx_buff->len_l4);
+			udp_set_len_short(udp_hdr(skb),
+					  dx_buff->mss + dx_buff->len_l4);
 		} else {
 			WARN_ONCE(true, "Bad GSO mode");
 			goto exit;

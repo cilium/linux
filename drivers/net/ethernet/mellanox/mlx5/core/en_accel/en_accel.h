@@ -111,7 +111,7 @@ mlx5e_udp_gso_handle_tx_skb(struct sk_buff *skb)
 	else
 		udphdr = udp_hdr(skb);
 
-	udphdr->len = htons(payload_len);
+	udp_set_len_short(udphdr, payload_len);
 }
 
 struct mlx5e_accel_tx_state {
