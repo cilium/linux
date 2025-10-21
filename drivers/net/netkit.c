@@ -253,6 +253,7 @@ static int netkit_xsk(struct net_device *dev, struct netdev_bpf *xdp)
 	struct netdev_bpf xdp_lower;
 	struct netdev_rx_queue *rxq;
 	struct net_device *phys;
+	int ret = -EBUSY;
 
 	switch (xdp->command) {
 	case XDP_SETUP_XSK_POOL:
@@ -278,7 +279,11 @@ static int netkit_xsk(struct net_device *dev, struct netdev_bpf *xdp)
 		return -EINVAL;
 	}
 
-	return phys->netdev_ops->ndo_bpf(phys, &xdp_lower);
+	netdev_lock(phys);
+	if (!dev_get_min_mp_channel_count(phys))
+		ret = phys->netdev_ops->ndo_bpf(phys, &xdp_lower);
+	netdev_unlock(phys);
+	return ret;
 }
 
 static int netkit_xsk_wakeup(struct net_device *dev, u32 queue_id, u32 flags)
