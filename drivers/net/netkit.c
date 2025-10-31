@@ -268,6 +268,20 @@ static const struct ethtool_ops netkit_ethtool_ops = {
 	.get_drvinfo		= netkit_get_drvinfo,
 };
 
+static struct device *netkit_queue_get_dma_dev(struct net_device *dev, int idx)
+{
+	struct netdev_rx_queue *rxq;
+
+	rxq = __netif_get_rx_queue(dev, idx);
+	if (!rxq->lease)
+		return NULL;
+
+	rxq = rxq->lease;
+	idx = get_netdev_rx_queue_index(rxq);
+
+	return netdev_queue_get_dma_dev(rxq->dev, idx);
+}
+
 static int netkit_queue_create(struct net_device *dev)
 {
 	struct netkit *nk = netkit_priv(dev);
@@ -293,7 +307,8 @@ static int netkit_queue_create(struct net_device *dev)
 }
 
 static const struct netdev_queue_mgmt_ops netkit_queue_mgmt_ops = {
-	.ndo_queue_create = netkit_queue_create,
+	.ndo_queue_get_dma_dev		= netkit_queue_get_dma_dev,
+	.ndo_queue_create		= netkit_queue_create,
 };
 
 static struct net_device *netkit_alloc(struct nlattr *tb[],
