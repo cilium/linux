@@ -28,6 +28,8 @@ struct netdev_rx_queue {
 #endif
 	struct napi_struct		*napi;
 	struct pp_memory_provider_params mp_params;
+	struct netdev_rx_queue		*lease;
+	netdevice_tracker		lease_tracker;
 } ____cacheline_aligned_in_smp;
 
 /*
@@ -57,5 +59,15 @@ get_netdev_rx_queue_index(struct netdev_rx_queue *queue)
 }
 
 int netdev_rx_queue_restart(struct net_device *dev, unsigned int rxq);
-
-#endif
+void netdev_rx_queue_lease(struct net_device *src_dev,
+			   struct netdev_rx_queue *src_rxq,
+			   struct netdev_rx_queue *dst_rxq);
+void netdev_rx_queue_unlease(struct net_device *src_dev,
+			     struct netdev_rx_queue *src_rxq,
+			     struct netdev_rx_queue *dst_rxq);
+struct netdev_rx_queue *
+netif_get_rx_queue_leased_locked(struct net_device **dev,
+				 unsigned int *rxq_idx);
+void netif_put_rx_queue_leased_locked(struct net_device *orig_dev,
+				      struct net_device *dev);
+#endif /* _LINUX_NETDEV_RX_QUEUE_H */

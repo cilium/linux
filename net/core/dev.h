@@ -35,6 +35,13 @@ struct net_device *
 netdev_xa_find_lock(struct net *net, struct net_device *dev,
 		    unsigned long *index);
 
+static inline struct net_device *netdev_put_lock(struct net_device *dev,
+						 netdevice_tracker *tracker)
+{
+	netdev_tracker_free(dev, tracker);
+	return __netdev_put_lock(dev, dev_net(dev));
+}
+
 DEFINE_FREE(netdev_unlock, struct net_device *, if (_T) netdev_unlock(_T));
 
 #define for_each_netdev_lock_scoped(net, var_name, ifindex)		\
