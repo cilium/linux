@@ -391,8 +391,11 @@ netdev_nl_queue_fill_one(struct sk_buff *rsp, struct net_device *netdev,
 			 u32 q_idx, u32 q_type, const struct genl_info *info)
 {
 	struct pp_memory_provider_params *params;
+	struct net_device *orig_netdev = netdev;
 	struct netdev_rx_queue *rxq;
 	struct netdev_queue *txq;
+	u32 peer_q_idx = q_idx;
+	struct nlattr *nest;
 	void *hdr;
 
 	hdr = genlmsg_iput(rsp, info);
@@ -410,6 +413,33 @@ netdev_nl_queue_fill_one(struct sk_buff *rsp, struct net_device *netdev,
 		if (nla_put_napi_id(rsp, rxq->napi))
 			goto nla_put_failure;
 
+		if (__netif_get_rx_queue_peer(&netdev, &peer_q_idx,
+					      NETIF_PHYS_TO_VIRT)) {
+			struct net *net, *peer_net;
+
+			nest = nla_nest_start(rsp, NETDEV_A_QUEUE_PEER);
+			if (!nest)
+				goto nla_put_failure;
+
+			if (nla_put_u32(rsp, NETDEV_A_PEER_INFO_ID, peer_q_idx) ||
+			    nla_put_u32(rsp, NETDEV_A_PEER_INFO_IFINDEX,
+					READ_ONCE(netdev->ifindex)))
+				goto nla_put_failure;
+
+			rcu_read_lock();
+			peer_net = dev_net_rcu(netdev);
+			net = dev_net_rcu(orig_netdev);
+			if (!net_eq(net, peer_net)) {
+				s32 id = peernet2id_alloc(net, peer_net, GFP_ATOMIC);
+
+				if (nla_put_s32(rsp, NETDEV_A_PEER_INFO_NETNS_ID, id))
+					goto nla_put_failure_unlock;
+			}
+			rcu_read_unlock();
+			nla_nest_end(rsp, nest);
+			netdev = orig_netdev;
+		}
+
 		params = &rxq->mp_params;
 		if (params->mp_ops &&
 		    params->mp_ops->nl_fill(params->mp_priv, rsp, rxq))
@@ -419,7 +449,6 @@ netdev_nl_queue_fill_one(struct sk_buff *rsp, struct net_device *netdev,
 			if (nla_put_empty_nest(rsp, NETDEV_A_QUEUE_XSK))
 				goto nla_put_failure;
 #endif
-
 		break;
 	case NETDEV_QUEUE_TYPE_TX:
 		txq = netdev_get_tx_queue(netdev, q_idx);
@@ -434,9 +463,10 @@ netdev_nl_queue_fill_one(struct sk_buff *rsp, struct net_device *netdev,
 	}
 
 	genlmsg_end(rsp, hdr);
-
 	return 0;
 
+nla_put_failure_unlock:
+	rcu_read_unlock();
 nla_put_failure:
 	genlmsg_cancel(rsp, hdr);
 	return -EMSGSIZE;
