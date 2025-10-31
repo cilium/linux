@@ -6,12 +6,14 @@
 #include <linux/rtnetlink.h>
 #include <linux/ptp_clock_kernel.h>
 #include <linux/phy_link_topology.h>
+
 #include <net/netdev_queues.h>
+#include <net/netdev_rx_queue.h>
+#include <net/xdp_sock_drv.h>
 
 #include "netlink.h"
 #include "common.h"
 #include "../core/dev.h"
-
 
 const char netdev_features_strings[NETDEV_FEATURE_COUNT][ETH_GSTRING_LEN] = {
 	[NETIF_F_SG_BIT] =               "tx-scatter-gather",
@@ -1100,6 +1102,12 @@ int ethtool_get_ts_info_by_layer(struct net_device *dev, struct kernel_ethtool_t
 EXPORT_SYMBOL(ethtool_get_ts_info_by_layer);
 
 const struct ethtool_phy_ops *ethtool_phy_ops;
+
+bool ethtool_channel_busy(struct net_device *dev, u32 channel)
+{
+	return netdev_rx_queue_peered(dev, channel) ||
+	       xsk_get_pool_from_qid(dev, channel);
+}
 
 void ethtool_set_ethtool_phy_ops(const struct ethtool_phy_ops *ops)
 {
