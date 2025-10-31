@@ -339,6 +339,11 @@ attribute-sets:
         doc: XSK information for this queue, if any.
         type: nest
         nested-attributes: xsk-info
+      -
+        name: lease
+        doc: tbd
+        type: nest
+        nested-attributes: lease
   -
     name: qstats
     doc: |
@@ -538,6 +543,24 @@ attribute-sets:
       -
         name: type
   -
+    name: lease
+    attributes:
+      -
+        name: ifindex
+        doc: netdev ifindex to lease the queue from.
+        type: u32
+        checks:
+          min: 1
+      -
+        name: queue
+        doc: netdev queue to lease from.
+        type: nest
+        nested-attributes: queue-id
+      -
+        name: netns-id
+        doc: tbd
+        type: s32
+  -
     name: dmabuf
     attributes:
       -
@@ -684,6 +707,7 @@ operations:
             - dmabuf
             - io-uring
             - xsk
+            - lease
       dump:
         request:
           attributes:
@@ -793,6 +817,20 @@ operations:
             - ifindex
             - fd
         reply:
+          attributes:
+            - id
+    -
+      name: queue-create
+      doc: tbd
+      attribute-set: queue
+      flags: [admin-perm]
+      do:
+        request:
+          attributes:
+            - ifindex
+            - type
+            - lease
+        reply: &queue-create-op
           attributes:
             - id
 
