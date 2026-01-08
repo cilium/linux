@@ -7,8 +7,9 @@ import time
 from pathlib import Path
 from lib.py import KsftSkipEx, KsftXfailEx
 from lib.py import ksft_setup, wait_file
-from lib.py import cmd, ethtool, ip, CmdExitFailure, bpftool
+from lib.py import cmd, defer, ethtool, ip, CmdExitFailure, bpftool
 from lib.py import NetNS, NetdevSimDev
+from lib.py import NetdevFamily, EthtoolFamily
 from .remote import Remote
 
 
@@ -295,13 +296,16 @@ class NetDrvContEnv(NetDrvEpEnv):
     between the physical interface and a network namespace.
     """
 
-    def __init__(self, src_path, nk_rxqueues=1, **kwargs):
+    def __init__(self, src_path, lease=False, **kwargs):
         super().__init__(src_path, **kwargs)
 
         self.require_ipver("6")
         local_prefix = self.env.get("LOCAL_PREFIX_V6")
         if not local_prefix:
             raise KsftSkipEx("LOCAL_PREFIX_V6 required")
+
+        self.netdevnl = NetdevFamily()
+        self.ethnl = EthtoolFamily()
 
         local_prefix = local_prefix.rstrip("/64").rstrip("::").rstrip(":")
         self.ipv6_prefix = f"{local_prefix}::"
@@ -313,7 +317,11 @@ class NetDrvContEnv(NetDrvEpEnv):
         self._nk_guest_ifname = None
         self._tc_attached = False
         self._bpf_prog_id = None
+        self._lease = lease
 
+        nk_rxqueues = 1
+        if lease:
+            nk_rxqueues = 2
         ip(f"link add type netkit mode l2 forward peer forward numrxqueues {nk_rxqueues}")
 
         all_links = ip("-d link show", json=True)
@@ -329,6 +337,32 @@ class NetDrvContEnv(NetDrvEpEnv):
         self._nk_guest_ifname = netkit_links[0]['ifname']
         self.nk_host_ifindex = netkit_links[1]['ifindex']
         self.nk_guest_ifindex = netkit_links[0]['ifindex']
+
+        if self._lease:
+            channels = self.ethnl.channels_get({'header': {'dev-index': self.ifindex}})
+            channels = channels['combined-count']
+            if channels < 2:
+                raise KsftSkipEx('Test requires NETIF with at least 2 combined channels')
+
+            rings = self.ethnl.rings_get({'header': {'dev-index': self.ifindex}})
+            self._rx_rings = rings['rx']
+            self._hds_thresh = rings.get('hds-thresh', 0)
+            self.ethnl.rings_set({'header': {'dev-index': self.ifindex},
+                                'tcp-data-split': 'enabled',
+                                'hds-thresh': 0,
+                                'rx': 64})
+            self.src_queue = channels - 1
+            bind_result = self.netdevnl.queue_create(
+                {
+                    "ifindex": self.nk_guest_ifindex,
+                    "type": "rx",
+                    "lease": {
+                        "ifindex": self.ifindex,
+                        "queue": {"id": self.src_queue, "type": "rx"},
+                    },
+                }
+            )
+            self.nk_queue = bind_result['id']
 
         self.netns = NetNS()
         ip(f"link set dev {self._nk_guest_ifname} netns {self.netns.name}")
@@ -388,5 +422,12 @@ class NetDrvContEnv(NetDrvEpEnv):
         if self.netns:
             del self.netns
             self.netns = None
+
+        if self._lease:
+            self.ethnl.rings_set({'header': {'dev-index': self.ifindex},
+                                  'tcp-data-split': 'unknown',
+                                  'hds-thresh': self._hds_thresh,
+                                  'rx': self._rx_rings})
+            self._lease = False
 
         super().__del__()
