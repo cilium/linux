@@ -1792,7 +1792,7 @@ static void push_udp(struct netpoll *np, struct sk_buff *skb, int len)
 	udph = udp_hdr(skb);
 	udph->source = htons(np->local_port);
 	udph->dest = htons(np->remote_port);
-	udph->len = htons(udp_len);
+	udp_set_len_short(udph, udp_len);
 
 	netpoll_udp_checksum(np, skb, len);
 }

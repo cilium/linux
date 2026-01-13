@@ -1369,7 +1369,8 @@ static int udp_v6_send_skb(struct sk_buff *skb, struct flowi6 *fl6,
 	uh = udp_hdr(skb);
 	uh->source = fl6->fl6_sport;
 	uh->dest = fl6->fl6_dport;
-	uh->len = htons(len);
+	/* Datagram length checked in udpv6_sendmsg. */
+	udp_set_len_short(uh, len);
 	uh->check = 0;
 
 	if (cork->gso_size) {

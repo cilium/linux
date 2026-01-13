@@ -1108,7 +1108,8 @@ static int udp_send_skb(struct sk_buff *skb, struct flowi4 *fl4,
 	uh = udp_hdr(skb);
 	uh->source = inet_sk(sk)->inet_sport;
 	uh->dest = fl4->fl4_dport;
-	uh->len = htons(len);
+	/* Datagram length checked in udp_sendmsg. */
+	udp_set_len_short(uh, len);
 	uh->check = 0;
 
 	if (cork->gso_size) {
