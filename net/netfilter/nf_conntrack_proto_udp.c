@@ -45,7 +45,7 @@ static bool udp_validate_len(struct sk_buff *skb,
 			     const struct udphdr *hdr,
 			     unsigned int dataoff)
 {
-	unsigned int udplen = udp_get_len_short(hdr);
+	unsigned int udplen = udp_get_len(skb, hdr, dataoff);
 	unsigned int skblen = skb->len - dataoff;
 
 	if (udplen > skblen || udplen < sizeof(*hdr))
