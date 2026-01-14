@@ -357,12 +357,18 @@ static bool xsk_dev_queue_valid(const struct xdp_sock *xs,
 	    info->queue_index == queue_index)
 		return true;
 
-	rxq = READ_ONCE(__netif_get_rx_queue(dev, queue_index)->lease);
-	if (!rxq)
-		return false;
+	if (queue_index < dev->real_num_rx_queues) {
+		rxq = READ_ONCE(__netif_get_rx_queue(dev, queue_index)->lease);
+		if (!rxq)
+			return false;
 
-	return info->dev == rxq->dev &&
-	       info->queue_index == get_netdev_rx_queue_index(rxq);
+		dev = rxq->dev;
+		queue_index = __get_netdev_rx_queue_index(dev, rxq);
+
+		return info->dev == dev &&
+		       info->queue_index == queue_index;
+	}
+	return false;
 }
 
 static int xsk_rcv_check(struct xdp_sock *xs, struct xdp_buff *xdp, u32 len)

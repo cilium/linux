@@ -49,6 +49,13 @@ __netif_get_rx_queue(struct net_device *dev, unsigned int rxq)
 }
 
 static inline unsigned int
+__get_netdev_rx_queue_index(const struct net_device *dev,
+			    const struct netdev_rx_queue *queue)
+{
+	return queue - dev->_rx;
+}
+
+static inline unsigned int
 get_netdev_rx_queue_index(struct netdev_rx_queue *queue)
 {
 	struct net_device *dev = queue->dev;
