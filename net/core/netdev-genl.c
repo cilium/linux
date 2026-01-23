@@ -1166,8 +1166,10 @@ int netdev_nl_queue_create_doit(struct sk_buff *skb, struct genl_info *info)
 	struct netdev_rx_queue *rxq, *rxq_lease;
 	struct net_device *dev, *dev_lease;
 	netdevice_tracker dev_tracker;
+	s32 netns_lease = -1;
 	struct nlattr *nest;
 	struct sk_buff *rsp;
+	struct net *net;
 	void *hdr;
 
 	if (GENL_REQ_ATTR_CHECK(info, NETDEV_A_QUEUE_IFINDEX) ||
@@ -1191,8 +1193,13 @@ int netdev_nl_queue_create_doit(struct sk_buff *skb, struct genl_info *info)
 	    NL_REQ_ATTR_CHECK(info->extack, nest, ltb, NETDEV_A_LEASE_QUEUE))
 		return -EINVAL;
 	if (ltb[NETDEV_A_LEASE_NETNS_ID]) {
-		NL_SET_BAD_ATTR(info->extack, ltb[NETDEV_A_LEASE_NETNS_ID]);
-		return -EINVAL;
+		netns_lease = nla_get_s32(ltb[NETDEV_A_LEASE_NETNS_ID]);
+		if (netns_lease < 0) {
+			NL_SET_BAD_ATTR(info->extack, ltb[NETDEV_A_LEASE_NETNS_ID]);
+			return -EINVAL;
+		}
+		if (!capable(CAP_NET_ADMIN))
+			return -EPERM;
 	}
 
 	ifindex_lease = nla_get_u32(ltb[NETDEV_A_LEASE_IFINDEX]);
@@ -1241,22 +1248,31 @@ int netdev_nl_queue_create_doit(struct sk_buff *skb, struct genl_info *info)
 		goto err_unlock_dev;
 	}
 
-	dev_lease = netdev_get_by_index(genl_info_net(info), ifindex_lease,
-					&dev_tracker, GFP_KERNEL);
+	net = genl_info_net(info);
+	if (netns_lease >= 0) {
+		net = get_net_ns_by_id(net, netns_lease);
+		if (!net) {
+			err = -ENONET;
+			goto err_unlock_dev;
+		}
+	}
+
+	dev_lease = netdev_get_by_index(net, ifindex_lease, &dev_tracker,
+					GFP_KERNEL);
 	if (!dev_lease) {
 		err = -ENODEV;
-		goto err_unlock_dev;
+		goto err_put_netns;
 	}
 	if (!netdev_can_lease_queue(dev_lease, info->extack)) {
 		netdev_put(dev_lease, &dev_tracker);
 		err = -EINVAL;
-		goto err_unlock_dev;
+		goto err_put_netns;
 	}
 
 	dev_lease = netdev_put_lock(dev_lease, &dev_tracker);
 	if (!dev_lease) {
 		err = -ENODEV;
-		goto err_unlock_dev;
+		goto err_put_netns;
 	}
 	if (queue_id_lease >= dev_lease->real_num_rx_queues) {
 		err = -ERANGE;
@@ -1293,11 +1309,16 @@ int netdev_nl_queue_create_doit(struct sk_buff *skb, struct genl_info *info)
 
 	netdev_unlock(dev_lease);
 	netdev_unlock(dev);
+	if (netns_lease >= 0)
+		put_net(net);
 
 	return genlmsg_reply(rsp, info);
 
 err_unlock_dev_lease:
 	netdev_unlock(dev_lease);
+err_put_netns:
+	if (netns_lease >= 0)
+		put_net(net);
 err_unlock_dev:
 	netdev_unlock(dev);
 err_genlmsg_free:
