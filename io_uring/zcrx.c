@@ -504,9 +504,8 @@ static void io_zcrx_drop_netdev(struct io_zcrx_ifq *ifq)
 
 static void io_close_queue(struct io_zcrx_ifq *ifq)
 {
-	struct net_device *netdev, *phys_netdev;
+	struct net_device *netdev;
 	netdevice_tracker netdev_tracker;
-	u32 phys_rxq_idx;
 	struct pp_memory_provider_params p = {
 		.mp_ops = &io_uring_pp_zc_ops,
 		.mp_priv = ifq,
@@ -516,19 +515,13 @@ static void io_close_queue(struct io_zcrx_ifq *ifq)
 		return;
 
 	scoped_guard(mutex, &ifq->pp_lock) {
-		netdev = phys_netdev = ifq->netdev;
+		netdev = ifq->netdev;
 		netdev_tracker = ifq->netdev_tracker;
 		ifq->netdev = NULL;
 	}
 
 	if (netdev) {
-		phys_rxq_idx = ifq->if_rxq;
-		netdev_lock(netdev);
-		if (netif_get_rx_queue_lease_locked(&phys_netdev, &phys_rxq_idx))
-			__net_mp_close_rxq(phys_netdev, phys_rxq_idx, &p);
-
-		netif_put_rx_queue_lease_locked(netdev, phys_netdev);
-		netdev_unlock(netdev);
+		net_mp_close_rxq(netdev, ifq->if_rxq, &p);
 		netdev_put(netdev, &netdev_tracker);
 	}
 	ifq->if_rxq = -1;
@@ -731,10 +724,9 @@ int io_register_zcrx_ifq(struct io_ring_ctx *ctx,
 	struct io_uring_zcrx_area_reg area;
 	struct io_uring_zcrx_ifq_reg reg;
 	struct io_uring_region_desc rd;
-	struct net_device *phys_netdev;
 	struct io_zcrx_ifq *ifq;
-	u32 id, phys_rxq_idx;
 	int ret;
+	u32 id;
 
 	/*
 	 * 1. Interface queue allocation.
@@ -812,23 +804,11 @@ int io_register_zcrx_ifq(struct io_ring_ctx *ctx,
 	if (ret)
 		goto netdev_put_unlock;
 
-	if (reg.if_rxq >= ifq->netdev->real_num_rx_queues) {
-		ret = -ERANGE;
-		goto netdev_put_unlock;
-	}
-	phys_netdev = ifq->netdev;
-	phys_rxq_idx = reg.if_rxq;
-	if (!netif_get_rx_queue_lease_locked(&phys_netdev, &phys_rxq_idx)) {
-		ret = -EBUSY;
-		goto netdev_put_unlock;
-	}
-
 	mp_param.mp_ops = &io_uring_pp_zc_ops;
 	mp_param.mp_priv = ifq;
-	ret = __net_mp_open_rxq(phys_netdev, phys_rxq_idx, &mp_param, NULL);
+	ret = __net_mp_open_rxq(ifq->netdev, reg.if_rxq, &mp_param, NULL);
 	if (ret)
-		goto lease_put_unlock;
-	netif_put_rx_queue_lease_locked(ifq->netdev, phys_netdev);
+		goto netdev_put_unlock;
 	netdev_unlock(ifq->netdev);
 	ifq->if_rxq = reg.if_rxq;
 
@@ -848,8 +828,6 @@ int io_register_zcrx_ifq(struct io_ring_ctx *ctx,
 		goto err;
 	}
 	return 0;
-lease_put_unlock:
-	netif_put_rx_queue_lease_locked(ifq->netdev, phys_netdev);
 netdev_put_unlock:
 	netdev_put(ifq->netdev, &ifq->netdev_tracker);
 	netdev_unlock(ifq->netdev);

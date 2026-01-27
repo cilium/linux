@@ -68,29 +68,6 @@ __netif_get_rx_queue_lease(struct net_device **dev, unsigned int *rxq_idx,
 	return rxq;
 }
 
-struct netdev_rx_queue *
-netif_get_rx_queue_lease_locked(struct net_device **dev, unsigned int *rxq_idx)
-{
-	struct net_device *orig_dev = *dev;
-	struct netdev_rx_queue *rxq;
-
-	/* Locking order is always from the virtual to the physical device
-	 * see netdev_nl_queue_create_doit().
-	 */
-	netdev_ops_assert_locked(orig_dev);
-	rxq = __netif_get_rx_queue_lease(dev, rxq_idx, NETIF_VIRT_TO_PHYS);
-	if (rxq && orig_dev != *dev)
-		netdev_lock(*dev);
-	return rxq;
-}
-
-void netif_put_rx_queue_lease_locked(struct net_device *orig_dev,
-				     struct net_device *dev)
-{
-	if (orig_dev != dev)
-		netdev_unlock(dev);
-}
-
 bool netif_rx_queue_lease_get_owner(struct net_device **dev,
 				    unsigned int *rxq_idx)
 {
@@ -289,17 +266,17 @@ int net_mp_open_rxq(struct net_device *dev, unsigned int rxq_idx,
 	return ret;
 }
 
-void __net_mp_close_rxq(struct net_device *dev, unsigned int rxq_idx,
+void __net_mp_close_rxq(struct net_device *dev, unsigned int ifq_idx,
 			const struct pp_memory_provider_params *old_p)
 {
 	struct netdev_queue_config qcfg[2];
 	struct netdev_rx_queue *rxq;
 	int err;
 
-	if (WARN_ON_ONCE(rxq_idx >= dev->real_num_rx_queues))
+	if (WARN_ON_ONCE(ifq_idx >= dev->real_num_rx_queues))
 		return;
 
-	rxq = __netif_get_rx_queue(dev, rxq_idx);
+	rxq = __netif_get_rx_queue(dev, ifq_idx);
 
 	/* Callers holding a netdev ref may get here after we already
 	 * went thru shutdown via dev_memory_provider_uninstall().
@@ -312,18 +289,18 @@ void __net_mp_close_rxq(struct net_device *dev, unsigned int rxq_idx,
 			 rxq->mp_params.mp_priv != old_p->mp_priv))
 		return;
 
-	netdev_queue_config(dev, rxq_idx, &qcfg[0]);
+	netdev_queue_config(dev, ifq_idx, &qcfg[0]);
 	memset(&rxq->mp_params, 0, sizeof(rxq->mp_params));
-	netdev_queue_config(dev, rxq_idx, &qcfg[1]);
+	netdev_queue_config(dev, ifq_idx, &qcfg[1]);
 
-	err = netdev_rx_queue_reconfig(dev, rxq_idx, &qcfg[0], &qcfg[1]);
+	err = netdev_rx_queue_reconfig(dev, ifq_idx, &qcfg[0], &qcfg[1]);
 	WARN_ON(err && err != -ENETDOWN);
 }
 
-void net_mp_close_rxq(struct net_device *dev, unsigned int rxq_idx,
+void net_mp_close_rxq(struct net_device *dev, unsigned ifq_idx,
 		      struct pp_memory_provider_params *old_p)
 {
 	netdev_lock(dev);
-	__net_mp_close_rxq(dev, rxq_idx, old_p);
+	__net_mp_close_rxq(dev, ifq_idx, old_p);
 	netdev_unlock(dev);
 }
