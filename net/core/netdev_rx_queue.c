@@ -214,23 +214,14 @@ int netdev_rx_queue_restart(struct net_device *dev, unsigned int rxq_idx)
 }
 EXPORT_SYMBOL_NS_GPL(netdev_rx_queue_restart, "NETDEV_INTERNAL");
 
-int net_mp_open_rxq(struct net_device *dev, unsigned int rxq_idx,
-		    const struct pp_memory_provider_params *p,
-		    struct netlink_ext_ack *extack)
+static int __net_mp_open_rxq(struct net_device *dev, unsigned int rxq_idx,
+			     const struct pp_memory_provider_params *p,
+			     struct netlink_ext_ack *extack)
 {
 	const struct netdev_queue_mgmt_ops *qops = dev->queue_mgmt_ops;
 	struct netdev_queue_config qcfg[2];
 	struct netdev_rx_queue *rxq;
 	int ret;
-
-	if (!netdev_need_ops_lock(dev))
-		return -EOPNOTSUPP;
-
-	if (rxq_idx >= dev->real_num_rx_queues) {
-		NL_SET_ERR_MSG(extack, "rx queue index out of range");
-		return -ERANGE;
-	}
-	rxq_idx = array_index_nospec(rxq_idx, dev->real_num_rx_queues);
 
 	if (dev->cfg->hds_config != ETHTOOL_TCP_DATA_SPLIT_ENABLED) {
 		NL_SET_ERR_MSG(extack, "tcp-data-split is disabled");
@@ -278,17 +269,47 @@ err_clear_mp:
 	return ret;
 }
 
-void net_mp_close_rxq(struct net_device *dev, unsigned int ifq_idx,
-		      const struct pp_memory_provider_params *old_p)
+int net_mp_open_rxq(struct net_device *dev, unsigned int rxq_idx,
+		    const struct pp_memory_provider_params *p,
+		    struct netlink_ext_ack *extack)
+{
+	struct net_device *orig_dev = dev;
+	int ret;
+
+	if (!netdev_need_ops_lock(dev))
+		return -EOPNOTSUPP;
+
+	if (rxq_idx >= dev->real_num_rx_queues) {
+		NL_SET_ERR_MSG(extack, "rx queue index out of range");
+		return -ERANGE;
+	}
+
+	rxq_idx = array_index_nospec(rxq_idx, dev->real_num_rx_queues);
+
+	if (!netif_get_rx_queue_lease_locked(&dev, &rxq_idx)) {
+		NL_SET_ERR_MSG(extack, "rx queue leased to a virtual netdev");
+		return -EBUSY;
+	}
+	if (!dev->dev.parent) {
+		NL_SET_ERR_MSG(extack, "rx queue belongs to a virtual netdev");
+		ret = -EOPNOTSUPP;
+		goto out;
+	}
+
+	ret = __net_mp_open_rxq(dev, rxq_idx, p, extack);
+out:
+	netif_put_rx_queue_lease_locked(orig_dev, dev);
+	return ret;
+}
+
+static void __net_mp_close_rxq(struct net_device *dev, unsigned int rxq_idx,
+			       const struct pp_memory_provider_params *old_p)
 {
 	struct netdev_queue_config qcfg[2];
 	struct netdev_rx_queue *rxq;
 	int err;
 
-	if (WARN_ON_ONCE(ifq_idx >= dev->real_num_rx_queues))
-		return;
-
-	rxq = __netif_get_rx_queue(dev, ifq_idx);
+	rxq = __netif_get_rx_queue(dev, rxq_idx);
 
 	/* Callers holding a netdev ref may get here after we already
 	 * went thru shutdown via dev_memory_provider_uninstall().
@@ -301,10 +322,24 @@ void net_mp_close_rxq(struct net_device *dev, unsigned int ifq_idx,
 			 rxq->mp_params.mp_priv != old_p->mp_priv))
 		return;
 
-	netdev_queue_config(dev, ifq_idx, &qcfg[0]);
+	netdev_queue_config(dev, rxq_idx, &qcfg[0]);
 	memset(&rxq->mp_params, 0, sizeof(rxq->mp_params));
-	netdev_queue_config(dev, ifq_idx, &qcfg[1]);
+	netdev_queue_config(dev, rxq_idx, &qcfg[1]);
 
-	err = netdev_rx_queue_reconfig(dev, ifq_idx, &qcfg[0], &qcfg[1]);
+	err = netdev_rx_queue_reconfig(dev, rxq_idx, &qcfg[0], &qcfg[1]);
 	WARN_ON(err && err != -ENETDOWN);
+}
+
+void net_mp_close_rxq(struct net_device *dev, unsigned int rxq_idx,
+		      const struct pp_memory_provider_params *old_p)
+{
+	struct net_device *orig_dev = dev;
+
+	if (WARN_ON_ONCE(rxq_idx >= dev->real_num_rx_queues))
+		return;
+	if (WARN_ON_ONCE(!netif_get_rx_queue_lease_locked(&dev, &rxq_idx)))
+		return;
+
+	__net_mp_close_rxq(dev, rxq_idx, old_p);
+	netif_put_rx_queue_lease_locked(orig_dev, dev);
 }
