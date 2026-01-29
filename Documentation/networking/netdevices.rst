@@ -329,6 +329,12 @@ by setting ``request_ops_lock`` to true. Code comments and docs refer
 to drivers which have ops called under the instance lock as "ops locked".
 See also the documentation of the ``lock`` member of struct net_device.
 
+There is also a case of taking two per-netdev locks in sequence when netdev
+queues are leased, that is, the netdev-scope lock is taken for the physical
+as well as the virtual device. To prevent deadlocks, the locking order must
+always be taken from the virtual to the physical device (see
+``netdev_nl_queue_create_doit``).
+
 In the future, there will be an option for individual
 drivers to opt out of using ``rtnl_lock`` and instead perform their control
 operations directly under the netdev instance lock.
