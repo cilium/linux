@@ -2562,7 +2562,14 @@ struct net_device {
 	 * Also protects some fields in:
 	 *	struct napi_struct, struct netdev_queue, struct netdev_rx_queue
 	 *
-	 * Ordering: take after rtnl_lock.
+	 * Ordering:
+	 *
+	 * - take after rtnl_lock
+	 *
+	 * - for the case of netdev queue leasing, the netdev-scope lock is
+	 *   taken for the physical as well as the virtual device; to prevent
+	 *   deadlocks, the locking order must always be taken from the
+	 *   virtual to the physical device (see netdev_nl_queue_create_doit)
 	 */
 	struct mutex		lock;
 
