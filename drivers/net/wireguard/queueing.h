@@ -162,6 +162,8 @@ static inline int wg_queue_enqueue_per_device_and_peer(
 	if (unlikely(!wg_prev_queue_enqueue(peer_queue, skb)))
 		return -ENOSPC;
 
+	// we return here due to full
+
 	/* Then we queue it up in the device queue, which consumes the
 	 * packet as soon as it can.
 	 */
@@ -193,7 +195,11 @@ static inline void wg_queue_enqueue_per_peer_rx(struct sk_buff *skb, enum packet
 	struct wg_peer *peer = wg_peer_get(PACKET_PEER(skb));
 
 	atomic_set_release(&PACKET_CB(skb)->state, state);
-	napi_schedule(&peer->napi);
+	if (get_random_u16() % 128 == 0) {
+		printk("xxxx wg_queue_enqueue_per_peer_rx skipping to schedule NAPI\n");
+	} else {
+		napi_schedule(&peer->napi);
+	}
 	wg_peer_put(peer);
 }
 

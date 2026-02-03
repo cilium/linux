@@ -71,8 +71,11 @@ static void __wg_prev_queue_enqueue(struct prev_queue *queue, struct sk_buff *sk
 
 bool wg_prev_queue_enqueue(struct prev_queue *queue, struct sk_buff *skb)
 {
-	if (!atomic_add_unless(&queue->count, 1, MAX_QUEUED_PACKETS))
+	if (!atomic_add_unless(&queue->count, 1, MAX_QUEUED_PACKETS)) {
+		printk("xxx hit wg max packets!!! %d on queue:%lx\n", (int)MAX_QUEUED_PACKETS, (long)queue);
 		return false;
+	}
+	printk("eee queue->count: %d queue:%lx\n", atomic_read(&queue->count), (long)queue);
 	__wg_prev_queue_enqueue(queue, skb);
 	return true;
 }
@@ -91,6 +94,7 @@ struct sk_buff *wg_prev_queue_dequeue(struct prev_queue *queue)
 	if (next) {
 		queue->tail = next;
 		atomic_dec(&queue->count);
+		//printk("ddd1 queue->count: %d\n", atomic_read(&queue->count));
 		return tail;
 	}
 	if (tail != READ_ONCE(queue->head))
@@ -100,6 +104,7 @@ struct sk_buff *wg_prev_queue_dequeue(struct prev_queue *queue)
 	if (next) {
 		queue->tail = next;
 		atomic_dec(&queue->count);
+		//printk("ddd2 queue->count: %d\n", atomic_read(&queue->count));
 		return tail;
 	}
 	return NULL;

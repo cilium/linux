@@ -484,9 +484,12 @@ next:
 			break;
 	}
 
-	if (work_done < budget)
+	if (work_done < budget) {
+		printk("xxx%d: calling napi_complete_done", __LINE__);
 		napi_complete_done(napi, work_done);
+	}
 
+	printk("xxx%d: returned:%d budget:%d", __LINE__, work_done, budget);
 	return work_done;
 }
 
@@ -500,9 +503,11 @@ void wg_packet_decrypt_worker(struct work_struct *work)
 		enum packet_state state =
 			likely(decrypt_packet(skb, PACKET_CB(skb)->keypair)) ?
 				PACKET_STATE_CRYPTED : PACKET_STATE_DEAD;
-		wg_queue_enqueue_per_peer_rx(skb, state);
-		if (need_resched())
+		wg_queue_enqueue_per_peer_rx(skb, state); // calls napi_schedule to wake up wg_packet_rx_poll
+		if (need_resched()) {
+			printk("zzz resched\n");
 			cond_resched();
+		}
 	}
 }
 
