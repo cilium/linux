@@ -149,6 +149,11 @@ static inline void wg_prev_queue_drop_peeked(struct prev_queue *queue)
 	queue->peeked = NULL;
 }
 
+static inline bool wg_prev_queue_pressure(struct prev_queue *queue)
+{
+	return atomic_read(&queue->count) > MAX_QUEUED_PACKETS * 2 / 3;
+}
+
 static inline int wg_queue_enqueue_per_device_and_peer(
 	struct crypt_queue *device_queue, struct prev_queue *peer_queue,
 	struct sk_buff *skb, struct workqueue_struct *wq)

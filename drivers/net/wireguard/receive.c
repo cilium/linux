@@ -484,6 +484,13 @@ next:
 			break;
 	}
 
+	/* The skb is still in PACKET_STATE_UNCRYPTED and a
+	 * queue is building up with subsequent skbs possibly
+	 * sitting in PACKET_STATE_CRYPTED. Temporarily force
+	 * repoll to make forward progress.
+	 */
+	if (skb && !work_done && wg_prev_queue_pressure(&peer->rx_queue))
+		work_done = budget;
 	if (work_done < budget)
 		napi_complete_done(napi, work_done);
 
