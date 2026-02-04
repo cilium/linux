@@ -203,6 +203,14 @@ static inline void wg_queue_enqueue_per_peer_rx(struct sk_buff *skb, enum packet
 	wg_peer_put(peer);
 }
 
+static inline void wg_queue_kick_per_peer_napi(struct sk_buff *skb)
+{
+	struct wg_peer *peer = wg_peer_get(PACKET_PEER(skb));
+
+	napi_schedule(&peer->napi);
+	wg_peer_put(peer);
+}
+
 #ifdef DEBUG
 bool wg_packet_counter_selftest(void);
 #endif
