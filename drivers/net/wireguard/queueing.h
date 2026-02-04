@@ -200,7 +200,6 @@ static inline void wg_queue_enqueue_per_peer_rx(struct sk_buff *skb, enum packet
 	} else {
 		napi_schedule(&peer->napi);
 	}
-	printk("xxxx wg_queue_enqueue_per_peer_rx, state:%d\n", state);
 	wg_peer_put(peer);
 }
 
