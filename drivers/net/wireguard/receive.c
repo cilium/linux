@@ -443,14 +443,22 @@ int wg_packet_rx_poll(struct napi_struct *napi, int budget)
 	enum packet_state state;
 	struct sk_buff *skb;
 	int work_done = 0;
+	int foo = 0;
 	bool free;
 
 	if (unlikely(budget <= 0))
 		return 0;
 
-	while ((skb = wg_prev_queue_peek(&peer->rx_queue)) != NULL &&
-	       (state = atomic_read_acquire(&PACKET_CB(skb)->state)) !=
-		       PACKET_STATE_UNCRYPTED) {
+	printk("xxx%d: wg_packet_rx_poll start\n", __LINE__);
+
+	while ((skb = wg_prev_queue_peek(&peer->rx_queue)) != NULL) {
+
+		state = atomic_read_acquire(&PACKET_CB(skb)->state);
+		if (state != PACKET_STATE_UNCRYPTED) {
+			printk("xxx%d packet state:%d foo:%d\n", __LINE__, (int)state, ++foo);
+			break;
+		}
+
 		wg_prev_queue_drop_peeked(&peer->rx_queue);
 		keypair = PACKET_CB(skb)->keypair;
 		free = true;
@@ -460,7 +468,7 @@ int wg_packet_rx_poll(struct napi_struct *napi, int budget)
 
 		if (unlikely(!counter_validate(&keypair->receiving_counter,
 					       PACKET_CB(skb)->nonce))) {
-			net_dbg_ratelimited("%s: Packet has invalid nonce %llu (max %llu)\n",
+			printk("%s: Packet has invalid nonce %llu (max %llu)\n",
 					    peer->device->dev->name,
 					    PACKET_CB(skb)->nonce,
 					    READ_ONCE(keypair->receiving_counter.counter));
@@ -489,7 +497,7 @@ next:
 		napi_complete_done(napi, work_done);
 	}
 
-	printk("xxx%d: returned:%d budget:%d", __LINE__, work_done, budget);
+	printk("xxx%d: wg_packet_rx_poll end, returned:%d budget:%d", __LINE__, work_done, budget);
 	return work_done;
 }
 
@@ -499,6 +507,8 @@ void wg_packet_decrypt_worker(struct work_struct *work)
 						 work)->ptr;
 	struct sk_buff *skb;
 
+	printk("zzz decrypt worker started\n");
+
 	while ((skb = ptr_ring_consume_bh(&queue->ring)) != NULL) {
 		enum packet_state state =
 			likely(decrypt_packet(skb, PACKET_CB(skb)->keypair)) ?
@@ -507,8 +517,11 @@ void wg_packet_decrypt_worker(struct work_struct *work)
 		if (need_resched()) {
 			printk("zzz resched\n");
 			cond_resched();
+			printk("zzz back from resched\n");
 		}
 	}
+
+	printk("zzz decrypt worker terminated\n");
 }
 
 static void wg_packet_consume_data(struct wg_device *wg, struct sk_buff *skb)
