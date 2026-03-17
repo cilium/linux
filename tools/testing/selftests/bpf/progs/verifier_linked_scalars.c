@@ -348,6 +348,55 @@ l0_%=:							\
 	: __clobber_all);
 }
 
+/*
+ * Test that sync_linked_regs() checks reg->id (the linked target register)
+ * for BPF_ADD_CONST32 rather than known_reg->id (the branch register).
+ *
+ * The alu32 linked register tracking requires dst_umax <= U32_MAX before
+ * the alu32 op (otherwise the id is cleared). Since bpf_get_prandom_u32()
+ * marks r0 as fully unknown (umax = U64_MAX), we must first constrain r6
+ * to [0, U32_MAX] with an explicit 64-bit comparison.
+ *
+ * After constraining:
+ *   r7 = r6 (linked), then w7 += 1 sets BPF_ADD_CONST32 on r7.
+ *   Branch on r6 triggers sync_linked_regs(known_reg=r6, reg=r7).
+ *
+ * The bug: sync_linked_regs() checked known_reg->id for BPF_ADD_CONST32
+ * instead of reg->id, so zext_32_to_64() was never called for r7.
+ * This left r7 with incorrect 64-bit bounds (not zero-extended).
+ */
+SEC("socket")
+__success
+__naked void scalars_alu32_zext_linked_reg(void)
+{
+	asm volatile ("						\
+	call %[bpf_get_prandom_u32];				\
+	r6 = r0;						\
+	/* Constrain r6 to [0, U32_MAX] so alu32 link is preserved */ \
+	r8 = 1;						\
+	r8 <<= 32;		/* r8 = 0x100000000 */		\
+	if r6 >= r8 goto l0_%=;				\
+	/* r6 in [0, 0xFFFFFFFF] */				\
+	r7 = r6;		/* linked: same id as r6 */	\
+	w7 += 1;		/* alu32: r7.id |= BPF_ADD_CONST32 */ \
+	r8 -= 1;		/* r8 = 0xFFFFFFFF */		\
+	if r6 < r8 goto l0_%=;					\
+	/* r6 in [0xFFFFFFFF, 0xFFFFFFFF] */			\
+	/* sync_linked_regs: known_reg=r6, reg=r7 */		\
+	/* CPU: w7 = (u32)(0xFFFFFFFF + 1) = 0, zext -> r7 = 0 */ \
+	/* With fix: r7 64-bit = [0, 0] (zext applied) */	\
+	/* Without fix: r7 64-bit = [0x100000000] (no zext) */	\
+	r7 >>= 32;						\
+	if r7 == 0 goto l0_%=;					\
+	r0 /= 0;		/* unreachable with fix */	\
+l0_%=:								\
+	r0 = 0;							\
+	exit;							\
+"	:
+	: __imm(bpf_get_prandom_u32)
+	: __clobber_all);
+}
+
 SEC("socket")
 __success
 void alu32_negative_offset(void)
