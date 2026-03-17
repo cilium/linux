@@ -17442,7 +17442,7 @@ static void sync_linked_regs(struct bpf_verifier_env *env, struct bpf_verifier_s
 			scalar32_min_max_add(reg, &fake_reg);
 			scalar_min_max_add(reg, &fake_reg);
 			reg->var_off = tnum_add(reg->var_off, fake_reg.var_off);
-			if (known_reg->id & BPF_ADD_CONST32)
+			if ((reg->id | known_reg->id) & BPF_ADD_CONST32)
 				zext_32_to_64(reg);
 			reg_bounds_sync(reg);
 		}
