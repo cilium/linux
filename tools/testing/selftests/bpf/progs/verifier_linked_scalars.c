@@ -450,6 +450,70 @@ l0_%=:								\
 	: __clobber_all);
 }
 
+/*
+ * Test that regsafe() prevents pruning when two paths reach the same program
+ * point with linked registers carrying different ADD_CONST flags (one
+ * BPF_ADD_CONST32 from alu32, another BPF_ADD_CONST64 from alu64).
+ *
+ * Path A (fall-through): w7 += 1  -> BPF_ADD_CONST32 on r7
+ * Path B (branch taken): r7 += 1  -> BPF_ADD_CONST64 on r7
+ *
+ * BPF_F_TEST_STATE_FREQ forces checkpoints at every instruction, ensuring
+ * the merge point is a potential pruning point. The verifier must not prune
+ * path B based on path A's cached state, because the ADD_CONST flag
+ * difference means sync_linked_regs() would behave differently in the
+ * continuation (alu32 applies zext, alu64 does not).
+ *
+ * Path A: after sync with r6 = 0xFFFFFFFF, r7 = zext(0x100000000) = 0,
+ *   so r7 >> 32 == 0 -> exits safely.
+ * Path B: after sync with r6 = 0xFFFFFFFF, r7 = 0x100000000 (no zext),
+ *   so r7 >> 32 == 1 -> reaches div/0.
+ *
+ * Overall: program must be rejected because path B is unsafe.
+ */
+SEC("socket")
+__failure __msg("div by zero")
+__flag(BPF_F_TEST_STATE_FREQ)
+__naked void scalars_alu32_alu64_regsafe_pruning(void)
+{
+	asm volatile ("						\
+	call %[bpf_get_prandom_u32];				\
+	r6 = r0;						\
+	/* Constrain r6 to [0, U32_MAX] so alu32 link is preserved */ \
+	r9 = 1;						\
+	r9 <<= 32;		/* r9 = 0x100000000 */		\
+	if r6 >= r9 goto l0_%=;				\
+	/* r6 in [0, 0xFFFFFFFF] */				\
+	r7 = r6;		/* linked: same id as r6 */	\
+	/* Get another random value for the path branch */	\
+	call %[bpf_get_prandom_u32];				\
+	if r0 > 0 goto l_pathb_%=;				\
+	/* Path A: alu32 */					\
+	w7 += 1;		/* BPF_ADD_CONST32, delta = 1 */\
+	goto l_merge_%=;					\
+l_pathb_%=:							\
+	/* Path B: alu64 */					\
+	r7 += 1;		/* BPF_ADD_CONST64, delta = 1 */\
+l_merge_%=:							\
+	/* Merge point: regsafe() compares path B against cached path A. */ \
+	/* Narrow r6 to trigger sync_linked_regs for r7 */	\
+	r9 -= 1;		/* r9 = 0xFFFFFFFF */		\
+	if r6 < r9 goto l0_%=;					\
+	/* r6 = 0xFFFFFFFF */					\
+	/* sync: r7 = 0xFFFFFFFF + 1 = 0x100000000 */		\
+	/* Path A: zext -> r7 = 0 */				\
+	/* Path B: no zext -> r7 = 0x100000000 */		\
+	r7 >>= 32;						\
+	if r7 == 0 goto l0_%=;					\
+	r0 /= 0;		/* div by zero on path B */	\
+l0_%=:								\
+	r0 = 0;						\
+	exit;							\
+"	:
+	: __imm(bpf_get_prandom_u32)
+	: __clobber_all);
+}
+
 SEC("socket")
 __success
 void alu32_negative_offset(void)
