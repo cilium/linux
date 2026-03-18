@@ -348,6 +348,70 @@ l0_%=:							\
 	: __clobber_all);
 }
 
+/*
+ * Test that regsafe() prevents pruning when two paths reach the same program
+ * point with linked registers carrying different ADD_CONST flags (one
+ * BPF_ADD_CONST32 from alu32, another BPF_ADD_CONST64 from alu64).
+ *
+ * Path A (fall-through): w7 += 1  -> BPF_ADD_CONST32 on r7
+ * Path B (branch taken): r7 += 1  -> BPF_ADD_CONST64 on r7
+ *
+ * BPF_F_TEST_STATE_FREQ forces checkpoints at every instruction, ensuring
+ * the merge point is a potential pruning point. The verifier must not prune
+ * path B based on path A's cached state, because the ADD_CONST flag
+ * difference means sync_linked_regs() would behave differently in the
+ * continuation (alu32 applies zext, alu64 does not).
+ *
+ * Path A: after sync with r6 = 0xFFFFFFFF, r7 = zext(0x100000000) = 0,
+ *   so r7 >> 32 == 0 -> exits safely.
+ * Path B: after sync with r6 = 0xFFFFFFFF, r7 = 0x100000000 (no zext),
+ *   so r7 >> 32 == 1 -> reaches div/0.
+ *
+ * Overall: program must be rejected because path B is unsafe.
+ */
+SEC("socket")
+__failure __msg("div by zero")
+__flag(BPF_F_TEST_STATE_FREQ)
+__naked void scalars_alu32_alu64_regsafe_pruning(void)
+{
+	asm volatile ("						\
+	call %[bpf_get_prandom_u32];				\
+	r6 = r0;						\
+	/* Constrain r6 to [0, U32_MAX] so alu32 link is preserved */ \
+	r9 = 1;						\
+	r9 <<= 32;		/* r9 = 0x100000000 */		\
+	if r6 >= r9 goto l0_%=;				\
+	/* r6 in [0, 0xFFFFFFFF] */				\
+	r7 = r6;		/* linked: same id as r6 */	\
+	/* Get another random value for the path branch */	\
+	call %[bpf_get_prandom_u32];				\
+	if r0 > 0 goto l_pathb_%=;				\
+	/* Path A: alu32 */					\
+	w7 += 1;		/* BPF_ADD_CONST32, delta = 1 */\
+	goto l_merge_%=;					\
+l_pathb_%=:							\
+	/* Path B: alu64 */					\
+	r7 += 1;		/* BPF_ADD_CONST64, delta = 1 */\
+l_merge_%=:							\
+	/* Merge point: regsafe() compares path B against cached path A. */ \
+	/* Narrow r6 to trigger sync_linked_regs for r7 */	\
+	r9 -= 1;		/* r9 = 0xFFFFFFFF */		\
+	if r6 < r9 goto l0_%=;					\
+	/* r6 = 0xFFFFFFFF */					\
+	/* sync: r7 = 0xFFFFFFFF + 1 = 0x100000000 */		\
+	/* Path A: zext -> r7 = 0 */				\
+	/* Path B: no zext -> r7 = 0x100000000 */		\
+	r7 >>= 32;						\
+	if r7 == 0 goto l0_%=;					\
+	r0 /= 0;		/* div by zero on path B */	\
+l0_%=:								\
+	r0 = 0;						\
+	exit;							\
+"	:
+	: __imm(bpf_get_prandom_u32)
+	: __clobber_all);
+}
+
 SEC("socket")
 __success
 void alu32_negative_offset(void)
@@ -425,6 +489,118 @@ int spurious_precision_marks(void *ctx)
 	);
 
 	return 0;
+}
+
+/*
+ * Test that sync_linked_regs() checks reg->id (the target linked register)
+ * rather than known_reg->id (the narrowed register from the conditional) for
+ * the BPF_ADD_CONST32 flag when deciding whether to call zext_32_to_64().
+ *
+ * r0 = bpf_get_prandom_u32()   [0, U32_MAX]
+ * r1 = r0                      linked, same ID
+ * w1 += 5                      alu32: r1.id gets BPF_ADD_CONST32
+ * if w0 < 0xFFFFFFFC goto out  JMP32 narrows r0 to [0xFFFFFFFC, 0xFFFFFFFF]
+ *                               sync_linked_regs() propagates to r1
+ *
+ * Fixed:  reg->id (r1) has BPF_ADD_CONST32  -> zext_32_to_64() called
+ *         r1 = [1, 4], r1 >> 32 = 0, div-by-zero is dead code  -> accepted
+ *
+ * Bug:    known_reg->id (r0) lacks BPF_ADD_CONST32 -> zext_32_to_64() skipped
+ *         r1 = [0x100000001, 0x100000004], r1 >> 32 = 1                -> rejected
+ */
+SEC("socket")
+__description("sync_linked_regs: zext on alu32-derived linked reg")
+__success
+__naked void sync_linked_regs_zext_alu32(void)
+{
+	asm volatile ("					\
+	call %[bpf_get_prandom_u32];			\
+	r1 = r0;					\
+	w1 += 5;					\
+	if w0 < 0xFFFFFFFC goto l0_%=;			\
+	r1 >>= 32;					\
+	if r1 == 0 goto l0_%=;				\
+	r0 /= 0;					\
+l0_%=:							\
+	r0 = 0;						\
+	exit;						\
+"	:
+	: __imm(bpf_get_prandom_u32)
+	: __clobber_all);
+}
+
+/*
+ * Mixed BPF_ADD_CONST32/CONST64: sync_linked_regs() must skip registers
+ * whose ADD_CONST flavor differs from known_reg's, because the delta
+ * between a 32-bit wrapping offset and a 64-bit offset produces wrong
+ * bounds.
+ *
+ * Here reg (r2) has CONST32 and known_reg (r1) has CONST64. Without
+ * the skip, the sync would copy r1's narrowed 64-bit bounds and add
+ * a delta, producing r2 = [0x100000001, 0x100000004] (above u32 range)
+ * even though the alu32 zero-extends r2 to [1, 4] at runtime.
+ *
+ * With the skip, r2 retains its original alu32-derived bounds (within
+ * u32 range), so r2 >> 32 = 0.
+ */
+SEC("socket")
+__description("sync_linked_regs: skip CONST32 reg when known_reg is CONST64")
+__success
+__naked void sync_linked_regs_skip_mixed_const64_known(void)
+{
+	asm volatile ("					\
+	call %[bpf_get_prandom_u32];			\
+	r1 = r0;					\
+	r2 = r0;					\
+	r1 += 3;					\
+	w2 += 5;					\
+	r3 = 1;						\
+	r3 <<= 32;					\
+	r3 -= 1;					\
+	if r1 < r3 goto l0_%=;				\
+	r2 >>= 32;					\
+	if r2 == 0 goto l0_%=;				\
+	r0 /= 0;					\
+l0_%=:							\
+	r0 = 0;						\
+	exit;						\
+"	:
+	: __imm(bpf_get_prandom_u32)
+	: __clobber_all);
+}
+
+/*
+ * Mixed BPF_ADD_CONST32/CONST64 (reverse direction): reg (r1) has CONST64,
+ * known_reg (r2) has CONST32. Without the skip, the sync would copy r2's
+ * zero-extended bounds and add a delta, then the old code would call zext
+ * (because known_reg has CONST32), unsoundly truncating r1's 64-bit bounds
+ * even though r1 genuinely exceeds u32 (from alu64 on a high base value).
+ *
+ * With the skip, r1 retains its original alu64 bounds where r1 >> 32 = 1,
+ * so the verifier correctly knows the upper 32 bits are non-zero.
+ */
+SEC("socket")
+__description("sync_linked_regs: skip CONST64 reg when known_reg is CONST32")
+__success
+__naked void sync_linked_regs_skip_mixed_const32_known(void)
+{
+	asm volatile ("					\
+	call %[bpf_get_prandom_u32];			\
+	w0 |= 0xffffff00;				\
+	r1 = r0;					\
+	r2 = r0;					\
+	r1 += 0x100;					\
+	w2 += 3;					\
+	if w2 < 0xffffff03 goto l0_%=;			\
+	r1 >>= 32;					\
+	if r1 > 0 goto l0_%=;				\
+	r0 /= 0;					\
+l0_%=:							\
+	r0 = 0;						\
+	exit;						\
+"	:
+	: __imm(bpf_get_prandom_u32)
+	: __clobber_all);
 }
 
 char _license[] SEC("license") = "GPL";
