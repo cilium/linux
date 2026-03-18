@@ -397,6 +397,59 @@ l0_%=:								\
 	: __clobber_all);
 }
 
+/*
+ * Test that sync_linked_regs() skips propagation when one register used
+ * alu32 (BPF_ADD_CONST32) and the other used alu64 (BPF_ADD_CONST64).
+ * The delta relationship doesn't hold across different ALU widths.
+ *
+ * Setup: r6 in [0, U32_MAX]
+ *   r7 = r6; w7 += 1    -> id = N | BPF_ADD_CONST32, delta = 1
+ *   r8 = r6; r8 += 2    -> id = N | BPF_ADD_CONST64, delta = 2
+ *
+ * Branch: if r7 < 0xFFFFFFFF goto out  (false branch: r7 = 0xFFFFFFFF)
+ *   sync_linked_regs: known_reg=r7 (BPF_ADD_CONST32), reg=r8 (BPF_ADD_CONST64)
+ *
+ * Without fix: cross-type sync runs, applies zext to r8.
+ *   r8 = zext(0xFFFFFFFF + 1) = 0. Verifier thinks r8 = 0.
+ *   "if r8 > 0" is always false -> div/0 path pruned -> ACCEPT (unsound!)
+ *
+ * With fix: cross-type skipped. r8 stays [2, 0x100000001].
+ *   r8 >= 2 > 0 -> "if r8 > 0" always true -> div/0 reached -> REJECT
+ */
+SEC("socket")
+__failure __msg("div by zero")
+__naked void scalars_alu32_alu64_cross_type(void)
+{
+	asm volatile ("						\
+	call %[bpf_get_prandom_u32];				\
+	r6 = r0;						\
+	/* Constrain r6 to [0, U32_MAX] so alu32 link is preserved */ \
+	r9 = 1;						\
+	r9 <<= 32;		/* r9 = 0x100000000 */		\
+	if r6 >= r9 goto l0_%=;				\
+	/* r6 in [0, 0xFFFFFFFF] */				\
+	r7 = r6;		/* linked: same id as r6 */	\
+	w7 += 1;		/* alu32: BPF_ADD_CONST32, delta = 1 */ \
+	r8 = r6;		/* linked: same id as r6 */	\
+	r8 += 2;		/* alu64: BPF_ADD_CONST64, delta = 2 */ \
+	r9 -= 1;		/* r9 = 0xFFFFFFFF */		\
+	if r7 < r9 goto l0_%=;					\
+	/* r7 = 0xFFFFFFFF */					\
+	/* sync: known_reg=r7 (ADD_CONST32), reg=r8 (ADD_CONST64) */ \
+	/* Without fix: r8 = zext(0xFFFFFFFF + 1) = 0 */	\
+	/* With fix: r8 stays [2, 0x100000001] (r8 >= 2) */	\
+	if r8 > 0 goto l1_%=;					\
+	goto l0_%=;						\
+l1_%=:								\
+	r0 /= 0;		/* div by zero */		\
+l0_%=:								\
+	r0 = 0;						\
+	exit;							\
+"	:
+	: __imm(bpf_get_prandom_u32)
+	: __clobber_all);
+}
+
 SEC("socket")
 __success
 void alu32_negative_offset(void)
