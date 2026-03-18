@@ -17415,6 +17415,15 @@ static void sync_linked_regs(struct bpf_verifier_env *env, struct bpf_verifier_s
 			continue;
 		if ((reg->id & ~BPF_ADD_CONST) != (known_reg->id & ~BPF_ADD_CONST))
 			continue;
+		/* Mixed BPF_ADD_CONST32/CONST64: the delta between a 32-bit
+		 * offset and a 64-bit offset can't be meaningfully computed
+		 * because the 32-bit side wraps and zero-extends while the
+		 * 64-bit side doesn't. Skip the sync rather than propagate
+		 * wrong bounds.
+		 */
+		if ((reg->id & BPF_ADD_CONST) && (known_reg->id & BPF_ADD_CONST) &&
+		    (reg->id & BPF_ADD_CONST) != (known_reg->id & BPF_ADD_CONST))
+			continue;
 		if ((!(reg->id & BPF_ADD_CONST) && !(known_reg->id & BPF_ADD_CONST)) ||
 		    reg->off == known_reg->off) {
 			s32 saved_subreg_def = reg->subreg_def;
@@ -17442,7 +17451,7 @@ static void sync_linked_regs(struct bpf_verifier_env *env, struct bpf_verifier_s
 			scalar32_min_max_add(reg, &fake_reg);
 			scalar_min_max_add(reg, &fake_reg);
 			reg->var_off = tnum_add(reg->var_off, fake_reg.var_off);
-			if (known_reg->id & BPF_ADD_CONST32)
+			if ((reg->id | known_reg->id) & BPF_ADD_CONST32)
 				zext_32_to_64(reg);
 			reg_bounds_sync(reg);
 		}
@@ -19841,9 +19850,10 @@ static bool regsafe(struct bpf_verifier_env *env, struct bpf_reg_state *rold,
 		 * |                  | rold->id  | rold + ADD_CONST | rold->id == 0 |
 		 * |------------------+-----------+------------------+---------------|
 		 * | rcur->id         | range,ids | false            | range         |
-		 * | rcur + ADD_CONST | false     | range,ids,off    | range         |
+		 * | rcur + ADD_CONST | false     |range,ids,off,flav| range         |
 		 * | rcur->id == 0    | range,ids | false            | range         |
 		 * +------------------+-----------+------------------+---------------+
+		 * flav: BPF_ADD_CONST32 vs BPF_ADD_CONST64 must match
 		 *
 		 * Why check_ids() for scalar registers?
 		 *
@@ -19877,8 +19887,14 @@ static bool regsafe(struct bpf_verifier_env *env, struct bpf_reg_state *rold,
 		if (rold->id && !(rold->id & BPF_ADD_CONST) && (rcur->id & BPF_ADD_CONST))
 			return false;
 
-		/* Both have offset linkage: offsets must match */
-		if ((rold->id & BPF_ADD_CONST) && rold->off != rcur->off)
+		/* Both have offset linkage: flavor (CONST32 vs CONST64)
+		 * and offsets must match. CONST32 produces zero-extended
+		 * bounds via zext_32_to_64() while CONST64 does not, so
+		 * sync_linked_regs() behaves differently for each.
+		 */
+		if ((rold->id & BPF_ADD_CONST) &&
+		    ((rold->id & BPF_ADD_CONST) != (rcur->id & BPF_ADD_CONST) ||
+		     rold->off != rcur->off))
 			return false;
 
 		if (!check_scalar_ids(rold->id, rcur->id, idmap))
