@@ -101,6 +101,8 @@ int netdev_queue_config_validate(struct net_device *dev, int rxq_idx,
 bool netif_rxq_has_mp(struct net_device *dev, unsigned int rxq_idx);
 bool netif_rxq_is_leased(struct net_device *dev, unsigned int rxq_idx);
 
+void netif_rxq_cleanup_phys_lease(struct netdev_rx_queue *rxq);
+
 /* netdev management, shared between various uAPI entry points */
 struct netdev_name_node {
 	struct hlist_node hlist;

@@ -31,6 +31,7 @@ void netdev_rx_queue_unlease(struct netdev_rx_queue *rxq_dst,
 	WRITE_ONCE(rxq_src->lease, NULL);
 	WRITE_ONCE(rxq_dst->lease, NULL);
 
+	netif_rxq_cleanup_phys_lease(rxq_src);
 	netdev_put(rxq_src->dev, &rxq_src->lease_tracker);
 }
 
@@ -200,23 +201,14 @@ int netdev_rx_queue_restart(struct net_device *dev, unsigned int rxq_idx)
 }
 EXPORT_SYMBOL_NS_GPL(netdev_rx_queue_restart, "NETDEV_INTERNAL");
 
-int netif_mp_open_rxq(struct net_device *dev, unsigned int rxq_idx,
-		      const struct pp_memory_provider_params *p,
-		      struct netlink_ext_ack *extack)
+static int __netif_mp_open_rxq(struct net_device *dev, unsigned int rxq_idx,
+			       const struct pp_memory_provider_params *p,
+			       struct netlink_ext_ack *extack)
 {
 	const struct netdev_queue_mgmt_ops *qops = dev->queue_mgmt_ops;
 	struct netdev_queue_config qcfg[2];
 	struct netdev_rx_queue *rxq;
 	int ret;
-
-	if (!netdev_need_ops_lock(dev))
-		return -EOPNOTSUPP;
-
-	if (rxq_idx >= dev->real_num_rx_queues) {
-		NL_SET_ERR_MSG(extack, "rx queue index out of range");
-		return -ERANGE;
-	}
-	rxq_idx = array_index_nospec(rxq_idx, dev->real_num_rx_queues);
 
 	if (dev->cfg->hds_config != ETHTOOL_TCP_DATA_SPLIT_ENABLED) {
 		NL_SET_ERR_MSG(extack, "tcp-data-split is disabled");
@@ -264,15 +256,47 @@ err_clear_mp:
 	return ret;
 }
 
-void netif_mp_close_rxq(struct net_device *dev, unsigned int ifq_idx,
-			const struct pp_memory_provider_params *old_p)
+int netif_mp_open_rxq(struct net_device *dev, unsigned int rxq_idx,
+		      const struct pp_memory_provider_params *p,
+		      struct netlink_ext_ack *extack)
+{
+	struct net_device *orig_dev = dev;
+	int ret;
+
+	if (!netdev_need_ops_lock(dev))
+		return -EOPNOTSUPP;
+
+	if (rxq_idx >= dev->real_num_rx_queues) {
+		NL_SET_ERR_MSG(extack, "rx queue index out of range");
+		return -ERANGE;
+	}
+	rxq_idx = array_index_nospec(rxq_idx, dev->real_num_rx_queues);
+
+	if (!netif_rxq_is_leased(dev, rxq_idx))
+		return __netif_mp_open_rxq(dev, rxq_idx, p, extack);
+
+	if (!netif_get_rx_queue_lease_locked(&dev, &rxq_idx)) {
+		NL_SET_ERR_MSG(extack, "rx queue leased to a virtual netdev");
+		return -EBUSY;
+	}
+	if (!dev->dev.parent) {
+		NL_SET_ERR_MSG(extack, "rx queue belongs to a virtual netdev");
+		ret = -EOPNOTSUPP;
+		goto out;
+	}
+
+	ret = __netif_mp_open_rxq(dev, rxq_idx, p, extack);
+out:
+	netif_put_rx_queue_lease_locked(orig_dev, dev);
+	return ret;
+}
+
+static void __netif_mp_close_rxq(struct net_device *dev, unsigned int ifq_idx,
+				 const struct pp_memory_provider_params *old_p)
 {
 	struct netdev_queue_config qcfg[2];
 	struct netdev_rx_queue *rxq;
 	int err;
-
-	if (WARN_ON_ONCE(ifq_idx >= dev->real_num_rx_queues))
-		return;
 
 	rxq = __netif_get_rx_queue(dev, ifq_idx);
 
@@ -293,4 +317,39 @@ void netif_mp_close_rxq(struct net_device *dev, unsigned int ifq_idx,
 
 	err = netdev_rx_queue_reconfig(dev, ifq_idx, &qcfg[0], &qcfg[1]);
 	WARN_ON(err && err != -ENETDOWN);
+}
+
+void netif_mp_close_rxq(struct net_device *dev, unsigned int ifq_idx,
+			const struct pp_memory_provider_params *old_p)
+{
+	struct net_device *orig_dev = dev;
+
+	if (WARN_ON_ONCE(ifq_idx >= dev->real_num_rx_queues))
+		return;
+	if (!netif_rxq_is_leased(dev, ifq_idx))
+		return __netif_mp_close_rxq(dev, ifq_idx, old_p);
+
+	if (WARN_ON_ONCE(!netif_get_rx_queue_lease_locked(&dev, &ifq_idx)))
+		return;
+
+	__netif_mp_close_rxq(dev, ifq_idx, old_p);
+	netif_put_rx_queue_lease_locked(orig_dev, dev);
+}
+
+void netif_rxq_cleanup_phys_lease(struct netdev_rx_queue *rxq)
+{
+	/* If a memory provider was installed on the physical queue via
+	 * the lease, close it now. The memory provider is a property of
+	 * the queue itself, and it was guaranteed to be installed on the
+	 * physical queue via the lease redirection.
+	 *
+	 * After the lease pointers are NULL'ed, netif_mp_close_rxq() can
+	 * no longer follow the lease to reach the physical queue. The
+	 * physical device is still running, so the queue is reconfigured
+	 * to replace the memory provider's page pool with a default one.
+	 */
+	if (rxq->mp_params.mp_ops)
+		__netif_mp_close_rxq(rxq->dev,
+				     get_netdev_rx_queue_index(rxq),
+				     &rxq->mp_params);
 }
