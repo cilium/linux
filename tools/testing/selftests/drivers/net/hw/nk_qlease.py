@@ -38,25 +38,9 @@ from lib.py import (
 from lib.py import KsftSkipEx, CmdExitFailure
 
 
-def create_rss_ctx(cfg):
-    output = ethtool(
-        f"-X {cfg.ifname} context new start {cfg.src_queue} equal 1"
-    ).stdout
-    values = re.search(r"New RSS context is (\d+)", output).group(1)
-    return int(values)
-
-
 def set_flow_rule(cfg):
     output = ethtool(
         f"-N {cfg.ifname} flow-type tcp6 dst-port {cfg.port} action {cfg.src_queue}"
-    ).stdout
-    values = re.search(r"ID (\d+)", output).group(1)
-    return int(values)
-
-
-def set_flow_rule_rss(cfg, rss_ctx_id):
-    output = ethtool(
-        f"-N {cfg.ifname} flow-type tcp6 dst-port {cfg.port} context {rss_ctx_id}"
     ).stdout
     values = re.search(r"ID (\d+)", output).group(1)
     return int(values)
