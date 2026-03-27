@@ -301,4 +301,78 @@ __naked int bpf_neg_5(void)
 	::: __clobber_all);
 }
 
+SEC("?raw_tp")
+__success __log_level(2)
+__msg("mark_precise: frame0: regs=r2 stack= before 4: (bf) r3 = r10")
+__msg("mark_precise: frame0: regs=r2 stack= before 3: (db) r2 = atomic64_fetch_add((u64 *)(r10 -8), r2)")
+__msg("mark_precise: frame0: regs= stack=-8 before 2: (b7) r2 = 0")
+__msg("mark_precise: frame0: regs= stack=-8 before 1: (7b) *(u64 *)(r10 -8) = r1")
+__msg("mark_precise: frame0: regs=r1 stack= before 0: (b7) r1 = 8")
+__naked int bpf_atomic_fetch_add_precision(void)
+{
+	asm volatile (
+	"r1 = 8;"
+	"*(u64 *)(r10 - 8) = r1;"
+	"r2 = 0;"
+	".8byte %[fetch_add_insn];"	/* r2 = atomic_fetch_add(*(u64 *)(r10 - 8), r2) */
+	"r3 = r10;"
+	"r3 += r2;"			/* mark_precise */
+	"r0 = 0;"
+	"exit;"
+	:
+	: __imm_insn(fetch_add_insn,
+		     BPF_ATOMIC_OP(BPF_DW, BPF_ADD | BPF_FETCH, BPF_REG_10, BPF_REG_2, -8))
+	: __clobber_all);
+}
+
+SEC("?raw_tp")
+__success __log_level(2)
+__msg("mark_precise: frame0: regs=r2 stack= before 4: (bf) r3 = r10")
+__msg("mark_precise: frame0: regs=r2 stack= before 3: (db) r2 = atomic64_xchg((u64 *)(r10 -8), r2)")
+__msg("mark_precise: frame0: regs= stack=-8 before 2: (b7) r2 = 0")
+__msg("mark_precise: frame0: regs= stack=-8 before 1: (7b) *(u64 *)(r10 -8) = r1")
+__msg("mark_precise: frame0: regs=r1 stack= before 0: (b7) r1 = 8")
+__naked int bpf_atomic_xchg_precision(void)
+{
+	asm volatile (
+	"r1 = 8;"
+	"*(u64 *)(r10 - 8) = r1;"
+	"r2 = 0;"
+	".8byte %[xchg_insn];"		/* r2 = atomic_xchg(*(u64 *)(r10 - 8), r2) */
+	"r3 = r10;"
+	"r3 += r2;"			/* mark_precise */
+	"r0 = 0;"
+	"exit;"
+	:
+	: __imm_insn(xchg_insn,
+		     BPF_ATOMIC_OP(BPF_DW, BPF_XCHG, BPF_REG_10, BPF_REG_2, -8))
+	: __clobber_all);
+}
+
+SEC("?raw_tp")
+__success __log_level(2)
+__msg("mark_precise: frame0: regs=r0 stack= before 5: (bf) r3 = r10")
+__msg("mark_precise: frame0: regs=r0 stack= before 4: (db) r0 = atomic64_cmpxchg((u64 *)(r10 -8), r0, r2)")
+__msg("mark_precise: frame0: regs= stack=-8 before 3: (b7) r2 = 0")
+__msg("mark_precise: frame0: regs= stack=-8 before 2: (b7) r0 = 0")
+__msg("mark_precise: frame0: regs= stack=-8 before 1: (7b) *(u64 *)(r10 -8) = r1")
+__msg("mark_precise: frame0: regs=r1 stack= before 0: (b7) r1 = 8")
+__naked int bpf_atomic_cmpxchg_precision(void)
+{
+	asm volatile (
+	"r1 = 8;"
+	"*(u64 *)(r10 - 8) = r1;"
+	"r0 = 0;"
+	"r2 = 0;"
+	".8byte %[cmpxchg_insn];"	/* r0 = atomic_cmpxchg(*(u64 *)(r10 - 8), r0, r2) */
+	"r3 = r10;"
+	"r3 += r0;"			/* mark_precise */
+	"r0 = 0;"
+	"exit;"
+	:
+	: __imm_insn(cmpxchg_insn,
+		     BPF_ATOMIC_OP(BPF_DW, BPF_CMPXCHG, BPF_REG_10, BPF_REG_2, -8))
+	: __clobber_all);
+}
+
 char _license[] SEC("license") = "GPL";
