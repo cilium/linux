@@ -28,10 +28,11 @@ void netdev_rx_queue_unlease(struct netdev_rx_queue *rxq_dst,
 	netdev_assert_locked(rxq_dst->dev);
 	netdev_assert_locked(rxq_src->dev);
 
+	netif_rxq_cleanup_unlease(rxq_src, rxq_dst);
+
 	WRITE_ONCE(rxq_src->lease, NULL);
 	WRITE_ONCE(rxq_dst->lease, NULL);
 
-	netif_rxq_cleanup_phys_lease(rxq_src);
 	netdev_put(rxq_src->dev, &rxq_src->lease_tracker);
 }
 
@@ -336,20 +337,34 @@ void netif_mp_close_rxq(struct net_device *dev, unsigned int ifq_idx,
 	netif_put_rx_queue_lease_locked(orig_dev, dev);
 }
 
-void netif_rxq_cleanup_phys_lease(struct netdev_rx_queue *rxq)
+void __netif_mp_uninstall_rxq(struct netdev_rx_queue *rxq,
+			      const struct pp_memory_provider_params *p)
 {
-	/* If a memory provider was installed on the physical queue via
-	 * the lease, close it now. The memory provider is a property of
-	 * the queue itself, and it was guaranteed to be installed on the
-	 * physical queue via the lease redirection.
-	 *
-	 * After the lease pointers are NULL'ed, netif_mp_close_rxq() can
-	 * no longer follow the lease to reach the physical queue. The
-	 * physical device is still running, so the queue is reconfigured
-	 * to replace the memory provider's page pool with a default one.
-	 */
-	if (rxq->mp_params.mp_ops)
-		__netif_mp_close_rxq(rxq->dev,
-				     get_netdev_rx_queue_index(rxq),
-				     &rxq->mp_params);
+	if (p->mp_ops && p->mp_ops->uninstall)
+		p->mp_ops->uninstall(p->mp_priv, rxq);
+}
+
+/* Clean up memory provider state when a queue lease is being torn down.
+ *
+ * If a memory provider was installed on the physical queue via the lease,
+ * close it now. The memory provider is a property of the queue itself,
+ * and it was _guaranteed_ to be installed on the physical queue via
+ * the lease redirection.
+ *
+ * Notify the memory provider's binding with the virtual queue pointer,
+ * which is what the binding stored at bind time. Then, close the memory
+ * provider on the physical queue and reconfigure it with a default page
+ * pool.
+ */
+void netif_rxq_cleanup_unlease(struct netdev_rx_queue *phys_rxq,
+			       struct netdev_rx_queue *virt_rxq)
+{
+	struct pp_memory_provider_params *p = &phys_rxq->mp_params;
+	unsigned int ifq_idx = get_netdev_rx_queue_index(phys_rxq);
+
+	if (!p->mp_ops)
+		return;
+
+	__netif_mp_uninstall_rxq(virt_rxq, p);
+	__netif_mp_close_rxq(phys_rxq->dev, ifq_idx, p);
 }
