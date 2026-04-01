@@ -381,7 +381,8 @@ static inline unsigned int netif_xmit_timeout_ms(struct netdev_queue *txq)
 	})
 
 struct device *netdev_queue_get_dma_dev(struct net_device *dev,
-					unsigned int idx);
+					unsigned int idx,
+					enum netdev_queue_type type);
 bool netdev_can_create_queue(const struct net_device *dev,
 			     struct netlink_ext_ack *extack);
 bool netdev_can_lease_queue(const struct net_device *dev,
