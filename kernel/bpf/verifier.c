@@ -15452,12 +15452,13 @@ static int adjust_ptr_min_max_vals(struct bpf_verifier_env *env,
 			if (!known)
 				dst_reg->id = ++env->id_gen;
 			/*
-			 * Clear range for unknown addends since we can't know
-			 * where the pkt pointer ended up. Also clear AT_PKT_END /
-			 * BEYOND_PKT_END from prior comparison as any pointer
-			 * arithmetic invalidates them.
+			 * Clear range if the addend may be positive since
+			 * pkt pointer could move past its bounds. A negative
+			 * addend moves it backwards keeping positive range
+			 * intact. Also clear AT_PKT_END / BEYOND_PKT_END from
+			 * prior comparison as arithmetic invalidates them.
 			 */
-			if (!known || dst_reg->range < 0)
+			if ((!known && smax_val > 0) || dst_reg->range < 0)
 				memset(&dst_reg->raw, 0, sizeof(dst_reg->raw));
 		}
 		break;
