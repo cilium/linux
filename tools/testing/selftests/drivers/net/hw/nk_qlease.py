@@ -30,6 +30,7 @@ from lib.py import (
 )
 from lib.py import KsftSkipEx, CmdExitFailure
 
+
 def set_flow_rule(cfg):
     output = ethtool(
         f"-N {cfg.ifname} flow-type tcp6 dst-port {cfg.port} action {cfg.src_queue}"
@@ -148,6 +149,22 @@ def test_attach_xdp_with_mp(cfg) -> None:
     ksft_not_in("io-uring", queue_info)
 
 
+def test_mp_netkit_queue_zero(cfg) -> None:
+    cfg.require_ipver("6")
+
+    rx_cmd = f"ip netns exec {cfg.netns.name} {cfg.bin_local} -s -p {cfg.port} -i {cfg._nk_guest_ifname} -q 0"
+    with ksft_raises(CmdExitFailure):
+        cmd(rx_cmd)
+
+
+def test_mp_phys_leased_queue(cfg) -> None:
+    cfg.require_ipver("6")
+
+    rx_cmd = f"{cfg.bin_local} -s -p {cfg.port} -i {cfg.ifname} -q {cfg.src_queue}"
+    with ksft_raises(CmdExitFailure):
+        cmd(rx_cmd)
+
+
 def test_destroy(cfg) -> None:
     cfg.require_ipver("6")
     ethnl = EthtoolFamily()
@@ -254,7 +271,9 @@ def main() -> None:
 
         # test_destroy must be last because it destroys the netkit devices
         ksft_run(
-            [test_iou_zcrx, test_attrs, test_attach_xdp_with_mp, test_destroy],
+            [test_iou_zcrx, test_attrs, test_attach_xdp_with_mp,
+             test_mp_netkit_queue_zero, test_mp_phys_leased_queue,
+             test_destroy],
             args=(cfg,),
         )
     ksft_exit()
