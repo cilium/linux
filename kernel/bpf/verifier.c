@@ -6727,12 +6727,27 @@ static int check_atomic_rmw(struct bpf_verifier_env *env,
 static int check_atomic_load(struct bpf_verifier_env *env,
 			     struct bpf_insn *insn)
 {
-	int err;
-
-	err = check_load_mem(env, insn, true, false, false, "atomic_load");
-	if (err)
-		return err;
-
+	/*
+	 * Validate the source pointer type BEFORE check_load_mem().
+	 *
+	 * BPF_LOAD_ACQ may be encoded with dst_reg == src_reg.  In that
+	 * case check_mem_access() inside check_load_mem() overwrites
+	 * src_reg with the loaded value (e.g. mark_reg_unknown() on the
+	 * destination of a ctx-field read), so by the time a post-load
+	 * type check runs, regs[insn->src_reg] no longer reflects the
+	 * original pointer type.  A naked BPF_LOAD_ACQ from a ctx, pkt,
+	 * sk, flow_keys or unsupported-arena pointer would then slip
+	 * through verification and reach the JIT - bpf_convert_ctx_-
+	 * accesses() does not rewrite atomic instructions either, so the
+	 * raw load would execute against the real kernel pointer at
+	 * runtime, leaking kernel state (e.g. skb->sk on a socket
+	 * filter program).
+	 *
+	 * A NOT_INIT src_reg is fine to pass through here: none of the
+	 * is_*_reg() predicates inside atomic_ptr_type_ok() match it, so
+	 * the check returns true and check_load_mem() below will emit
+	 * the standard "R%d !read_ok" diagnostic.
+	 */
 	if (!atomic_ptr_type_ok(env, insn->src_reg, insn)) {
 		verbose(env, "BPF_ATOMIC loads from R%d %s is not allowed\n",
 			insn->src_reg,
@@ -6740,7 +6755,7 @@ static int check_atomic_load(struct bpf_verifier_env *env,
 		return -EACCES;
 	}
 
-	return 0;
+	return check_load_mem(env, insn, true, false, false, "atomic_load");
 }
 
 static int check_atomic_store(struct bpf_verifier_env *env,
