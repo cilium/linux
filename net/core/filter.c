@@ -2537,6 +2537,16 @@ int skb_do_redirect(struct sk_buff *skb)
 		skb_scrub_packet(skb, false);
 		return -EAGAIN;
 	}
+	/* A socket stashed on the skb by bpf_sk_assign() may be a
+	 * SOCK_RCU_FREE listener tracked without a refcount, relying on
+	 * the enclosing RCU section for lifetime. Any redirect — whether
+	 * egress-bound (qdisc) or ingress-bound (backlog via netif_rx) —
+	 * can defer skb processing past the current RCU section. Under
+	 * softirq pressure, backlog draining is handed to ksoftirqd which
+	 * runs in process context and constitutes an RCU quiescent point.
+	 */
+	if (skb_sk_is_prefetched(skb))
+		skb_orphan(skb);
 	return flags & BPF_F_NEIGH ?
 	       __bpf_redirect_neigh(skb, dev, flags & BPF_F_NEXTHOP ?
 				    &ri->nh : NULL) :
