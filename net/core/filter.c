@@ -2558,6 +2558,13 @@ int skb_do_redirect(struct sk_buff *skb)
 	ri->flags = 0;
 	if (unlikely(!dev))
 		goto out_drop;
+
+	/*
+	 * Prefetched sockets may borrow a listener under RCU. Orphan them
+	 * before redirects that can outlive this section or cross namespaces.
+	 */
+	if (skb_sk_is_prefetched(skb))
+		skb_orphan(skb);
 	if (flags & BPF_F_PEER) {
 		dev = skb_get_peer_dev(dev);
 		if (unlikely(!dev ||
