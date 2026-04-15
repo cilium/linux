@@ -148,6 +148,38 @@ __naked void load_acquire_from_ctx_pointer(void)
 	: __clobber_all);
 }
 
+/*
+ * BPF_LOAD_ACQ encoded with dst_reg == src_reg.  check_load_mem()
+ * inside check_atomic_load() would call check_mem_access() on the
+ * PTR_TO_CTX source, which dispatches to the program-type ctx-access
+ * path and then mark_reg_unknown() on the destination - which IS
+ * src_reg here.  If the type check is performed AFTER check_load_mem
+ * (the pre-fix ordering) it sees R1 as a sanitized SCALAR_VALUE and
+ * happily accepts the program.  bpf_convert_ctx_accesses() does not
+ * rewrite atomic instructions, so the JIT then emits a naked acquire
+ * load against the real sk_buff pointer at runtime, leaking
+ * skb->sk into R1.
+ *
+ * On a fixed kernel atomic_ptr_type_ok() runs against the original
+ * (still PTR_TO_CTX) reg state and the program is rejected with the
+ * standard message.  On an unfixed kernel the program loads
+ * successfully and this test fails.
+ */
+SEC("socket")
+__description("load-acquire from ctx pointer with dst_reg == src_reg")
+__failure __failure_unpriv __msg("BPF_ATOMIC loads from R1 ctx is not allowed")
+__naked void load_acquire_from_ctx_pointer_dst_eq_src(void)
+{
+	asm volatile (
+	".8byte %[load_acquire_insn];" // r1 = load_acquire((u64 *)(r1 + 0));
+	"r0 = 0;"
+	"exit;"
+	:
+	: __imm_insn(load_acquire_insn,
+		     BPF_ATOMIC_OP(BPF_DW, BPF_LOAD_ACQ, BPF_REG_1, BPF_REG_1, 0))
+	: __clobber_all);
+}
+
 SEC("xdp")
 __description("load-acquire from pkt pointer")
 __failure __msg("BPF_ATOMIC loads from R2 pkt is not allowed")
