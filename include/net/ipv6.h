@@ -90,6 +90,8 @@ struct ip_tunnel_info;
 #define IP6_DEFAULT_MAX_DST_OPTS_LEN	 INT_MAX /* No limit */
 #define IP6_DEFAULT_MAX_HBH_OPTS_LEN	 INT_MAX /* No limit */
 
+#define IP6_DEFAULT_MAX_EXT_HDRS_CNT	 8
+
 /*
  *	Addr type
  *	

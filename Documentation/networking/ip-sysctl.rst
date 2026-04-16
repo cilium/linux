@@ -2537,6 +2537,13 @@ max_hbh_length - INTEGER
 
 	Default: INT_MAX (unlimited)
 
+max_ext_hdrs_number - INTEGER
+	Maximum number of IPv6 extension headers allowed in a packet.
+	Limits how many extension headers will be traversed. The value
+	is read from the initial netns.
+
+	Default: 8
+
 skip_notify_on_dev_down - BOOLEAN
 	Controls whether an RTM_DELROUTE message is generated for routes
 	removed when a device is taken down or deleted. IPv4 does not

@@ -4,6 +4,8 @@
  * not configured or static.
  */
 #include <linux/export.h>
+
+#include <net/net_namespace.h>
 #include <net/ipv6.h>
 
 /*
@@ -72,7 +74,9 @@ EXPORT_SYMBOL(ipv6_ext_hdr);
 int ipv6_skip_exthdr(const struct sk_buff *skb, int start, u8 *nexthdrp,
 		     __be16 *frag_offp)
 {
+	int exthdr_max = READ_ONCE(init_net.ipv6.sysctl.max_ext_hdrs_cnt);
 	u8 nexthdr = *nexthdrp;
+	int exthdr_cnt = 0;
 
 	*frag_offp = 0;
 
@@ -81,6 +85,8 @@ int ipv6_skip_exthdr(const struct sk_buff *skb, int start, u8 *nexthdrp,
 		int hdrlen;
 
 		if (nexthdr == NEXTHDR_NONE)
+			return -1;
+		if (unlikely(exthdr_cnt++ >= exthdr_max))
 			return -1;
 		hp = skb_header_pointer(skb, start, sizeof(_hdr), &_hdr);
 		if (!hp)
@@ -188,8 +194,10 @@ EXPORT_SYMBOL_GPL(ipv6_find_tlv);
 int ipv6_find_hdr(const struct sk_buff *skb, unsigned int *offset,
 		  int target, unsigned short *fragoff, int *flags)
 {
+	int exthdr_max = READ_ONCE(init_net.ipv6.sysctl.max_ext_hdrs_cnt);
 	unsigned int start = skb_network_offset(skb) + sizeof(struct ipv6hdr);
 	u8 nexthdr = ipv6_hdr(skb)->nexthdr;
+	int exthdr_cnt = 0;
 	bool found;
 
 	if (fragoff)
@@ -215,6 +223,9 @@ int ipv6_find_hdr(const struct sk_buff *skb, unsigned int *offset,
 				break;
 			return -ENOENT;
 		}
+
+		if (unlikely(exthdr_cnt++ >= exthdr_max))
+			return -EBADMSG;
 
 		hp = skb_header_pointer(skb, start, sizeof(_hdr), &_hdr);
 		if (!hp)

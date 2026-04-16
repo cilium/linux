@@ -54,6 +54,7 @@ struct netns_sysctl_ipv6 {
 	int max_hbh_opts_cnt;
 	int max_dst_opts_len;
 	int max_hbh_opts_len;
+	int max_ext_hdrs_cnt;
 	int seg6_flowlabel;
 	u32 ioam6_id;
 	u64 ioam6_id_wide;
