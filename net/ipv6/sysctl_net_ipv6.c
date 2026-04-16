@@ -136,6 +136,14 @@ static struct ctl_table ipv6_table_template[] = {
 		.extra2		= &flowlabel_reflect_max,
 	},
 	{
+		.procname	= "max_ext_hdrs_number",
+		.data		= &init_net.ipv6.sysctl.max_ext_hdrs_cnt,
+		.maxlen		= sizeof(int),
+		.mode		= 0644,
+		.proc_handler	= proc_dointvec_minmax,
+		.extra1		= SYSCTL_ONE,
+	},
+	{
 		.procname	= "max_dst_opts_number",
 		.data		= &init_net.ipv6.sysctl.max_dst_opts_cnt,
 		.maxlen		= sizeof(int),
