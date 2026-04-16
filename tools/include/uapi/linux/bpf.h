@@ -4459,10 +4459,10 @@ union bpf_attr {
  *		interfere with successful delivery to the socket.
  *
  *		This operation is valid from TC ingress and egress paths.
- *		On egress, only refcounted sockets are accepted (listeners
- *		and time-wait sockets are rejected). Any existing send-side
- *		socket owner on the *skb* is released before the new *sk*
- *		is assigned.
+ *		On egress, any existing send-side socket owner on the *skb*
+ *		is released before the new *sk* is assigned. Non-refcounted
+ *		sockets (e.g. listeners) are automatically pinned with a
+ *		refcount so they survive qdisc and backlog residency.
  *
  *		The *flags* argument must be zero.
  *	Return
@@ -4474,8 +4474,7 @@ union bpf_attr {
  *
  *		**-ENETUNREACH** if the socket is unreachable (wrong netns).
  *
- *		**-EOPNOTSUPP** if the operation is not supported, for example
- *		a non-refcounted socket from TC egress.
+ *		**-EOPNOTSUPP** if the socket is unhashed.
  *
  * long bpf_sk_assign(struct bpf_sk_lookup *ctx, struct bpf_sock *sk, u64 flags)
  *	Description

@@ -2815,6 +2815,16 @@ void sock_pfree(struct sk_buff *skb)
 	sock_gen_put(sk);
 }
 EXPORT_SYMBOL(sock_pfree);
+
+/* Variant of sock_pfree for SOCK_RCU_FREE sockets where a refcount was
+ * explicitly taken (e.g. bpf_sk_assign on tc egress). Always releases
+ * via sock_gen_put, unlike sock_pfree which skips non-refcounted sockets.
+ */
+void sock_pfree_ref(struct sk_buff *skb)
+{
+	sock_gen_put(skb->sk);
+}
+EXPORT_SYMBOL(sock_pfree_ref);
 #endif /* CONFIG_INET */
 
 /*

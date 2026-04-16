@@ -2544,9 +2544,10 @@ int skb_do_redirect(struct sk_buff *skb)
 	 * can defer skb processing past the current RCU section. Under
 	 * softirq pressure, backlog draining is handed to ksoftirqd which
 	 * runs in process context and constitutes an RCU quiescent point.
-	 * Refcounted sockets are safe to keep across any redirect path.
+	 * Sockets with a refcount (sk_is_refcounted or sock_pfree_ref)
+	 * are safe to keep across any redirect path.
 	 */
-	if (skb_sk_is_prefetched(skb) && !sk_is_refcounted(skb->sk))
+	if (skb->destructor == sock_pfree && !sk_is_refcounted(skb->sk))
 		skb_orphan(skb);
 	return flags & BPF_F_NEIGH ?
 	       __bpf_redirect_neigh(skb, dev, flags & BPF_F_NEXTHOP ?
@@ -7710,27 +7711,27 @@ static const struct bpf_func_proto bpf_tcp_gen_syncookie_proto = {
 
 BPF_CALL_3(bpf_sk_assign, struct sk_buff *, skb, struct sock *, sk, u64, flags)
 {
+	bool egress_rcu_sk = false;
+
 	if (!sk || flags != 0)
 		return -EINVAL;
-	if (!skb_at_tc_ingress(skb)) {
-		/* On egress, refuse non-refcounted sockets (SOCK_RCU_FREE
-		 * listeners / TW) whose lifetime is tied to the current RCU
-		 * section — qdiscs can hold the skb across grace periods.
-		 */
-		if (!sk_is_refcounted(sk))
-			return -EOPNOTSUPP;
-	}
 	if (unlikely(dev_net(skb->dev) != sock_net(sk)))
 		return -ENETUNREACH;
 	if (sk_unhashed(sk))
 		return -EOPNOTSUPP;
-	if (sk_is_refcounted(sk) &&
+	/* On egress, SOCK_RCU_FREE sockets need a refcount to survive
+	 * qdisc and backlog residency beyond the current RCU section.
+	 * Use sock_pfree_ref so the release path knows a refcount is held.
+	 */
+	if (!skb_at_tc_ingress(skb) && !sk_is_refcounted(sk))
+		egress_rcu_sk = true;
+	if ((sk_is_refcounted(sk) || egress_rcu_sk) &&
 	    unlikely(!refcount_inc_not_zero(&sk->sk_refcnt)))
 		return -ENOENT;
 
 	skb_orphan(skb);
 	skb->sk = sk;
-	skb->destructor = sock_pfree;
+	skb->destructor = egress_rcu_sk ? sock_pfree_ref : sock_pfree;
 
 	return 0;
 }
