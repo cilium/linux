@@ -3990,22 +3990,32 @@ static struct sk_buff *sk_validate_xmit_skb(struct sk_buff *skb,
 static struct sk_buff *validate_xmit_unreadable_skb(struct sk_buff *skb,
 						    struct net_device *dev)
 {
+	struct net_devmem_dmabuf_binding *binding;
 	struct skb_shared_info *shinfo;
 	struct net_iov *niov;
 
 	if (likely(skb_frags_readable(skb)))
 		goto out;
 
-	if (!dev->netmem_tx)
-		goto out_free;
-
 	shinfo = skb_shinfo(skb);
+	if (shinfo->nr_frags == 0)
+		goto out;
 
-	if (shinfo->nr_frags > 0) {
-		niov = netmem_to_net_iov(skb_frag_netmem(&shinfo->frags[0]));
-		if (net_is_devmem_iov(niov) &&
-		    READ_ONCE(net_devmem_iov_binding(niov)->dev) != dev)
+	niov = netmem_to_net_iov(skb_frag_netmem(&shinfo->frags[0]));
+	if (!net_is_devmem_iov(niov))
+		goto out;
+
+	binding = net_devmem_iov_binding(niov);
+
+	switch (dev->netmem_tx) {
+	case NETMEM_TX_DMA:
+		if (READ_ONCE(binding->dev) != dev)
 			goto out_free;
+		break;
+	case NETMEM_TX_NO_DMA:
+		break;
+	default: /* NETMEM_TX_NONE */
+		goto out_free;
 	}
 
 out:
