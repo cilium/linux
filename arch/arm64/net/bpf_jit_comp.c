@@ -710,6 +710,7 @@ static int emit_atomic_ld_st(const struct bpf_insn *insn, struct jit_ctx *ctx)
 	const u8 dst = bpf2a64[insn->dst_reg];
 	const u8 src = bpf2a64[insn->src_reg];
 	const u8 tmp = bpf2a64[TMP_REG_1];
+	const u8 tmp2 = bpf2a64[TMP_REG_2];
 	u8 reg;
 
 	switch (imm) {
@@ -724,12 +725,12 @@ static int emit_atomic_ld_st(const struct bpf_insn *insn, struct jit_ctx *ctx)
 		return -EINVAL;
 	}
 
+	if (arena) {
+		emit(A64_ADD_UXTW(tmp2, arena_vm_base, reg), ctx);
+		reg = tmp2;
+	}
 	if (off) {
 		emit_a64_add_i(1, tmp, reg, tmp, off, ctx);
-		reg = tmp;
-	}
-	if (arena) {
-		emit(A64_ADD(1, tmp, reg, arena_vm_base), ctx);
 		reg = tmp;
 	}
 
@@ -788,12 +789,12 @@ static int emit_lse_atomic(const struct bpf_insn *insn, struct jit_ctx *ctx)
 	const s16 off = insn->off;
 	u8 reg = dst;
 
+	if (arena) {
+		emit(A64_ADD_UXTW(tmp2, arena_vm_base, reg), ctx);
+		reg = tmp2;
+	}
 	if (off) {
 		emit_a64_add_i(1, tmp, reg, tmp, off, ctx);
-		reg = tmp;
-	}
-	if (arena) {
-		emit(A64_ADD(1, tmp, reg, arena_vm_base), ctx);
 		reg = tmp;
 	}
 
@@ -1666,7 +1667,7 @@ emit_cond_jmp:
 	case BPF_LDX | BPF_PROBE_MEM32SX | BPF_W:
 		if (BPF_MODE(insn->code) == BPF_PROBE_MEM32 ||
 		    BPF_MODE(insn->code) == BPF_PROBE_MEM32SX) {
-			emit(A64_ADD(1, tmp2, src, arena_vm_base), ctx);
+			emit(A64_ADD_UXTW(tmp2, arena_vm_base, src), ctx);
 			src = tmp2;
 		}
 		if (src == fp) {
@@ -1757,7 +1758,7 @@ emit_cond_jmp:
 	case BPF_ST | BPF_PROBE_MEM32 | BPF_W:
 	case BPF_ST | BPF_PROBE_MEM32 | BPF_DW:
 		if (BPF_MODE(insn->code) == BPF_PROBE_MEM32) {
-			emit(A64_ADD(1, tmp3, dst, arena_vm_base), ctx);
+			emit(A64_ADD_UXTW(tmp3, arena_vm_base, dst), ctx);
 			dst = tmp3;
 		}
 		if (dst == fp) {
@@ -1819,7 +1820,7 @@ emit_cond_jmp:
 	case BPF_STX | BPF_PROBE_MEM32 | BPF_W:
 	case BPF_STX | BPF_PROBE_MEM32 | BPF_DW:
 		if (BPF_MODE(insn->code) == BPF_PROBE_MEM32) {
-			emit(A64_ADD(1, tmp2, dst, arena_vm_base), ctx);
+			emit(A64_ADD_UXTW(tmp2, arena_vm_base, dst), ctx);
 			dst = tmp2;
 		}
 		if (dst == fp) {
