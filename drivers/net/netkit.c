@@ -20,7 +20,7 @@
 #define NETKIT_DRV_NAME	"netkit"
 
 #define NETKIT_NUM_RX_QUEUES_MAX  1024
-#define NETKIT_NUM_TX_QUEUES_MAX  1
+#define NETKIT_NUM_TX_QUEUES_MAX  1024
 
 #define NETKIT_NUM_RX_QUEUES_REAL 1
 #define NETKIT_NUM_TX_QUEUES_REAL 1
@@ -359,14 +359,8 @@ static int netkit_queue_create(struct net_device *dev,
 			       struct netlink_ext_ack *extack)
 {
 	struct netkit *nk = netkit_priv(dev);
-	u32 rxq_count_old, rxq_count_new;
+	u32 q_count_old, q_count_new, q_max;
 	int err;
-
-	if (type != NETDEV_QUEUE_TYPE_RX)
-		return -EOPNOTSUPP;
-
-	rxq_count_old = dev->real_num_rx_queues;
-	rxq_count_new = rxq_count_old + 1;
 
 	/* In paired mode, only the non-primary (peer) device can
 	 * create leased queues since the primary is the management
@@ -378,9 +372,26 @@ static int netkit_queue_create(struct net_device *dev,
 		return -EOPNOTSUPP;
 	}
 
-	err = netif_set_real_num_rx_queues(dev, rxq_count_new);
+	switch (type) {
+	case NETDEV_QUEUE_TYPE_RX:
+		q_count_old = dev->real_num_rx_queues;
+		q_max = dev->num_rx_queues;
+		break;
+	case NETDEV_QUEUE_TYPE_TX:
+		q_count_old = dev->real_num_tx_queues;
+		q_max = dev->num_tx_queues;
+		break;
+	default:
+		return -EINVAL;
+	}
+	q_count_new = q_count_old + 1;
+
+	if (type == NETDEV_QUEUE_TYPE_RX)
+		err = netif_set_real_num_rx_queues(dev, q_count_new);
+	else
+		err = netif_set_real_num_tx_queues(dev, q_count_new);
 	if (err) {
-		if (rxq_count_new > dev->num_rx_queues)
+		if (q_count_new > q_max)
 			NL_SET_ERR_MSG(extack,
 				       "netkit maximum queue limit reached");
 		else
@@ -389,7 +400,7 @@ static int netkit_queue_create(struct net_device *dev,
 		return err;
 	}
 
-	return rxq_count_old;
+	return q_count_old;
 }
 
 static const struct netdev_queue_mgmt_ops netkit_queue_mgmt_ops = {
@@ -422,10 +433,11 @@ static struct net_device *netkit_alloc(struct nlattr *tb[],
 static void netkit_queue_unlease(struct net_device *dev)
 {
 	struct netdev_rx_queue *rxq, *rxq_lease;
+	struct netdev_queue *txq, *txq_lease;
 	struct net_device *dev_lease;
 	int i;
 
-	if (dev->real_num_rx_queues == 1)
+	if (dev->real_num_rx_queues == 1 && dev->real_num_tx_queues == 1)
 		return;
 
 	netdev_lock(dev);
@@ -436,6 +448,15 @@ static void netkit_queue_unlease(struct net_device *dev)
 
 		netdev_lock(dev_lease);
 		netdev_rx_queue_unlease(rxq, rxq_lease);
+		netdev_unlock(dev_lease);
+	}
+	for (i = 1; i < dev->real_num_tx_queues; i++) {
+		txq = netdev_get_tx_queue(dev, i);
+		txq_lease = txq->lease;
+		dev_lease = txq_lease->dev;
+
+		netdev_lock(dev_lease);
+		netdev_tx_queue_unlease(txq, txq_lease);
 		netdev_unlock(dev_lease);
 	}
 	netdev_unlock(dev);
