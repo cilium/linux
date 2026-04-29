@@ -3990,22 +3990,37 @@ static struct sk_buff *sk_validate_xmit_skb(struct sk_buff *skb,
 static struct sk_buff *validate_xmit_unreadable_skb(struct sk_buff *skb,
 						    struct net_device *dev)
 {
+	struct net_devmem_dmabuf_binding *binding;
 	struct skb_shared_info *shinfo;
 	struct net_iov *niov;
 
 	if (likely(skb_frags_readable(skb)))
 		goto out;
 
-	if (!dev->netmem_tx)
+	shinfo = skb_shinfo(skb);
+	if (shinfo->nr_frags == 0)
+		goto out;
+
+	niov = netmem_to_net_iov(skb_frag_netmem(&shinfo->frags[0]));
+	if (!net_is_devmem_iov(niov))
 		goto out_free;
 
-	shinfo = skb_shinfo(skb);
+	binding = net_devmem_iov_binding(niov);
 
-	if (shinfo->nr_frags > 0) {
-		niov = netmem_to_net_iov(skb_frag_netmem(&shinfo->frags[0]));
-		if (net_is_devmem_iov(niov) &&
-		    READ_ONCE(net_devmem_iov_binding(niov)->dev) != dev)
+	switch (dev->netmem_tx) {
+	case NETMEM_TX_DMA:
+		/* DMA-capable phys netdev: must own the binding. */
+		if (READ_ONCE(binding->dev) != dev)
 			goto out_free;
+		break;
+	case NETMEM_TX_NO_DMA:
+		/* Pass-through virtual netdev (e.g. netkit): never reads
+		 * frag content, just forwards. The next hop's
+		 * NETMEM_TX_DMA validate will check binding->dev.
+		 */
+		break;
+	default: /* NETMEM_TX_NONE */
+		goto out_free;
 	}
 
 out:

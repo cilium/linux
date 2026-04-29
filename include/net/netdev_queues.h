@@ -398,4 +398,6 @@ void netdev_tx_queue_lease(struct netdev_queue *txq_dst,
 void netdev_tx_queue_unlease(struct netdev_queue *txq_dst,
 			     struct netdev_queue *txq_src);
 bool netif_txq_is_leased(struct net_device *dev, unsigned int txq_idx);
+struct net_device *netdev_find_netmem_tx_dev(struct net_device *dev,
+					     unsigned int *txq_idx);
 #endif /* _LINUX_NET_QUEUES_H */

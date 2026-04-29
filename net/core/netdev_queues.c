@@ -38,6 +38,46 @@ bool netif_txq_is_leased(struct net_device *dev, unsigned int txq_idx)
 	return false;
 }
 
+/* Find a NETMEM_TX_DMA-capable device for @dev. If @dev itself does
+ * DMA-backed netmem TX (NETMEM_TX_DMA), return @dev with *@txq_idx
+ * set to 0. Otherwise — when @dev is a NETMEM_TX_NO_DMA pass-through
+ * (e.g. netkit) — walk @dev's TX queue leases and return the first
+ * phys NIC with NETMEM_TX_DMA, with *@txq_idx set to the local
+ * leased TX queue index that points at it. The caller passes
+ * *@txq_idx to netdev_queue_get_dma_dev() to obtain the phys
+ * dma_dev (using the existing lease-walk in there).
+ *
+ * Caller must hold @dev's netdev lock.
+ */
+struct net_device *netdev_find_netmem_tx_dev(struct net_device *dev,
+					     unsigned int *txq_idx)
+{
+	struct net_device *phys;
+	struct netdev_queue *txq;
+	int i;
+
+	netdev_ops_assert_locked(dev);
+
+	if (dev->netmem_tx == NETMEM_TX_DMA) {
+		*txq_idx = 0;
+		return dev;
+	}
+	if (dev->netmem_tx != NETMEM_TX_NO_DMA)
+		return NULL;
+	for (i = 0; i < dev->real_num_tx_queues; i++) {
+		txq = READ_ONCE(netdev_get_tx_queue(dev, i)->lease);
+		if (!txq)
+			continue;
+		phys = txq->dev;
+		if (netif_device_present(phys) &&
+		    phys->netmem_tx == NETMEM_TX_DMA) {
+			*txq_idx = i;
+			return phys;
+		}
+	}
+	return NULL;
+}
+
 static struct device *
 __netdev_queue_get_dma_dev(struct net_device *dev, unsigned int idx)
 {

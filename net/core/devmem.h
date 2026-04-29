@@ -19,7 +19,15 @@ struct net_devmem_dmabuf_binding {
 	struct dma_buf *dmabuf;
 	struct dma_buf_attachment *attachment;
 	struct sg_table *sgt;
+	/* Physical netdev that does the actual DMA for this binding. */
 	struct net_device *dev;
+	/* Optional virtual netdev (e.g. netkit) the user-space app called
+	 * bind-tx on. Set when @dev was discovered via a TX queue lease.
+	 * Lets net_devmem_get_binding() accept a route whose dst_dev is
+	 * the user-visible virtual netdev rather than the underlying
+	 * phys NIC. NULL for bind-rx and direct phys bind-tx.
+	 */
+	struct net_device *vdev;
 	struct gen_pool *chunk_pool;
 	/* Protect dev */
 	struct mutex lock;
@@ -85,6 +93,7 @@ struct dmabuf_genpool_chunk_owner {
 void __net_devmem_dmabuf_binding_free(struct work_struct *wq);
 struct net_devmem_dmabuf_binding *
 net_devmem_bind_dmabuf(struct net_device *dev,
+		       struct net_device *vdev,
 		       struct device *dma_dev,
 		       enum dma_data_direction direction,
 		       unsigned int dmabuf_fd, struct netdev_nl_sock *priv,
@@ -166,6 +175,7 @@ static inline void net_devmem_put_net_iov(struct net_iov *niov)
 
 static inline struct net_devmem_dmabuf_binding *
 net_devmem_bind_dmabuf(struct net_device *dev,
+		       struct net_device *vdev,
 		       struct device *dma_dev,
 		       enum dma_data_direction direction,
 		       unsigned int dmabuf_fd,
