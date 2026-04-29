@@ -104,7 +104,8 @@ static netdev_tx_t netkit_xmit(struct sk_buff *skb, struct net_device *dev)
 	peer = rcu_dereference(nk->peer);
 	if (unlikely(!peer || !(peer->flags & IFF_UP) ||
 		     !pskb_may_pull(skb, ETH_HLEN) ||
-		     skb_orphan_frags(skb, GFP_ATOMIC)))
+		     (skb_frags_readable(skb) &&
+		      skb_orphan_frags(skb, GFP_ATOMIC))))
 		goto drop;
 	netkit_prep_forward(skb, !net_eq(dev_net(dev), dev_net(peer)),
 			    nk->scrub);
@@ -491,6 +492,7 @@ static void netkit_setup(struct net_device *dev)
 	dev->priv_flags |= IFF_NO_QUEUE;
 	dev->priv_flags |= IFF_DISABLE_NETPOLL;
 	dev->lltx = true;
+	dev->netmem_tx = NETMEM_TX_NO_DMA;
 
 	dev->netdev_ops     = &netkit_netdev_ops;
 	dev->ethtool_ops    = &netkit_ethtool_ops;
