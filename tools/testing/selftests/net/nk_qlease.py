@@ -37,7 +37,7 @@ def wait_until(cond, timeout=2.0, interval=0.05):
         time.sleep(interval)
 
 
-def create_netkit(rxqueues, mode="l2"):
+def create_netkit(rxqueues, mode="l2", txqueues=1):
     all_links = ip("-d link show", json=True)
     old_idxs = {
         link["ifindex"]
@@ -57,6 +57,7 @@ def create_netkit(rxqueues, mode="l2"):
                 },
             },
             "num-rx-queues": rxqueues,
+            "num-tx-queues": txqueues,
         },
         flags=[Netlink.NLM_F_CREATE, Netlink.NLM_F_EXCL],
     )
@@ -77,7 +78,7 @@ def create_netkit(rxqueues, mode="l2"):
     )
 
 
-def create_netkit_single(rxqueues):
+def create_netkit_single(rxqueues, txqueues=1):
     rtnl = RtnlFamily()
     rtnl.newlink(
         {
@@ -89,6 +90,7 @@ def create_netkit_single(rxqueues):
                 },
             },
             "num-rx-queues": rxqueues,
+            "num-tx-queues": txqueues,
         },
         flags=[Netlink.NLM_F_CREATE, Netlink.NLM_F_EXCL],
     )
@@ -2044,6 +2046,217 @@ def test_move_phys_netns(netns) -> None:
         ksft_eq(queue_info["lease"]["queue"]["id"], nk_queue_id)
 
 
+def test_lease_tx_basic(netns) -> None:
+    nsimdev = NetdevSimDev(port_count=1, queue_count=2)
+    defer(nsimdev.remove)
+    nsim = nsimdev.nsims[0]
+    ip(f"link set dev {nsim.ifname} up")
+
+    nk_host, _, nk_guest, nk_guest_idx = create_netkit(rxqueues=1, txqueues=2)
+    defer(cmd, f"ip link del dev {nk_host}", fail=False)
+
+    ip(f"link set dev {nk_guest} netns {netns.name}")
+    ip(f"link set dev {nk_host} up")
+    ip(f"link set dev {nk_guest} up", ns=netns)
+
+    src_queue = 1
+    with NetNSEnter(str(netns)):
+        netdevnl = NetdevFamily()
+        result = netdevnl.queue_create(
+            {
+                "ifindex": nk_guest_idx,
+                "type": "tx",
+                "lease": {
+                    "ifindex": nsim.ifindex,
+                    "queue": {"id": src_queue, "type": "tx"},
+                    "netns-id": 0,
+                },
+            }
+        )
+        nk_queue_id = result["id"]
+        ksft_eq(nk_queue_id, 1)
+
+    netdevnl = NetdevFamily()
+    queue_info = netdevnl.queue_get(
+        {"ifindex": nsim.ifindex, "id": src_queue, "type": "tx"}
+    )
+    ksft_in("lease", queue_info)
+    ksft_eq(queue_info["lease"]["ifindex"], nk_guest_idx)
+    ksft_eq(queue_info["lease"]["queue"]["id"], nk_queue_id)
+    ksft_eq(queue_info["lease"]["queue"]["type"], "tx")
+    ksft_in("netns-id", queue_info["lease"])
+
+
+def test_double_lease_tx(netns) -> None:
+    nsimdev = NetdevSimDev(port_count=1, queue_count=2)
+    defer(nsimdev.remove)
+    nsim = nsimdev.nsims[0]
+    ip(f"link set dev {nsim.ifname} up")
+
+    nk_host, _, nk_guest, nk_guest_idx = create_netkit(rxqueues=1, txqueues=3)
+    defer(cmd, f"ip link del dev {nk_host}")
+
+    ip(f"link set dev {nk_guest} netns {netns.name}")
+    ip(f"link set dev {nk_host} up")
+    ip(f"link set dev {nk_guest} up", ns=netns)
+
+    src_queue = 1
+    with NetNSEnter(str(netns)):
+        netdevnl = NetdevFamily()
+        result = netdevnl.queue_create(
+            {
+                "ifindex": nk_guest_idx,
+                "type": "tx",
+                "lease": {
+                    "ifindex": nsim.ifindex,
+                    "queue": {"id": src_queue, "type": "tx"},
+                    "netns-id": 0,
+                },
+            }
+        )
+        ksft_eq(result["id"], 1)
+
+        with ksft_raises(NlError) as e:
+            netdevnl.queue_create(
+                {
+                    "ifindex": nk_guest_idx,
+                    "type": "tx",
+                    "lease": {
+                        "ifindex": nsim.ifindex,
+                        "queue": {"id": src_queue, "type": "tx"},
+                        "netns-id": 0,
+                    },
+                }
+            )
+        ksft_eq(e.exception.nl_msg.error, -errno.EBUSY)
+
+
+def test_remove_virt_first_tx(netns) -> None:
+    nsimdev = NetdevSimDev(port_count=1, queue_count=2)
+    defer(nsimdev.remove)
+    nsim = nsimdev.nsims[0]
+    ip(f"link set dev {nsim.ifname} up")
+
+    nk_host, _, nk_guest, nk_guest_idx = create_netkit(rxqueues=1, txqueues=2)
+
+    ip(f"link set dev {nk_guest} netns {netns.name}")
+    ip(f"link set dev {nk_host} up")
+    ip(f"link set dev {nk_guest} up", ns=netns)
+
+    src_queue = 1
+    with NetNSEnter(str(netns)):
+        netdevnl = NetdevFamily()
+        result = netdevnl.queue_create(
+            {
+                "ifindex": nk_guest_idx,
+                "type": "tx",
+                "lease": {
+                    "ifindex": nsim.ifindex,
+                    "queue": {"id": src_queue, "type": "tx"},
+                    "netns-id": 0,
+                },
+            }
+        )
+        ksft_eq(result["id"], 1)
+
+    netdevnl = NetdevFamily()
+    queue_info = netdevnl.queue_get(
+        {"ifindex": nsim.ifindex, "id": src_queue, "type": "tx"}
+    )
+    ksft_in("lease", queue_info)
+
+    cmd(f"ip link del dev {nk_host}")
+
+    queue_info = netdevnl.queue_get(
+        {"ifindex": nsim.ifindex, "id": src_queue, "type": "tx"}
+    )
+    ksft_not_in("lease", queue_info)
+
+
+def test_remove_phys_tx(netns) -> None:
+    nsimdev = NetdevSimDev(port_count=1, queue_count=2)
+    defer(nsimdev.remove)
+    nsim = nsimdev.nsims[0]
+    ip(f"link set dev {nsim.ifname} up")
+
+    nk_host, _, nk_guest, nk_guest_idx = create_netkit(rxqueues=1, txqueues=2)
+    defer(cmd, f"ip link del dev {nk_host}", fail=False)
+
+    ip(f"link set dev {nk_guest} netns {netns.name}")
+    ip(f"link set dev {nk_host} up")
+    ip(f"link set dev {nk_guest} up", ns=netns)
+
+    src_queue = 1
+    with NetNSEnter(str(netns)):
+        netdevnl = NetdevFamily()
+        netdevnl.queue_create(
+            {
+                "ifindex": nk_guest_idx,
+                "type": "tx",
+                "lease": {
+                    "ifindex": nsim.ifindex,
+                    "queue": {"id": src_queue, "type": "tx"},
+                    "netns-id": 0,
+                },
+            }
+        )
+
+    nsimdev.remove()
+    wait_until(lambda: cmd(f"ip link show dev {nk_host}", fail=False).ret != 0)
+    ret = cmd(f"ip link show dev {nk_host}", fail=False)
+    ksft_ne(ret.ret, 0)
+
+
+def test_multiple_leases_tx(netns) -> None:
+    nsimdev = NetdevSimDev(port_count=1, queue_count=3)
+    defer(nsimdev.remove)
+    nsim = nsimdev.nsims[0]
+    ip(f"link set dev {nsim.ifname} up")
+
+    nk_host, _, nk_guest, nk_guest_idx = create_netkit(rxqueues=1, txqueues=4)
+    defer(cmd, f"ip link del dev {nk_host}", fail=False)
+
+    ip(f"link set dev {nk_guest} netns {netns.name}")
+    ip(f"link set dev {nk_host} up")
+    ip(f"link set dev {nk_guest} up", ns=netns)
+
+    with NetNSEnter(str(netns)):
+        netdevnl = NetdevFamily()
+        a = netdevnl.queue_create(
+            {
+                "ifindex": nk_guest_idx,
+                "type": "tx",
+                "lease": {
+                    "ifindex": nsim.ifindex,
+                    "queue": {"id": 1, "type": "tx"},
+                    "netns-id": 0,
+                },
+            }
+        )
+        b = netdevnl.queue_create(
+            {
+                "ifindex": nk_guest_idx,
+                "type": "tx",
+                "lease": {
+                    "ifindex": nsim.ifindex,
+                    "queue": {"id": 2, "type": "tx"},
+                    "netns-id": 0,
+                },
+            }
+        )
+        ksft_eq(a["id"], 1)
+        ksft_eq(b["id"], 2)
+
+    netdevnl = NetdevFamily()
+    for src_q, nk_q in [(1, a["id"]), (2, b["id"])]:
+        info = netdevnl.queue_get(
+            {"ifindex": nsim.ifindex, "id": src_q, "type": "tx"}
+        )
+        ksft_in("lease", info)
+        ksft_eq(info["lease"]["queue"]["id"], nk_q)
+        ksft_eq(info["lease"]["queue"]["type"], "tx")
+
+
 def main() -> None:
     netns = NetNS()
     cmd("ip netns attach init 1")
@@ -2097,6 +2310,11 @@ def main() -> None:
             test_multi_ns_lease,
             test_multi_ns_delete_one,
             test_move_phys_netns,
+            test_lease_tx_basic,
+            test_double_lease_tx,
+            test_remove_virt_first_tx,
+            test_remove_phys_tx,
+            test_multiple_leases_tx,
         ],
         args=(netns,),
     )

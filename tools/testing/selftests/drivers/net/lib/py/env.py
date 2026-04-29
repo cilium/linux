@@ -336,7 +336,7 @@ class NetDrvContEnv(NetDrvEpEnv):
               +---------------+
     """
 
-    def __init__(self, src_path, rxqueues=1, **kwargs):
+    def __init__(self, src_path, rxqueues=1, txqueues=1, **kwargs):
         self.netns = None
         self._nk_host_ifname = None
         self._nk_guest_ifname = None
@@ -376,6 +376,7 @@ class NetDrvContEnv(NetDrvEpEnv):
                     },
                 },
                 "num-rx-queues": rxqueues,
+                "num-tx-queues": txqueues,
             },
             flags=[Netlink.NLM_F_CREATE, Netlink.NLM_F_EXCL],
         )
