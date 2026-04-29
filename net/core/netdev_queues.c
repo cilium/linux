@@ -70,24 +70,40 @@ struct device *netdev_queue_get_dma_dev(struct net_device *dev,
 					enum netdev_queue_type type)
 {
 	struct netdev_rx_queue *hw_rxq;
+	struct netdev_queue *hw_txq;
 	struct device *dma_dev;
 
 	netdev_ops_assert_locked(dev);
 
-	/* Only RX side supports queue leasing today. */
-	if (type != NETDEV_QUEUE_TYPE_RX || !netif_rxq_is_leased(dev, idx))
-		return __netdev_queue_get_dma_dev(dev, idx);
-	if (!netif_is_queue_leasee(dev))
-		return NULL;
+	switch (type) {
+	case NETDEV_QUEUE_TYPE_RX:
+		if (!netif_rxq_is_leased(dev, idx))
+			return __netdev_queue_get_dma_dev(dev, idx);
+		if (!netif_is_queue_leasee(dev))
+			return NULL;
 
-	hw_rxq = __netif_get_rx_queue(dev, idx)->lease;
+		hw_rxq = __netif_get_rx_queue(dev, idx)->lease;
 
-	netdev_lock(hw_rxq->dev);
-	idx = get_netdev_rx_queue_index(hw_rxq);
-	dma_dev = __netdev_queue_get_dma_dev(hw_rxq->dev, idx);
-	netdev_unlock(hw_rxq->dev);
+		netdev_lock(hw_rxq->dev);
+		idx = get_netdev_rx_queue_index(hw_rxq);
+		dma_dev = __netdev_queue_get_dma_dev(hw_rxq->dev, idx);
+		netdev_unlock(hw_rxq->dev);
+		return dma_dev;
+	case NETDEV_QUEUE_TYPE_TX:
+		if (!netif_txq_is_leased(dev, idx))
+			return __netdev_queue_get_dma_dev(dev, idx);
+		if (!netif_is_queue_leasee(dev))
+			return NULL;
 
-	return dma_dev;
+		hw_txq = netdev_get_tx_queue(dev, idx)->lease;
+
+		netdev_lock(hw_txq->dev);
+		idx = hw_txq - hw_txq->dev->_tx;
+		dma_dev = __netdev_queue_get_dma_dev(hw_txq->dev, idx);
+		netdev_unlock(hw_txq->dev);
+		return dma_dev;
+	}
+	return NULL;
 }
 
 bool netdev_can_create_queue(const struct net_device *dev,
