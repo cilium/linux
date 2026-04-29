@@ -355,11 +355,15 @@ static const struct ethtool_ops netkit_ethtool_ops = {
 };
 
 static int netkit_queue_create(struct net_device *dev,
+			       enum netdev_queue_type type,
 			       struct netlink_ext_ack *extack)
 {
 	struct netkit *nk = netkit_priv(dev);
 	u32 rxq_count_old, rxq_count_new;
 	int err;
+
+	if (type != NETDEV_QUEUE_TYPE_RX)
+		return -EOPNOTSUPP;
 
 	rxq_count_old = dev->real_num_rx_queues;
 	rxq_count_new = rxq_count_old + 1;

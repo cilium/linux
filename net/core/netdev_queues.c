@@ -1,10 +1,42 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <net/netdev_lock.h>
 #include <net/netdev_queues.h>
 #include <net/netdev_rx_queue.h>
 #include <net/xdp_sock_drv.h>
 
 #include "dev.h"
+
+void netdev_tx_queue_lease(struct netdev_queue *txq_dst,
+			   struct netdev_queue *txq_src)
+{
+	netdev_assert_locked(txq_src->dev);
+	netdev_assert_locked(txq_dst->dev);
+
+	netdev_hold(txq_src->dev, &txq_src->lease_tracker, GFP_KERNEL);
+
+	WRITE_ONCE(txq_src->lease, txq_dst);
+	WRITE_ONCE(txq_dst->lease, txq_src);
+}
+
+void netdev_tx_queue_unlease(struct netdev_queue *txq_dst,
+			     struct netdev_queue *txq_src)
+{
+	netdev_assert_locked(txq_dst->dev);
+	netdev_assert_locked(txq_src->dev);
+
+	WRITE_ONCE(txq_src->lease, NULL);
+	WRITE_ONCE(txq_dst->lease, NULL);
+
+	netdev_put(txq_src->dev, &txq_src->lease_tracker);
+}
+
+bool netif_txq_is_leased(struct net_device *dev, unsigned int txq_idx)
+{
+	if (txq_idx < dev->real_num_tx_queues)
+		return READ_ONCE(netdev_get_tx_queue(dev, txq_idx)->lease);
+	return false;
+}
 
 static struct device *
 __netdev_queue_get_dma_dev(struct net_device *dev, unsigned int idx)
@@ -104,8 +136,14 @@ bool netdev_queue_busy(struct net_device *dev, unsigned int idx,
 		NL_SET_ERR_MSG(extack, "Device queue in use by AF_XDP");
 		return true;
 	}
-	if (type == NETDEV_QUEUE_TYPE_TX)
+	if (type == NETDEV_QUEUE_TYPE_TX) {
+		if (netif_txq_is_leased(dev, idx)) {
+			NL_SET_ERR_MSG(extack,
+				       "Device queue in use due to queue leasing");
+			return true;
+		}
 		return false;
+	}
 	if (netif_rxq_is_leased(dev, idx)) {
 		NL_SET_ERR_MSG(extack, "Device queue in use due to queue leasing");
 		return true;

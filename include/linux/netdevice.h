@@ -726,6 +726,14 @@ struct netdev_queue {
 #if defined(CONFIG_XPS) && defined(CONFIG_NUMA)
 	int			numa_node;
 #endif
+
+	/* If a queue is leased, then the lease pointer is always
+	 * valid. From the physical device it points to the virtual
+	 * queue, and from the virtual device it points to the
+	 * physical queue. Mirrors netdev_rx_queue::lease.
+	 */
+	struct netdev_queue	*lease;
+	netdevice_tracker	lease_tracker;
 } ____cacheline_aligned_in_smp;
 
 extern int sysctl_fb_tunnels_only_for_init_net;

@@ -1204,11 +1204,14 @@ int netdev_nl_queue_create_doit(struct sk_buff *skb, struct genl_info *info)
 	struct nlattr *qtb[ARRAY_SIZE(netdev_queue_id_nl_policy)];
 	struct nlattr *ltb[ARRAY_SIZE(netdev_lease_nl_policy)];
 	struct netdev_rx_queue *rxq, *rxq_lease;
+	struct netdev_queue *txq, *txq_lease;
 	struct net_device *dev, *dev_lease;
 	netdevice_tracker dev_tracker;
+	enum netdev_queue_type qtype;
 	s32 netns_lease = -1;
 	struct nlattr *nest;
 	struct sk_buff *rsp;
+	unsigned int max_q;
 	struct net *net;
 	void *hdr;
 
@@ -1216,8 +1219,8 @@ int netdev_nl_queue_create_doit(struct sk_buff *skb, struct genl_info *info)
 	    GENL_REQ_ATTR_CHECK(info, NETDEV_A_QUEUE_TYPE) ||
 	    GENL_REQ_ATTR_CHECK(info, NETDEV_A_QUEUE_LEASE))
 		return -EINVAL;
-	if (nla_get_u32(info->attrs[NETDEV_A_QUEUE_TYPE]) !=
-	    NETDEV_QUEUE_TYPE_RX) {
+	qtype = nla_get_u32(info->attrs[NETDEV_A_QUEUE_TYPE]);
+	if (qtype != NETDEV_QUEUE_TYPE_RX && qtype != NETDEV_QUEUE_TYPE_TX) {
 		NL_SET_BAD_ATTR(info->extack, info->attrs[NETDEV_A_QUEUE_TYPE]);
 		return -EINVAL;
 	}
@@ -1248,7 +1251,7 @@ int netdev_nl_queue_create_doit(struct sk_buff *skb, struct genl_info *info)
 	if (NL_REQ_ATTR_CHECK(info->extack, nest, qtb, NETDEV_A_QUEUE_ID) ||
 	    NL_REQ_ATTR_CHECK(info->extack, nest, qtb, NETDEV_A_QUEUE_TYPE))
 		return -EINVAL;
-	if (nla_get_u32(qtb[NETDEV_A_QUEUE_TYPE]) != NETDEV_QUEUE_TYPE_RX) {
+	if (nla_get_u32(qtb[NETDEV_A_QUEUE_TYPE]) != qtype) {
 		NL_SET_BAD_ATTR(info->extack, qtb[NETDEV_A_QUEUE_TYPE]);
 		return -EINVAL;
 	}
@@ -1305,41 +1308,61 @@ int netdev_nl_queue_create_doit(struct sk_buff *skb, struct genl_info *info)
 		err = -ENODEV;
 		goto err_put_netns;
 	}
-	if (queue_id_lease >= dev_lease->real_num_rx_queues) {
+
+	max_q = qtype == NETDEV_QUEUE_TYPE_RX ?
+		dev_lease->real_num_rx_queues : dev_lease->real_num_tx_queues;
+	if (queue_id_lease >= max_q) {
 		err = -ERANGE;
 		NL_SET_BAD_ATTR(info->extack, qtb[NETDEV_A_QUEUE_ID]);
 		goto err_unlock_dev_lease;
 	}
-	if (netdev_queue_busy(dev_lease, queue_id_lease, NETDEV_QUEUE_TYPE_RX,
-			      info->extack)) {
+	if (netdev_queue_busy(dev_lease, queue_id_lease, qtype, info->extack)) {
 		err = -EBUSY;
 		goto err_unlock_dev_lease;
 	}
 
-	rxq_lease = __netif_get_rx_queue(dev_lease, queue_id_lease);
-	rxq = __netif_get_rx_queue(dev, dev->real_num_rx_queues - 1);
+	if (qtype == NETDEV_QUEUE_TYPE_RX) {
+		rxq_lease = __netif_get_rx_queue(dev_lease, queue_id_lease);
+		rxq = __netif_get_rx_queue(dev, dev->real_num_rx_queues - 1);
 
-	/* Leasing queues from different physical devices is currently
-	 * not supported. Capabilities such as XDP features and DMA
-	 * device may differ between physical devices, and computing
-	 * a correct intersection for the virtual device is not yet
-	 * implemented.
-	 */
-	if (rxq->lease && rxq->lease->dev != dev_lease) {
-		err = -EOPNOTSUPP;
-		NL_SET_ERR_MSG(info->extack,
-			       "Leasing queues from different devices not supported");
-		goto err_unlock_dev_lease;
+		/* Leasing queues from different physical devices is
+		 * currently not supported. Capabilities such as XDP
+		 * features and DMA device may differ between physical
+		 * devices, and computing a correct intersection for the
+		 * virtual device is not yet implemented.
+		 */
+		if (rxq->lease && rxq->lease->dev != dev_lease) {
+			err = -EOPNOTSUPP;
+			NL_SET_ERR_MSG(info->extack,
+				       "Leasing queues from different devices not supported");
+			goto err_unlock_dev_lease;
+		}
+	} else {
+		txq_lease = netdev_get_tx_queue(dev_lease, queue_id_lease);
+		txq = netdev_get_tx_queue(dev, dev->real_num_tx_queues - 1);
+
+		if (txq->lease && txq->lease->dev != dev_lease) {
+			err = -EOPNOTSUPP;
+			NL_SET_ERR_MSG(info->extack,
+				       "Leasing queues from different devices not supported");
+			goto err_unlock_dev_lease;
+		}
 	}
 
-	queue_id = dev->queue_mgmt_ops->ndo_queue_create(dev, info->extack);
+	queue_id = dev->queue_mgmt_ops->ndo_queue_create(dev, qtype,
+							 info->extack);
 	if (queue_id < 0) {
 		err = queue_id;
 		goto err_unlock_dev_lease;
 	}
-	rxq = __netif_get_rx_queue(dev, queue_id);
 
-	netdev_rx_queue_lease(rxq, rxq_lease);
+	if (qtype == NETDEV_QUEUE_TYPE_RX) {
+		rxq = __netif_get_rx_queue(dev, queue_id);
+		netdev_rx_queue_lease(rxq, rxq_lease);
+	} else {
+		txq = netdev_get_tx_queue(dev, queue_id);
+		netdev_tx_queue_lease(txq, txq_lease);
+	}
 
 	nla_put_u32(rsp, NETDEV_A_QUEUE_ID, queue_id);
 	genlmsg_end(rsp, hdr);

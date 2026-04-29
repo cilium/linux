@@ -150,10 +150,10 @@ enum {
  *			When NIC-wide config is changed the callback will
  *			be invoked for all queues.
  *
- * @ndo_queue_create:	Create a new RX queue on a virtual device that will
- *			be paired with a physical device's queue via leasing.
- *			Return the new queue id on success, negative error
- *			on failure.
+ * @ndo_queue_create:	Create a new queue (RX or TX) on a virtual device
+ *			that will be paired with a physical device's queue via
+ *			leasing. Return the new queue id on success, negative
+ *			error on failure.
  *
  * @supported_params:	Bitmask of supported parameters, see QCFG_*.
  *
@@ -184,6 +184,7 @@ struct netdev_queue_mgmt_ops {
 	struct device *	(*ndo_queue_get_dma_dev)(struct net_device *dev,
 						 int idx);
 	int	(*ndo_queue_create)(struct net_device *dev,
+				    enum netdev_queue_type type,
 				    struct netlink_ext_ack *extack);
 
 	unsigned int supported_params;
@@ -390,4 +391,11 @@ bool netdev_can_lease_queue(const struct net_device *dev,
 bool netdev_queue_busy(struct net_device *dev, unsigned int idx,
 		       enum netdev_queue_type type,
 		       struct netlink_ext_ack *extack);
+
+/* TX queue leasing — mirrors include/net/netdev_rx_queue.h. */
+void netdev_tx_queue_lease(struct netdev_queue *txq_dst,
+			   struct netdev_queue *txq_src);
+void netdev_tx_queue_unlease(struct netdev_queue *txq_dst,
+			     struct netdev_queue *txq_src);
+bool netif_txq_is_leased(struct net_device *dev, unsigned int txq_idx);
 #endif /* _LINUX_NET_QUEUES_H */
