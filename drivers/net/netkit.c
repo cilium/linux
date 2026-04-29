@@ -1174,6 +1174,24 @@ static int netkit_change_link(struct net_device *dev, struct nlattr *tb[],
 	return 0;
 }
 
+static void netkit_collect_leasee(struct net_device *dev,
+				  struct net_device *leasee,
+				  struct list_head *list_kill)
+{
+	if (!leasee || leasee == dev ||
+	    leasee->netdev_ops != &netkit_netdev_ops)
+		return;
+	/* A single phys device can have multiple queues leased to one
+	 * netkit device. We can only queue that netkit device once to
+	 * the list_kill. Queues of that phys device can be leased with
+	 * different individual netkit devices, hence we batch via
+	 * list_kill.
+	 */
+	if (unregister_netdevice_queued(leasee))
+		return;
+	netkit_del_link(leasee, list_kill);
+}
+
 static void netkit_check_lease_unregister(struct net_device *dev)
 {
 	LIST_HEAD(list_kill);
@@ -1191,18 +1209,15 @@ static void netkit_check_lease_unregister(struct net_device *dev)
 
 		rxq = __netif_get_rx_queue_lease(&tmp, &tmp_q_idx,
 						 NETIF_PHYS_TO_VIRT);
-		if (rxq && tmp != dev &&
-		    tmp->netdev_ops == &netkit_netdev_ops) {
-			/* A single phys device can have multiple queues leased
-			 * to one netkit device. We can only queue that netkit
-			 * device once to the list_kill. Queues of that phys
-			 * device can be leased with different individual netkit
-			 * devices, hence we batch via list_kill.
-			 */
-			if (unregister_netdevice_queued(tmp))
-				continue;
-			netkit_del_link(tmp, &list_kill);
-		}
+		if (rxq)
+			netkit_collect_leasee(dev, tmp, &list_kill);
+	}
+	for (q_idx = 0; q_idx < dev->real_num_tx_queues; q_idx++) {
+		struct netdev_queue *txq = netdev_get_tx_queue(dev, q_idx);
+		struct netdev_queue *txq_lease = READ_ONCE(txq->lease);
+
+		if (txq_lease)
+			netkit_collect_leasee(dev, txq_lease->dev, &list_kill);
 	}
 	netdev_unlock_ops(dev);
 	unregister_netdevice_many(&list_kill);
