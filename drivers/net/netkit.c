@@ -326,6 +326,12 @@ static int netkit_init(struct net_device *dev)
 	return 0;
 }
 
+static u16 netkit_select_queue(struct net_device *dev, struct sk_buff *skb,
+			       struct net_device *sb_dev)
+{
+	return 0;
+}
+
 static void netkit_uninit(struct net_device *dev);
 
 static const struct net_device_ops netkit_netdev_ops = {
@@ -333,6 +339,7 @@ static const struct net_device_ops netkit_netdev_ops = {
 	.ndo_open		= netkit_open,
 	.ndo_stop		= netkit_close,
 	.ndo_start_xmit		= netkit_xmit,
+	.ndo_select_queue	= netkit_select_queue,
 	.ndo_set_rx_mode_async	= netkit_set_multicast,
 	.ndo_set_rx_headroom	= netkit_set_headroom,
 	.ndo_set_mac_address	= netkit_set_macaddr,
