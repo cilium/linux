@@ -249,33 +249,59 @@ static bool netkit_xsk_supported_at_phys(const struct net_device *dev)
 	return true;
 }
 
+static int netkit_xsk_resolve(struct net_device *dev, u32 queue_id,
+			      struct net_device **phys, u32 *phys_id)
+{
+	struct netdev_rx_queue *rxq;
+	struct netdev_queue *txq;
+
+	if (queue_id < dev->real_num_rx_queues) {
+		rxq = __netif_get_rx_queue(dev, queue_id);
+		if (rxq->lease) {
+			*phys = rxq->lease->dev;
+			*phys_id = get_netdev_rx_queue_index(rxq->lease);
+			return 0;
+		}
+	}
+	if (queue_id < dev->real_num_tx_queues) {
+		txq = netdev_get_tx_queue(dev, queue_id);
+		if (txq->lease) {
+			*phys = txq->lease->dev;
+			*phys_id = txq->lease - (*phys)->_tx;
+			return 0;
+		}
+	}
+	if (queue_id >= dev->real_num_rx_queues &&
+	    queue_id >= dev->real_num_tx_queues)
+		return -EINVAL;
+	return -EOPNOTSUPP;
+}
+
 static int netkit_xsk(struct net_device *dev, struct netdev_bpf *xdp)
 {
 	struct netkit *nk = netkit_priv(dev);
 	struct netdev_bpf xdp_lower;
-	struct netdev_rx_queue *rxq;
 	struct net_device *phys;
 	bool create = false;
 	int ret = -EBUSY;
+	u32 phys_id;
 
 	switch (xdp->command) {
 	case XDP_SETUP_XSK_POOL:
 		if (nk->pair == NETKIT_DEVICE_PAIR)
 			return -EOPNOTSUPP;
-		if (xdp->xsk.queue_id >= dev->real_num_rx_queues)
-			return -EINVAL;
 
-		rxq = __netif_get_rx_queue(dev, xdp->xsk.queue_id);
-		if (!rxq->lease)
-			return -EOPNOTSUPP;
-
-		phys = rxq->lease->dev;
+		ret = netkit_xsk_resolve(dev, xdp->xsk.queue_id,
+					 &phys, &phys_id);
+		if (ret)
+			return ret;
 		if (!netkit_xsk_supported_at_phys(phys))
 			return -EOPNOTSUPP;
 
 		create = xdp->xsk.pool;
 		memcpy(&xdp_lower, xdp, sizeof(xdp_lower));
-		xdp_lower.xsk.queue_id = get_netdev_rx_queue_index(rxq->lease);
+		xdp_lower.xsk.queue_id = phys_id;
+		ret = -EBUSY;
 		break;
 	case XDP_SETUP_PROG:
 		return -EOPNOTSUPP;
@@ -299,25 +325,40 @@ out:
 static int netkit_xsk_wakeup(struct net_device *dev, u32 queue_id, u32 flags)
 {
 	struct netdev_rx_queue *rxq, *rxq_lease;
+	struct netdev_queue *txq, *txq_lease;
 	struct net_device *phys;
+	u32 phys_id;
 
-	if (queue_id >= dev->real_num_rx_queues)
-		return -EINVAL;
-
-	rxq = __netif_get_rx_queue(dev, queue_id);
-	rxq_lease = READ_ONCE(rxq->lease);
-	if (unlikely(!rxq_lease))
-		return -EOPNOTSUPP;
-
-	/* netkit_xsk already validated full xsk support, hence it's
-	 * fine to call into ndo_xsk_wakeup right away given this
-	 * was a prerequisite to get here in the first place. The
-	 * phys xsk support cannot change without tearing down the
+	/* netkit_xsk already validated full xsk support on the lease's
+	 * phys, hence it's fine to call into ndo_xsk_wakeup right away
+	 * given this was a prerequisite to get here in the first place.
+	 * The phys xsk support cannot change without tearing down the
 	 * device (which clears the lease first).
 	 */
-	phys = rxq_lease->dev;
-	return phys->netdev_ops->ndo_xsk_wakeup(phys,
-			get_netdev_rx_queue_index(rxq_lease), flags);
+	if (queue_id < dev->real_num_rx_queues) {
+		rxq = __netif_get_rx_queue(dev, queue_id);
+		rxq_lease = READ_ONCE(rxq->lease);
+		if (rxq_lease) {
+			phys = rxq_lease->dev;
+			phys_id = get_netdev_rx_queue_index(rxq_lease);
+			goto wake;
+		}
+	}
+	if (queue_id < dev->real_num_tx_queues) {
+		txq = netdev_get_tx_queue(dev, queue_id);
+		txq_lease = READ_ONCE(txq->lease);
+		if (txq_lease) {
+			phys = txq_lease->dev;
+			phys_id = txq_lease - phys->_tx;
+			goto wake;
+		}
+	}
+	if (queue_id >= dev->real_num_rx_queues &&
+	    queue_id >= dev->real_num_tx_queues)
+		return -EINVAL;
+	return -EOPNOTSUPP;
+wake:
+	return phys->netdev_ops->ndo_xsk_wakeup(phys, phys_id, flags);
 }
 
 static int netkit_init(struct net_device *dev)
