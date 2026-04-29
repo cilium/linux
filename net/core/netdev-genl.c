@@ -393,11 +393,27 @@ netdev_nl_queue_fill_lease(struct sk_buff *rsp, struct net_device *netdev,
 	struct net_device *orig_netdev = netdev;
 	struct nlattr *nest_lease, *nest_queue;
 	struct netdev_rx_queue *rxq;
+	struct netdev_queue *txq;
 	struct net *net, *peer_net;
 
-	rxq = __netif_get_rx_queue_lease(&netdev, &q_idx, NETIF_PHYS_TO_VIRT);
-	if (!rxq || orig_netdev == netdev)
+	switch (q_type) {
+	case NETDEV_QUEUE_TYPE_RX:
+		rxq = __netif_get_rx_queue_lease(&netdev, &q_idx,
+						 NETIF_PHYS_TO_VIRT);
+		if (!rxq || orig_netdev == netdev)
+			return 0;
+		break;
+	case NETDEV_QUEUE_TYPE_TX:
+		if (!netif_txq_is_leased(netdev, q_idx) ||
+		    netdev->dev.parent == NULL)
+			return 0;
+		txq = netdev_get_tx_queue(netdev, q_idx)->lease;
+		netdev = txq->dev;
+		q_idx = txq - netdev->_tx;
+		break;
+	default:
 		return 0;
+	}
 
 	nest_lease = nla_nest_start(rsp, NETDEV_A_QUEUE_LEASE);
 	if (!nest_lease)
@@ -499,6 +515,8 @@ netdev_nl_queue_fill_one(struct sk_buff *rsp, struct net_device *netdev,
 	case NETDEV_QUEUE_TYPE_TX:
 		txq = netdev_get_tx_queue(netdev, q_idx);
 		if (nla_put_napi_id(rsp, txq->napi))
+			goto nla_put_failure;
+		if (netdev_nl_queue_fill_lease(rsp, netdev, q_idx, q_type))
 			goto nla_put_failure;
 #ifdef CONFIG_XDP_SOCKETS
 		if (txq->pool)
