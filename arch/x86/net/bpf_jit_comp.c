@@ -2275,6 +2275,22 @@ static int do_jit(struct bpf_prog *bpf_prog, int *addrs, u8 *image, u8 *rw_image
 				EMIT1(0xC6);
 			goto st;
 		case BPF_ST | BPF_MEM | BPF_H:
+			/*
+			 * The 0x66 operand-size prefix combined with the
+			 * immediate operand of opcode 0xC7 forms a
+			 * length-changing prefix (LCP) which stalls the
+			 * legacy decoder for several cycles on pre-Skylake
+			 * Intel processors (Agner Fog, "Optimizing
+			 * subroutines in assembly language", section 10.2).
+			 * No shorter encoding exists for a 16-bit immediate
+			 * store; alternatives (scratch register, byte-pair
+			 * stores) are not clear wins and would also
+			 * complicate exception-table fixups for the arena
+			 * path. Skylake and later decode this without
+			 * penalty, and once the program enters the uop
+			 * cache the LCP cost disappears entirely, so the
+			 * straightforward encoding is kept.
+			 */
 			if (is_ereg(dst_reg))
 				EMIT3(0x66, 0x41, 0xC7);
 			else
