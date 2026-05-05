@@ -410,6 +410,25 @@ static void emit_nops(u8 **pprog, int len)
 }
 
 /*
+ * Emit 'sub rsp, $amount' or 'add rsp, $amount'. Pick the imm8 form (4
+ * bytes) when the amount fits in a signed byte, otherwise fall back to
+ * the imm32 form (7 bytes). Saves 3 bytes per use whenever the rounded
+ * stack depth is <= 127.
+ */
+static void emit_rsp_adjust(u8 **pprog, bool is_sub, int amount)
+{
+	u8 *prog = *pprog;
+	u8 op = is_sub ? 0xEC : 0xC4;
+
+	if (is_imm8(amount))
+		EMIT4(0x48, 0x83, op, amount);
+	else
+		EMIT3_off32(0x48, 0x81, op, amount);
+
+	*pprog = prog;
+}
+
+/*
  * Emit the various CFI preambles, see asm/cfi.h and the comments about FineIBT
  * in arch/x86/kernel/alternative.c
  */
@@ -550,7 +569,7 @@ static void emit_prologue(u8 **pprog, u8 *ip, u32 stack_depth, bool ebpf_from_cb
 
 	/* sub rsp, rounded_stack_depth */
 	if (stack_depth)
-		EMIT3_off32(0x48, 0x81, 0xEC, round_up(stack_depth, 8));
+		emit_rsp_adjust(&prog, true, round_up(stack_depth, 8));
 	if (tail_call_reachable)
 		emit_prologue_tail_call(&prog, is_subprog);
 	*pprog = prog;
@@ -791,8 +810,7 @@ static void emit_bpf_tail_call_indirect(struct bpf_prog *bpf_prog,
 	 */
 	EMIT1(0x58);                              /* pop rax */
 	if (stack_depth)
-		EMIT3_off32(0x48, 0x81, 0xC4,     /* add rsp, sd */
-			    round_up(stack_depth, 8));
+		emit_rsp_adjust(&prog, false, round_up(stack_depth, 8));
 
 	/* goto *(prog->bpf_func + X86_TAIL_CALL_OFFSET); */
 	EMIT4(0x48, 0x8B, 0x49,                   /* mov rcx, qword ptr [rcx + 32] */
@@ -858,7 +876,7 @@ static void emit_bpf_tail_call_direct(struct bpf_prog *bpf_prog,
 	 */
 	EMIT1(0x58);                                  /* pop rax */
 	if (stack_depth)
-		EMIT3_off32(0x48, 0x81, 0xC4, round_up(stack_depth, 8));
+		emit_rsp_adjust(&prog, false, round_up(stack_depth, 8));
 
 	emit_nops(&prog, X86_PATCH_SIZE);
 
@@ -3350,13 +3368,8 @@ static int __arch_prepare_bpf_trampoline(struct bpf_tramp_image *im, void *rw_im
 	if (im)
 		im->ksym.fp_start = prog - (u8 *)rw_image;
 
-	if (!is_imm8(stack_size)) {
-		/* sub rsp, stack_size */
-		EMIT3_off32(0x48, 0x81, 0xEC, stack_size);
-	} else {
-		/* sub rsp, stack_size */
-		EMIT4(0x48, 0x83, 0xEC, stack_size);
-	}
+	/* sub rsp, stack_size */
+	emit_rsp_adjust(&prog, true, stack_size);
 	if (flags & BPF_TRAMP_F_TAIL_CALL_CTX)
 		EMIT1(0x50);		/* push rax */
 	/* mov QWORD PTR [rbp - rbx_off], rbx */
