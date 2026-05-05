@@ -1904,6 +1904,54 @@ static int do_jit(struct bpf_prog *bpf_prog, int *addrs, u8 *image, u8 *rw_image
 		case BPF_ALU64 | BPF_MOD | BPF_K:
 		case BPF_ALU64 | BPF_DIV | BPF_K: {
 			bool is64 = BPF_CLASS(insn->code) == BPF_ALU64;
+			bool is_div = BPF_OP(insn->code) == BPF_DIV;
+
+			/* Fast path: unsigned divide/modulo by a positive
+			 * power-of-two constant. DIV/IDIV are the slowest
+			 * scalar integer instructions (12-80 cycles per
+			 * Agner Fog Table 9.1, section 16.8); a SHR or
+			 * AND-with-mask completes in one cycle and avoids
+			 * the rax/rdx push/pop dance.
+			 */
+			if (BPF_SRC(insn->code) == BPF_K && insn->off == 0 &&
+			    imm32 > 0 && (imm32 & (imm32 - 1)) == 0) {
+				if (imm32 == 1) {
+					if (is_div) {
+						/* ALU64 div-by-1 is a no-op;
+						 * ALU32 must clear the upper
+						 * 32 bits via a self-mov.
+						 */
+						if (!is64)
+							emit_mov_reg(&prog, false,
+								     dst_reg, dst_reg);
+					} else {
+						/* mod-by-1 is always zero */
+						emit_mov_imm32(&prog, false, dst_reg, 0);
+					}
+					break;
+				}
+				if (is_div) {
+					u8 shift = ilog2((u32)imm32);
+
+					/* shr dst, shift */
+					maybe_emit_1mod(&prog, dst_reg, is64);
+					EMIT3(0xC1, add_1reg(0xE8, dst_reg), shift);
+				} else {
+					u32 mask = (u32)imm32 - 1;
+
+					/* and dst, mask */
+					maybe_emit_1mod(&prog, dst_reg, is64);
+					if (is_imm8(mask))
+						EMIT3(0x83, add_1reg(0xE0, dst_reg), mask);
+					else if (is_axreg(dst_reg))
+						EMIT1_off32(0x25, mask);
+					else
+						EMIT2_off32(0x81,
+							    add_1reg(0xE0, dst_reg),
+							    mask);
+				}
+				break;
+			}
 
 			if (dst_reg != BPF_REG_0)
 				EMIT1(0x50); /* push rax */
