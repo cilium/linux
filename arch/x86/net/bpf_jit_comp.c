@@ -1040,18 +1040,23 @@ static void emit_movsx_reg(u8 **pprog, int num_bits, bool is64, u32 dst_reg,
 	*pprog = prog;
 }
 
-/* Emit the suffix (ModR/M etc) for addressing *(ptr_reg + off) and val_reg */
+/* Emit the suffix (ModR/M etc) for addressing *(ptr_reg + off) and val_reg.
+ *
+ * mod==00 with no displacement saves one byte over mod==01 with disp8=0,
+ * but cannot be used when ptr_reg encodes RBP or R13: the SIB-less form of
+ * mod==00, r/m==5 means RIP-relative addressing in 64-bit mode. Both RBP
+ * and R13 share reg2hex == 5 (REX.B selects between them), so the same
+ * check covers both.
+ */
 static void emit_insn_suffix(u8 **pprog, u32 ptr_reg, u32 val_reg, int off)
 {
 	u8 *prog = *pprog;
 
-	if (is_imm8(off)) {
-		/* 1-byte signed displacement.
-		 *
-		 * If off == 0 we could skip this and save one extra byte, but
-		 * special case of x86 R13 which always needs an offset is not
-		 * worth the hassle
-		 */
+	if (off == 0 && reg2hex[ptr_reg] != 5) {
+		/* No displacement */
+		EMIT1(add_2reg(0x00, ptr_reg, val_reg));
+	} else if (is_imm8(off)) {
+		/* 1-byte signed displacement */
 		EMIT2(add_2reg(0x40, ptr_reg, val_reg), off);
 	} else {
 		/* 4-byte signed displacement */
@@ -1064,7 +1069,14 @@ static void emit_insn_suffix_SIB(u8 **pprog, u32 ptr_reg, u32 val_reg, u32 index
 {
 	u8 *prog = *pprog;
 
-	if (is_imm8(off)) {
+	if (off == 0 && reg2hex[ptr_reg] != 5) {
+		/* mod==00, r/m==100 (SIB), no displacement. SIB.base==5
+		 * with mod==00 would mean disp32-only, so the same RBP/R13
+		 * exclusion applies here too.
+		 */
+		EMIT2(add_2reg(0x04, BPF_REG_0, val_reg),
+		      add_2reg(0, ptr_reg, index_reg) /* SIB */);
+	} else if (is_imm8(off)) {
 		EMIT3(add_2reg(0x44, BPF_REG_0, val_reg), add_2reg(0, ptr_reg, index_reg) /* SIB */, off);
 	} else {
 		EMIT2_off32(add_2reg(0x84, BPF_REG_0, val_reg), add_2reg(0, ptr_reg, index_reg) /* SIB */, off);
