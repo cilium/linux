@@ -10,6 +10,7 @@
 #include <linux/if_vlan.h>
 #include <linux/bitfield.h>
 #include <linux/bpf.h>
+#include <linux/log2.h>
 #include <linux/memory.h>
 #include <linux/sort.h>
 #include <asm/extable.h>
@@ -1964,20 +1965,96 @@ static int do_jit(struct bpf_prog *bpf_prog, int *addrs, u8 *image, u8 *rw_image
 		}
 
 		case BPF_ALU | BPF_MUL | BPF_K:
-		case BPF_ALU64 | BPF_MUL | BPF_K:
-			maybe_emit_mod(&prog, dst_reg, dst_reg,
-				       BPF_CLASS(insn->code) == BPF_ALU64);
+		case BPF_ALU64 | BPF_MUL | BPF_K: {
+			bool is64 = BPF_CLASS(insn->code) == BPF_ALU64;
 
+			/* Peephole substitutions for IMUL by small/special
+			 * constants. IMUL r,r,imm has 3-4 cycle latency on
+			 * most uarchs and writes flags; ADD/SHL/LEA/NEG are
+			 * 1 cycle and frequently shorter to encode. See
+			 * Agner Fog, "Optimizing subroutines in assembly
+			 * language", section 16.7.
+			 */
+			if (imm32 == 0) {
+				/* xor dst, dst */
+				emit_mov_imm32(&prog, false, dst_reg, 0);
+				break;
+			}
+			if (imm32 == 1) {
+				/* For ALU64 the multiplication by 1 is a
+				 * no-op. For ALU32 the upper 32 bits of the
+				 * destination must be cleared, so emit a
+				 * 32-bit self-mov which zero-extends to the
+				 * full 64-bit register.
+				 */
+				if (!is64)
+					emit_mov_reg(&prog, false, dst_reg, dst_reg);
+				break;
+			}
+			if (imm32 == -1) {
+				/* neg dst */
+				maybe_emit_1mod(&prog, dst_reg, is64);
+				EMIT2(0xF7, add_1reg(0xD8, dst_reg));
+				break;
+			}
+			if (imm32 == 2) {
+				/* add dst, dst */
+				maybe_emit_mod(&prog, dst_reg, dst_reg, is64);
+				EMIT2(0x01, add_2reg(0xC0, dst_reg, dst_reg));
+				break;
+			}
+			/* Power of two in [4, 2^30] -> shl */
+			if (imm32 >= 4 && (imm32 & (imm32 - 1)) == 0) {
+				u8 shift = ilog2((u32)imm32);
+
+				maybe_emit_1mod(&prog, dst_reg, is64);
+				EMIT3(0xC1, add_1reg(0xE0, dst_reg), shift);
+				break;
+			}
+			/* lea dst, [dst + dst * S] for *3, *5, *9 */
+			if (imm32 == 3 || imm32 == 5 || imm32 == 9) {
+				u8 scale_log2 = ilog2((u32)(imm32 - 1));
+				u8 sib;
+				u8 rex = add_3mod(is64 ? 0x48 : 0x40,
+						  dst_reg, dst_reg, dst_reg);
+
+				if (rex != 0x40)
+					EMIT1(rex);
+
+				sib = (scale_log2 << 6) |
+				      (reg2hex[dst_reg] << 3) |
+				      reg2hex[dst_reg];
+				if (reg2hex[dst_reg] == 5) {
+					/* RBP/R13 require an explicit
+					 * displacement: the SIB.base==5
+					 * encoding with mod==00 means
+					 * disp32-only, no base register.
+					 * Fall back to mod=01 with disp8=0.
+					 */
+					EMIT3(0x8D,
+					      (reg2hex[dst_reg] << 3) | 0x44,
+					      sib);
+					EMIT1(0x00);
+				} else {
+					EMIT3(0x8D,
+					      (reg2hex[dst_reg] << 3) | 0x04,
+					      sib);
+				}
+				break;
+			}
+
+			/* Fallback: imul dst, dst, imm */
+			maybe_emit_mod(&prog, dst_reg, dst_reg, is64);
 			if (is_imm8(imm32))
-				/* imul dst_reg, dst_reg, imm8 */
-				EMIT3(0x6B, add_2reg(0xC0, dst_reg, dst_reg),
+				EMIT3(0x6B,
+				      add_2reg(0xC0, dst_reg, dst_reg),
 				      imm32);
 			else
-				/* imul dst_reg, dst_reg, imm32 */
 				EMIT2_off32(0x69,
 					    add_2reg(0xC0, dst_reg, dst_reg),
 					    imm32);
 			break;
+		}
 
 		case BPF_ALU | BPF_MUL | BPF_X:
 		case BPF_ALU64 | BPF_MUL | BPF_X:
