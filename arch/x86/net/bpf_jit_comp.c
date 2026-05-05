@@ -2193,18 +2193,21 @@ static int do_jit(struct bpf_prog *bpf_prog, int *addrs, u8 *image, u8 *rw_image
 		case BPF_ALU64 | BPF_END | BPF_FROM_LE:
 			switch (imm32) {
 			case 16:
-				/* Emit 'ror %ax, 8' to swap lower 2 bytes */
-				EMIT1(0x66);
+				/* Emit 'bswap eax; shr eax, 16' to swap the
+				 * lower 2 bytes and zero-extend the 16-bit
+				 * result. The 32-bit BSWAP zero-extends its
+				 * destination to 64 bits, avoiding the
+				 * partial-register dependency caused by an
+				 * operand-size-prefixed 'ror %ax, 8'.
+				 */
+				if (is_ereg(dst_reg))
+					EMIT2(0x41, 0x0F);
+				else
+					EMIT1(0x0F);
+				EMIT1(add_1reg(0xC8, dst_reg));
 				if (is_ereg(dst_reg))
 					EMIT1(0x41);
-				EMIT3(0xC1, add_1reg(0xC8, dst_reg), 8);
-
-				/* Emit 'movzwl eax, ax' */
-				if (is_ereg(dst_reg))
-					EMIT3(0x45, 0x0F, 0xB7);
-				else
-					EMIT2(0x0F, 0xB7);
-				EMIT1(add_2reg(0xC0, dst_reg, dst_reg));
+				EMIT3(0xC1, add_1reg(0xE8, dst_reg), 16);
 				break;
 			case 32:
 				/* Emit 'bswap eax' to swap lower 4 bytes */
