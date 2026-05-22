@@ -1559,9 +1559,62 @@ void fbnic_free_napi_vectors(struct fbnic_net *fbn)
 			fbnic_free_napi_vector(fbn, fbn->napi[i]);
 }
 
+static u32 fbnic_qcfg_rx_page_size(const struct netdev_queue_config *qcfg)
+{
+	return qcfg->rx_page_size ?: PAGE_SIZE;
+}
+
+static u32 fbnic_rx_page_frag_count(u32 rx_page_size)
+{
+	return rx_page_size / FBNIC_BD_FRAG_SIZE;
+}
+
+static u8 fbnic_rx_page_frag_shift(u32 rx_page_size)
+{
+	return ilog2(fbnic_rx_page_frag_count(rx_page_size));
+}
+
+static int fbnic_validate_rx_page_size(struct fbnic_net *fbn, u32 rx_page_size,
+				       struct netlink_ext_ack *extack)
+{
+	u32 frag_count, ppq_bufs;
+
+	if (!is_power_of_2(rx_page_size)) {
+		NL_SET_ERR_MSG_MOD(extack,
+				   "rx_page_size must be a power of 2");
+		return -EINVAL;
+	}
+
+	if (rx_page_size < PAGE_SIZE) {
+		NL_SET_ERR_MSG_MOD(extack,
+				   "rx_page_size must be at least PAGE_SIZE");
+		return -EINVAL;
+	}
+
+	if (!IS_ALIGNED(rx_page_size, FBNIC_BD_FRAG_SIZE)) {
+		NL_SET_ERR_MSG_MOD(extack,
+				   "rx_page_size must be 4K aligned");
+		return -EINVAL;
+	}
+
+	frag_count = fbnic_rx_page_frag_count(rx_page_size);
+	ppq_bufs = fbn->ppq_size / frag_count;
+	/* The PPQ is sized in 4K hardware fragments, but the software ring
+	 * has one entry per page-pool allocation. Keep at least two entries so
+	 * empty/full ring accounting still leaves one postable buffer.
+	 */
+	if (ppq_bufs < 2) {
+		NL_SET_ERR_MSG_MOD(extack,
+				   "rx_page_size leaves too few PPQ buffers");
+		return -EINVAL;
+	}
+
+	return 0;
+}
+
 static int
 fbnic_alloc_qt_page_pools(struct fbnic_net *fbn, struct fbnic_q_triad *qt,
-			  unsigned int rxq_idx)
+			  unsigned int rxq_idx, u32 rx_page_size)
 {
 	struct page_pool_params pp_params = {
 		.order = 0,
@@ -1596,6 +1649,8 @@ fbnic_alloc_qt_page_pools(struct fbnic_net *fbn, struct fbnic_q_triad *qt,
 
 	qt->sub0.page_pool = pp;
 	if (netif_rxq_has_unreadable_mp(fbn->netdev, rxq_idx)) {
+		pp_params.order = ilog2(rx_page_size) - PAGE_SHIFT;
+		pp_params.max_len = rx_page_size;
 		pp_params.flags |= PP_FLAG_ALLOW_UNREADABLE_NETMEM;
 		pp_params.dma_dir = DMA_FROM_DEVICE;
 
@@ -2018,12 +2073,19 @@ free_sub0:
 
 static int fbnic_alloc_rx_qt_resources(struct fbnic_net *fbn,
 				       struct fbnic_napi_vector *nv,
-				       struct fbnic_q_triad *qt)
+				       struct fbnic_q_triad *qt,
+				       u32 rx_page_size)
 {
 	struct device *dev = fbn->netdev->dev.parent;
 	int err;
 
-	err = fbnic_alloc_qt_page_pools(fbn, qt, qt->cmpl.q_idx);
+	err = fbnic_validate_rx_page_size(fbn, rx_page_size, NULL);
+	if (err)
+		return err;
+
+	qt->sub1.frag_shift = fbnic_rx_page_frag_shift(rx_page_size);
+
+	err = fbnic_alloc_qt_page_pools(fbn, qt, qt->cmpl.q_idx, rx_page_size);
 	if (err)
 		return err;
 
@@ -2087,7 +2149,13 @@ static int fbnic_alloc_nv_resources(struct fbnic_net *fbn,
 
 	/* Allocate Rx Resources */
 	for (j = 0; j < nv->rxt_count; j++, i++) {
-		err = fbnic_alloc_rx_qt_resources(fbn, nv, &nv->qt[i]);
+		struct netdev_queue_config qcfg;
+		u32 rx_page_size;
+
+		netdev_queue_config(fbn->netdev, nv->qt[i].cmpl.q_idx, &qcfg);
+		rx_page_size = fbnic_qcfg_rx_page_size(&qcfg);
+		err = fbnic_alloc_rx_qt_resources(fbn, nv, &nv->qt[i],
+						  rx_page_size);
 		if (err)
 			goto free_qt_resources;
 	}
@@ -2852,9 +2920,16 @@ static int fbnic_queue_mem_alloc(struct net_device *dev,
 	const struct fbnic_q_triad *real;
 	struct fbnic_q_triad *qt = qmem;
 	struct fbnic_napi_vector *nv;
+	u32 rx_page_size = fbnic_qcfg_rx_page_size(qcfg);
+	int err;
 
-	if (!netif_running(dev))
-		return fbnic_alloc_qt_page_pools(fbn, qt, idx);
+	if (!netif_running(dev)) {
+		err = fbnic_validate_rx_page_size(fbn, rx_page_size, NULL);
+		if (err)
+			return err;
+
+		return fbnic_alloc_qt_page_pools(fbn, qt, idx, rx_page_size);
+	}
 
 	real = container_of(fbn->rx[idx], struct fbnic_q_triad, cmpl);
 	nv = fbn->napi[idx % fbn->num_napi];
@@ -2864,11 +2939,20 @@ static int fbnic_queue_mem_alloc(struct net_device *dev,
 	qt->sub0.frag_shift = real->sub0.frag_shift;
 	fbnic_ring_init(&qt->sub1, real->sub1.doorbell, real->sub1.q_idx,
 			real->sub1.flags);
-	qt->sub1.frag_shift = real->sub1.frag_shift;
 	fbnic_ring_init(&qt->cmpl, real->cmpl.doorbell, real->cmpl.q_idx,
 			real->cmpl.flags);
 
-	return fbnic_alloc_rx_qt_resources(fbn, nv, qt);
+	return fbnic_alloc_rx_qt_resources(fbn, nv, qt, rx_page_size);
+}
+
+static int fbnic_validate_qcfg(struct net_device *dev,
+			       struct netdev_queue_config *qcfg,
+			       struct netlink_ext_ack *extack)
+{
+	struct fbnic_net *fbn = netdev_priv(dev);
+
+	return fbnic_validate_rx_page_size(fbn, fbnic_qcfg_rx_page_size(qcfg),
+					   extack);
 }
 
 static void fbnic_queue_mem_free(struct net_device *dev, void *qmem)
@@ -2970,4 +3054,6 @@ const struct netdev_queue_mgmt_ops fbnic_queue_mgmt_ops = {
 	.ndo_queue_mem_free	= fbnic_queue_mem_free,
 	.ndo_queue_start	= fbnic_queue_start,
 	.ndo_queue_stop		= fbnic_queue_stop,
+	.ndo_validate_qcfg	= fbnic_validate_qcfg,
+	.supported_params	= QCFG_RX_PAGE_SIZE,
 };
