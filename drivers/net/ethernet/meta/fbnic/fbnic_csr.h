@@ -109,17 +109,13 @@ enum {
 
 /* Rx Buffer Descriptor Format
  *
- * The layout of this can vary depending on the page size of the system.
+ * Buffer descriptors describe 4 KiB BDQ fragments. A BDQ buffer may be one
+ * fragment, or a power-of-two number of fragments.
  *
- * If the page size is 4K then the layout will simply consist of ID for
- * the 16 most significant bits, and the lower 46 are essentially the page
- * address with the lowest 12 bits being reserved 0 due to the fact that
- * a page will be aligned.
- *
- * If the page size is larger than 4K then the lower n bits of the ID and
- * page address will be reserved for the fragment ID. This fragment will
- * be 4K in size and will be used to index both the DMA address and the ID
- * by the same amount.
+ * The address field stores the 4 KiB-aligned DMA address. The ID field stores
+ * the software buffer ID, with the low n bits used as the fragment ID when a
+ * buffer spans multiple 4 KiB fragments. The driver increments both the
+ * address and ID by one fragment for each descriptor belonging to a buffer.
  */
 #define FBNIC_BD_DESC_ADDR_MASK			DESC_GENMASK(45, 12)
 #define FBNIC_BD_DESC_ID_MASK			DESC_GENMASK(63, 48)
@@ -127,16 +123,6 @@ enum {
 	(FBNIC_BD_DESC_ADDR_MASK & ~(FBNIC_BD_DESC_ADDR_MASK - 1))
 #define FBNIC_BD_FRAG_COUNT \
 	(PAGE_SIZE / FBNIC_BD_FRAG_SIZE)
-#define FBNIC_BD_FRAG_ADDR_MASK \
-	(FBNIC_BD_DESC_ADDR_MASK & \
-	 ~(FBNIC_BD_DESC_ADDR_MASK * FBNIC_BD_FRAG_COUNT))
-#define FBNIC_BD_FRAG_ID_MASK \
-	(FBNIC_BD_DESC_ID_MASK & \
-	 ~(FBNIC_BD_DESC_ID_MASK * FBNIC_BD_FRAG_COUNT))
-#define FBNIC_BD_PAGE_ADDR_MASK \
-	(FBNIC_BD_DESC_ADDR_MASK & ~FBNIC_BD_FRAG_ADDR_MASK)
-#define FBNIC_BD_PAGE_ID_MASK \
-	(FBNIC_BD_DESC_ID_MASK & ~FBNIC_BD_FRAG_ID_MASK)
 
 /* Rx Completion Queue Descriptors */
 #define FBNIC_RCD_TYPE_MASK			DESC_GENMASK(62, 61)
@@ -151,9 +137,6 @@ enum {
 
 /* Address/Length Completion Descriptors */
 #define FBNIC_RCD_AL_BUFF_ID_MASK		DESC_GENMASK(15, 0)
-#define FBNIC_RCD_AL_BUFF_FRAG_MASK		(FBNIC_BD_FRAG_COUNT - 1)
-#define FBNIC_RCD_AL_BUFF_PAGE_MASK \
-	(FBNIC_RCD_AL_BUFF_ID_MASK & ~FBNIC_RCD_AL_BUFF_FRAG_MASK)
 #define FBNIC_RCD_AL_BUFF_LEN_MASK		DESC_GENMASK(28, 16)
 #define FBNIC_RCD_AL_BUFF_OFF_MASK		DESC_GENMASK(43, 32)
 #define FBNIC_RCD_AL_PAGE_FIN			DESC_BIT(60)

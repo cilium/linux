@@ -121,6 +121,7 @@ struct fbnic_ring {
 	u16 size_mask;			/* Size of ring in descriptors - 1 */
 	u8 q_idx;			/* Logical netdev ring index */
 	u8 flags;			/* Ring flags (FBNIC_RING_F_*) */
+	u8 frag_shift;			/* BDQ: ilog2(buf_size / 4096) */
 
 	u32 head, tail;			/* Head/Tail of ring */
 
@@ -161,6 +162,11 @@ struct fbnic_napi_vector {
 };
 
 extern const struct netdev_queue_mgmt_ops fbnic_queue_mgmt_ops;
+
+static inline u16 fbnic_bdq_frag_count(const struct fbnic_ring *bdq)
+{
+	return 1U << bdq->frag_shift;
+}
 
 netdev_tx_t fbnic_xmit_frame(struct sk_buff *skb, struct net_device *dev);
 netdev_features_t
