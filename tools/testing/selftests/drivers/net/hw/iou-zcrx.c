@@ -85,6 +85,8 @@ static int cfg_send_size = SEND_SIZE;
 static struct sockaddr_in6 cfg_addr;
 static unsigned int cfg_rx_buf_len;
 static bool cfg_dry_run;
+static bool cfg_check_payload_offset, cfg_seen_payload_offset;
+static unsigned int cfg_min_payload_offset;
 
 static char *payload;
 static void *area_ptr;
@@ -298,6 +300,13 @@ static void process_recvzc(struct io_uring *ring, struct io_uring_cqe *cqe)
 	mask = (1ULL << IORING_ZCRX_AREA_SHIFT) - 1;
 	data = (char *)area_ptr + (rcqe->off & mask);
 
+	if (cfg_check_payload_offset) {
+		unsigned int rx_buf_len = cfg_rx_buf_len ?: page_size;
+
+		if ((rcqe->off & mask) % rx_buf_len >= cfg_min_payload_offset)
+			cfg_seen_payload_offset = true;
+	}
+
 	for (i = 0; i < n; i++) {
 		if (*(data + i) != payload[(received + i)])
 			error(1, 0, "payload mismatch at %d", i);
@@ -374,6 +383,9 @@ static void run_server(void)
 
 	if (!stop)
 		error(1, 0, "test failed\n");
+	if (cfg_check_payload_offset && !cfg_seen_payload_offset)
+		error(1, 0, "no payload CQE at offset >= %u\n",
+		      cfg_min_payload_offset);
 }
 
 static void run_client(void)
@@ -406,8 +418,11 @@ static void run_client(void)
 
 static void usage(const char *filepath)
 {
-	error(1, 0, "Usage: %s (-4|-6) (-s|-c) -h<server_ip> -p<port> "
-		    "-l<payload_size> -i<ifname> -q<rxq_id>", filepath);
+	error(1, 0,
+	      "Usage: %s (-4|-6) (-s|-c) -h<server_ip> -p<port>\n"
+	      "\t-l<payload_size> -i<ifname> -q<rxq_id>\n"
+	      "\t[-x<rx_buf_pages>] [-F<min_payload_offset>] [-d]\n",
+	      filepath);
 }
 
 static void parse_opts(int argc, char **argv)
@@ -425,7 +440,7 @@ static void parse_opts(int argc, char **argv)
 		usage(argv[0]);
 	cfg_payload_len = max_payload_len;
 
-	while ((c = getopt(argc, argv, "sch:p:l:i:q:o:z:x:d")) != -1) {
+	while ((c = getopt(argc, argv, "sch:p:l:i:q:o:z:x:F:d")) != -1) {
 		switch (c) {
 		case 's':
 			if (cfg_client)
@@ -463,6 +478,10 @@ static void parse_opts(int argc, char **argv)
 		case 'x':
 			cfg_rx_buf_len = page_size * strtoul(optarg, NULL, 0);
 			break;
+		case 'F':
+			cfg_check_payload_offset = true;
+			cfg_min_payload_offset = strtoul(optarg, NULL, 0);
+			break;
 		case 'd':
 			cfg_dry_run = true;
 			break;
@@ -484,6 +503,9 @@ static void parse_opts(int argc, char **argv)
 
 	if (cfg_payload_len > max_payload_len)
 		error(1, 0, "-l: payload exceeds max (%d)", max_payload_len);
+	if (cfg_check_payload_offset &&
+	    cfg_min_payload_offset >= (cfg_rx_buf_len ?: page_size))
+		error(1, 0, "-F: offset outside rx_buf_len");
 }
 
 int main(int argc, char **argv)
