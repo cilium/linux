@@ -1376,6 +1376,24 @@ static int bpf_object__init_kern_struct_ops_maps(struct bpf_object *obj)
 		if (!map->autocreate)
 			continue;
 
+		/*
+		 * struct_ops is not wired up for the light skeleton:
+		 * bpf_map_prepare_vdata() later bakes raw, host-side program fds
+		 * into the kern vdata, which for a generated loader are all -1,
+		 * so the loader cannot work. Like tail-call prog arrays
+		 * (init_prog_array_slots), refuse to emit such a loader rather
+		 * than silently producing a broken one. Reject here, before any
+		 * kernel-BTF resolution, so it does not depend on struct_ops
+		 * support in the running kernel. Wiring struct_ops through the
+		 * loader must bind those program fds via the generated blob, not
+		 * bake host fds (see also RELO_INSN_ARRAY).
+		 */
+		if (obj->gen_loader) {
+			pr_warn("struct_ops map '%s' is not supported with the light skeleton\n",
+				map->name);
+			return -ENOTSUP;
+		}
+
 		err = bpf_map__init_kern_struct_ops(map);
 		if (err)
 			return err;
