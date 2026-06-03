@@ -6500,6 +6500,26 @@ bpf_object__relocate_data(struct bpf_object *obj, struct bpf_program *prog)
 		case RELO_INSN_ARRAY: {
 			int map_fd;
 
+			/*
+			 * Jump tables are not wired up for the light skeleton.
+			 * Unlike every other relocation above, RELO_INSN_ARRAY
+			 * has no gen_loader path: create_jt_map() would create
+			 * the insn-array map with host-side syscalls and bake a
+			 * raw, process-local fd into the program as
+			 * BPF_PSEUDO_MAP_VALUE. For a generated loader that fd is
+			 * meaningless at load time and, worse, would be resolved
+			 * against the loader caller's fd table rather than bound
+			 * into the signed, exclusive blob like every other map -
+			 * i.e. an unauthenticated control-flow input. Refuse to
+			 * emit such a loader instead of producing a broken and
+			 * unsafe one.
+			 */
+			if (obj->gen_loader) {
+				pr_warn("prog '%s': relo #%d: jump tables are not supported with the light skeleton\n",
+					prog->name, i);
+				return -ENOTSUP;
+			}
+
 			map_fd = create_jt_map(obj, prog, relo);
 			if (map_fd < 0) {
 				pr_warn("prog '%s': relo #%d: can't create jump table: sym_off %u\n",
