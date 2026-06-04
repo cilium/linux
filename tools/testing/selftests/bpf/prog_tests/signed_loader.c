@@ -154,8 +154,8 @@ static int run_setup(const char *cmd, const char *dir)
 		WEXITSTATUS(status) == 0) ? 0 : -EINVAL;
 }
 
-static int sign_buf(const char *dir, const void *buf, __u32 len,
-		    void *sig, __u32 *sig_sz)
+static int sign_buf(const char *dir, const char *hash_algo, const void *buf,
+		    __u32 len, void *sig, __u32 *sig_sz)
 {
 	char data_tmpl[PATH_MAX], key[PATH_MAX];
 	char sigpath[PATH_MAX + sizeof(".p7s")];
@@ -184,7 +184,7 @@ static int sign_buf(const char *dir, const void *buf, __u32 len,
 	}
 	if (pid == 0) {
 		snprintf(key, sizeof(key), "%s/signing_key.pem", dir);
-		execlp("./sign-file", "./sign-file", "-d", "sha256",
+		execlp("./sign-file", "./sign-file", "-d", hash_algo,
 		       key, key, data_tmpl, NULL);
 		exit(1);
 	}
@@ -746,7 +746,8 @@ static void signature_authenticates_insns(void)
 	memcpy(blob, gopts.data, data_sz);
 	libbpf_sha256(insns, insns_sz, excl);
 
-	if (!ASSERT_OK(sign_buf(dir, insns, insns_sz, sig, &sig_sz), "sign-file"))
+	if (!ASSERT_OK(sign_buf(dir, "sha256", insns, insns_sz, sig, &sig_sz),
+		       "sign-file"))
 		goto cleanup;
 
 	memset(ctx, 0, ctx_sz);
@@ -970,6 +971,88 @@ static void map_hash_unsupported_type(void)
 	close(fd);
 }
 
+/*
+ * The kernel requires a collision-resistant digest (SHA-256 or stronger) for
+ * BPF program signatures. A well-formed signature that merely uses a weak
+ * digest (SHA-1, with practical chosen-prefix collisions) must be refused at
+ * load with -EKEYREJECTED, before the loader runs. Mirrors
+ * signature_authenticates_insns() but signs the loader with SHA-1.
+ */
+static void signature_weak_hash_rejected(void)
+{
+	LIBBPF_OPTS(gen_loader_opts, gopts, .gen_hash = true);
+	char dir_tmpl[] = "/tmp/signed_loaderXXXXXX", *dir;
+	struct test_signed_loader *skel = NULL;
+	__u8 excl[SHA256_DIGEST_LENGTH], sig[8192];
+	__u32 sig_sz = sizeof(sig), insns_sz, data_sz, ctx_sz;
+	unsigned char *insns = NULL, *blob = NULL;
+	int nr_maps = 0, nr_progs = 0, r;
+	struct bpf_program *p;
+	struct bpf_map *m;
+	void *ctx = NULL;
+	bool ran;
+
+	syscall(__NR_request_key, "keyring", "_uid.0", NULL,
+		KEY_SPEC_SESSION_KEYRING);
+	dir = mkdtemp(dir_tmpl);
+	if (!ASSERT_OK_PTR(dir, "mkdtemp"))
+		return;
+	if (!ASSERT_OK(run_setup("setup", dir), "verify_sig_setup")) {
+		rmdir(dir);
+		return;
+	}
+
+	skel = test_signed_loader__open();
+	if (!ASSERT_OK_PTR(skel, "skel_open"))
+		goto cleanup;
+	if (!ASSERT_OK(bpf_object__gen_loader(skel->obj, &gopts), "gen_loader"))
+		goto cleanup;
+	if (!ASSERT_OK(bpf_object__load(skel->obj), "gen_load"))
+		goto cleanup;
+
+	bpf_object__for_each_program(p, skel->obj)
+		nr_progs++;
+	bpf_object__for_each_map(m, skel->obj)
+		nr_maps++;
+	ctx_sz = sizeof(struct bpf_loader_ctx) +
+		 nr_maps * sizeof(struct bpf_map_desc) +
+		 nr_progs * sizeof(struct bpf_prog_desc);
+	insns_sz = gopts.insns_sz;
+	data_sz = gopts.data_sz;
+	ctx = calloc(1, ctx_sz);
+	insns = malloc(insns_sz);
+	blob = malloc(data_sz);
+	if (!ASSERT_OK_PTR(ctx, "ctx") ||
+	    !ASSERT_OK_PTR(insns, "insns") ||
+	    !ASSERT_OK_PTR(blob, "blob"))
+		goto cleanup;
+	memcpy(insns, gopts.insns, insns_sz);
+	memcpy(blob, gopts.data, data_sz);
+	libbpf_sha256(insns, insns_sz, excl);
+
+	/*
+	 * Sign over a SHA-1 digest. If the toolchain can no longer produce
+	 * SHA-1 signatures, there is nothing to exercise - skip rather than
+	 * fail.
+	 */
+	if (sign_buf(dir, "sha1", insns, insns_sz, sig, &sig_sz)) {
+		test__skip();
+		goto cleanup;
+	}
+
+	((struct bpf_loader_ctx *)ctx)->sz = ctx_sz;
+	r = run_gen_loader(insns, insns_sz, blob, data_sz, excl, sizeof(excl),
+			   sig, sig_sz, true, ctx, ctx_sz, &ran);
+	ASSERT_FALSE(ran, "weak-hash loader rejected before run");
+	ASSERT_EQ(r, -EKEYREJECTED, "sha1 signature rejected (need sha256+)");
+cleanup:
+	free(insns);
+	free(blob);
+	free(ctx);
+	test_signed_loader__destroy(skel);
+	run_setup("cleanup", dir);
+}
+
 void test_signed_loader(void)
 {
 	if (test__start_subtest("metadata_check_shape"))
@@ -994,6 +1077,8 @@ void test_signed_loader(void)
 		metadata_ctx_initial_value_ignored();
 	if (test__start_subtest("signature_authenticates_insns"))
 		signature_authenticates_insns();
+	if (test__start_subtest("signature_weak_hash_rejected"))
+		signature_weak_hash_rejected();
 	if (test__start_subtest("hash_requires_frozen"))
 		hash_requires_frozen();
 	if (test__start_subtest("no_update_after_freeze"))
