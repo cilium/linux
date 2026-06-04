@@ -44,4 +44,7 @@ extern int pkcs7_supply_detached_data(struct pkcs7_message *pkcs7,
 extern int pkcs7_get_digest(struct pkcs7_message *pkcs7, const u8 **buf,
 			    u32 *len, enum hash_algo *hash_algo);
 
+extern int pkcs7_get_digest_algo(const struct pkcs7_message *pkcs7,
+				 enum hash_algo *hash_algo);
+
 #endif /* _CRYPTO_PKCS7_H */

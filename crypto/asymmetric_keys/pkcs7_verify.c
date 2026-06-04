@@ -167,6 +167,38 @@ int pkcs7_get_digest(struct pkcs7_message *pkcs7, const u8 **buf, u32 *len,
 	return 0;
 }
 
+/**
+ * pkcs7_get_digest_algo - Retrieve the digest algorithm of a PKCS#7 message
+ * @pkcs7: The parsed PKCS#7 message
+ * @hash_algo: Where to store the digest algorithm
+ *
+ * Return the message digest algorithm of the (single) signature in a PKCS#7
+ * message, as named in the SignerInfo. Unlike pkcs7_get_digest() this only
+ * inspects the parsed algorithm identifier and does not compute or require an
+ * intermediate digest, so it works for signature algorithms that integrate the
+ * digest (e.g. ML-DSA) and needs no detached data supplied.
+ *
+ * Returns 0 and sets *hash_algo on success, -EBADMSG if the message has no or
+ * multiple signers, or -ENOPKG if the algorithm is not recognised.
+ */
+int pkcs7_get_digest_algo(const struct pkcs7_message *pkcs7,
+			  enum hash_algo *hash_algo)
+{
+	const struct pkcs7_signed_info *sinfo = pkcs7->signed_infos;
+	int i;
+
+	if (!sinfo || sinfo->next || !sinfo->sig || !sinfo->sig->hash_algo)
+		return -EBADMSG;
+
+	i = match_string(hash_algo_name, HASH_ALGO__LAST, sinfo->sig->hash_algo);
+	if (i < 0)
+		return -ENOPKG;
+
+	*hash_algo = i;
+	return 0;
+}
+EXPORT_SYMBOL_GPL(pkcs7_get_digest_algo);
+
 /*
  * Find the key (X.509 certificate) to use to verify a PKCS#7 message.  PKCS#7
  * uses the issuer's name and the issuing certificate serial number for
