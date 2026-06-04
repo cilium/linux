@@ -2,6 +2,8 @@
 /* Copyright (c) 2011-2014 PLUMgrid, http://plumgrid.com
  */
 #include <crypto/sha2.h>
+#include <crypto/hash_info.h>
+#include <crypto/pkcs7.h>
 #include <linux/bpf.h>
 #include <linux/bpf-cgroup.h>
 #include <linux/bpf_trace.h>
@@ -2865,6 +2867,47 @@ static bool is_perfmon_prog_type(enum bpf_prog_type prog_type)
 	}
 }
 
+#ifdef CONFIG_SYSTEM_DATA_VERIFICATION
+/*
+ * BPF program signing is a new use case with no legacy signatures to remain
+ * compatible with, so require a collision-resistant message digest: SHA-256 or
+ * stronger. This rejects e.g. SHA-1 (practical chosen-prefix collisions exist)
+ * and the truncated SHA-224, either of which would let a crafted program reuse
+ * a legitimate signature.
+ *
+ * This is scoped to program loading on purpose: the bpf_verify_pkcs7_signature()
+ * kfunc is left unrestricted, as BPF programs may legitimately verify
+ * third-party data signed with other digests.
+ */
+static int bpf_prog_check_sig_digest(const void *sig, u32 sig_len)
+{
+	enum hash_algo hash_algo = HASH_ALGO__LAST;
+	struct pkcs7_message *pkcs7;
+	int err;
+
+	pkcs7 = pkcs7_parse_message(sig, sig_len);
+	if (IS_ERR(pkcs7))
+		return PTR_ERR(pkcs7);
+
+	err = pkcs7_get_digest_algo(pkcs7, &hash_algo);
+	pkcs7_free_message(pkcs7);
+	if (err)
+		return err;
+
+	if (hash_algo >= HASH_ALGO__LAST ||
+	    hash_digest_size[hash_algo] < SHA256_DIGEST_SIZE) {
+		pr_warn_ratelimited("bpf: program signature digest too weak, SHA-256 or stronger required\n");
+		return -EKEYREJECTED;
+	}
+	return 0;
+}
+#else
+static inline int bpf_prog_check_sig_digest(const void *sig, u32 sig_len)
+{
+	return 0;
+}
+#endif
+
 static int bpf_prog_verify_signature(struct bpf_prog *prog, union bpf_attr *attr,
 				     bool is_kernel)
 {
@@ -2900,8 +2943,10 @@ static int bpf_prog_verify_signature(struct bpf_prog *prog, union bpf_attr *attr
 	bpf_dynptr_init(&insns_ptr, prog->insnsi, BPF_DYNPTR_TYPE_LOCAL, 0,
 			prog->len * sizeof(struct bpf_insn));
 
-	err = bpf_verify_pkcs7_signature((struct bpf_dynptr *)&insns_ptr,
-					 (struct bpf_dynptr *)&sig_ptr, key);
+	err = bpf_prog_check_sig_digest(sig, attr->signature_size);
+	if (!err)
+		err = bpf_verify_pkcs7_signature((struct bpf_dynptr *)&insns_ptr,
+						 (struct bpf_dynptr *)&sig_ptr, key);
 
 	bpf_key_put(key);
 	kvfree(sig);
