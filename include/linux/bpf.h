@@ -1696,6 +1696,13 @@ struct bpf_stream_stage {
 	int len;
 };
 
+/*
+ * Signature verification verdict. A program is either unsigned, or VERIFIED:
+ * the signature covers the instructions and the frozen contents of every
+ * exclusive map the program uses. A signed program that reads from an
+ * exclusive map its signature does not cover is rejected rather than reaching
+ * an intermediate "instructions only" state.
+ */
 enum bpf_sig_verdict {
 	BPF_SIG_UNSIGNED = 0,
 	BPF_SIG_VERIFIED,
