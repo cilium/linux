@@ -1655,6 +1655,14 @@ union bpf_attr {
 		 * verification.
 		 */
 		__s32		keyring_id;
+		/* fd of an exclusive, frozen map whose contents are covered
+		 * by the program signature in addition to the instructions.
+		 * Used by signed gen_loader programs to bind the metadata map
+		 * to the loader: the kernel verifies the map contents at load
+		 * time, so the loader itself need not check them. Must be 0
+		 * (unset) for non-loader programs.
+		 */
+		__u32		excl_map_fd;
 	};
 
 	struct { /* anonymous struct used by BPF_OBJ_* commands */

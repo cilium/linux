@@ -1678,6 +1678,7 @@ struct bpf_stream_stage {
 enum bpf_sig_verdict {
 	BPF_SIG_UNSIGNED = 0,
 	BPF_SIG_VERIFIED,
+	BPF_SIG_VERIFIED_METADATA,
 };
 
 enum bpf_sig_keyring {

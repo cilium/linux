@@ -2879,13 +2879,24 @@ static enum bpf_sig_keyring bpf_classify_keyring(s32 keyring_id)
 	}
 }
 
+/*
+ * Verify the program signature. When @excl_map is given, its frozen contents
+ * are appended to the instructions before verification so that the signature
+ * covers insns || metadata. This binds a signed gen_loader to the exact bytes
+ * it will install, letting the kernel vouch for the metadata at load time
+ * instead of trusting the loader to check it from within BPF.
+ */
 static int bpf_prog_verify_signature(struct bpf_prog *prog, union bpf_attr *attr,
-				     bool is_kernel, s32 *keyring_serial)
+				     bool is_kernel, s32 *keyring_serial,
+				     struct bpf_map *excl_map)
 {
 	bpfptr_t usig = make_bpfptr(attr->signature, is_kernel);
-	struct bpf_dynptr_kern sig_ptr, insns_ptr;
+	struct bpf_dynptr_kern sig_ptr, data_ptr;
 	struct bpf_key *key = NULL;
-	void *sig;
+	u32 insns_sz, meta_sz = 0;
+	const void *meta = NULL;
+	void *sig, *data = NULL;
+	u64 data_sz;
 	int err = 0;
 
 	/*
@@ -2909,18 +2920,86 @@ static int bpf_prog_verify_signature(struct bpf_prog *prog, union bpf_attr *attr
 		return PTR_ERR(sig);
 	}
 
+	insns_sz = prog->len * sizeof(struct bpf_insn);
+
+	if (excl_map) {
+		u64 addr;
+
+		/*
+		 * The metadata bytes hashed here must not be able to change
+		 * before the loader installs them: require the map to be
+		 * frozen (no user writes) and exclusively bound to a program
+		 * (no other program can mutate it). The map<->program digest
+		 * binding itself is enforced later by the verifier.
+		 */
+		if (!READ_ONCE(excl_map->frozen) || !excl_map->excl_prog_sha) {
+			err = -EPERM;
+			goto out;
+		}
+		if (!excl_map->ops->map_direct_value_addr) {
+			err = -EINVAL;
+			goto out;
+		}
+		err = excl_map->ops->map_direct_value_addr(excl_map, &addr, 0);
+		if (err)
+			goto out;
+		meta = (const void *)(unsigned long)addr;
+		meta_sz = excl_map->value_size;
+	}
+
+	data_sz = (u64)insns_sz + meta_sz;
+	if (bpf_dynptr_check_size(data_sz)) {
+		err = -E2BIG;
+		goto out;
+	}
+	data = kvmalloc(data_sz, GFP_KERNEL);
+	if (!data) {
+		err = -ENOMEM;
+		goto out;
+	}
+	memcpy(data, prog->insnsi, insns_sz);
+	if (meta_sz)
+		memcpy(data + insns_sz, meta, meta_sz);
+
+	bpf_dynptr_init(&data_ptr, data, BPF_DYNPTR_TYPE_LOCAL, 0, data_sz);
 	bpf_dynptr_init(&sig_ptr, sig, BPF_DYNPTR_TYPE_LOCAL, 0,
 			attr->signature_size);
-	bpf_dynptr_init(&insns_ptr, prog->insnsi, BPF_DYNPTR_TYPE_LOCAL, 0,
-			prog->len * sizeof(struct bpf_insn));
 
-	err = bpf_verify_pkcs7_signature((struct bpf_dynptr *)&insns_ptr,
+	err = bpf_verify_pkcs7_signature((struct bpf_dynptr *)&data_ptr,
 					 (struct bpf_dynptr *)&sig_ptr, key);
 	if (!err)
 		*keyring_serial = bpf_key_serial(key);
+out:
+	kvfree(data);
 	bpf_key_put(key);
 	kvfree(sig);
 	return err;
+}
+
+/*
+ * Make sure the signed metadata map is the one the loader actually uses, and
+ * that no other exclusive map is smuggled in. Both the signed map and any
+ * exclusive map used by the program are bound to prog->digest by the verifier;
+ * here we additionally require that the single exclusive map equals @excl_map.
+ * Without this an attacker could sign over a benign map and load a different,
+ * equally digest-bound map at the fd_array slot the loader reads.
+ */
+static int bpf_prog_check_excl_map(struct bpf_prog *prog,
+				   struct bpf_map *excl_map)
+{
+	bool used = false;
+	int i;
+
+	for (i = 0; i < prog->aux->used_map_cnt; i++) {
+		struct bpf_map *map = prog->aux->used_maps[i];
+
+		if (map == excl_map)
+			used = true;
+		else if (map->excl_prog_sha)
+			return -EACCES;
+	}
+
+	return used ? 0 : -EACCES;
 }
 
 static int bpf_prog_mark_insn_arrays_ready(struct bpf_prog *prog)
@@ -2941,12 +3020,13 @@ static int bpf_prog_mark_insn_arrays_ready(struct bpf_prog *prog)
 }
 
 /* last field in 'union bpf_attr' used by this command */
-#define BPF_PROG_LOAD_LAST_FIELD keyring_id
+#define BPF_PROG_LOAD_LAST_FIELD excl_map_fd
 
 static int bpf_prog_load(union bpf_attr *attr, bpfptr_t uattr, struct bpf_log_attr *attr_log)
 {
 	enum bpf_prog_type type = attr->prog_type;
 	struct bpf_prog *prog, *dst_prog = NULL;
+	struct bpf_map *excl_map = NULL;
 	struct btf *attach_btf = NULL;
 	struct bpf_token *token = NULL;
 	bool bpf_cap;
@@ -3104,13 +3184,29 @@ static int bpf_prog_load(union bpf_attr *attr, bpfptr_t uattr, struct bpf_log_at
 
 	/* eBPF programs must be GPL compatible to use GPL-ed functions */
 	prog->gpl_compatible = license_is_gpl_compatible(license) ? 1 : 0;
+
+	if (attr->excl_map_fd) {
+		excl_map = bpf_map_get(attr->excl_map_fd);
+		if (IS_ERR(excl_map)) {
+			err = PTR_ERR(excl_map);
+			excl_map = NULL;
+			goto free_prog;
+		}
+	}
+
 	if (attr->signature) {
 		err = bpf_prog_verify_signature(prog, attr, uattr.is_kernel,
-						&prog->aux->sig.keyring_serial);
+						&prog->aux->sig.keyring_serial,
+						excl_map);
 		if (err)
 			goto free_prog;
 		prog->aux->sig.keyring_type = bpf_classify_keyring(attr->keyring_id);
-		prog->aux->sig.verdict = BPF_SIG_VERIFIED;
+		prog->aux->sig.verdict = excl_map ? BPF_SIG_VERIFIED_METADATA :
+						    BPF_SIG_VERIFIED;
+	} else if (excl_map) {
+		/* A metadata map is only meaningful for a signed loader. */
+		err = -EINVAL;
+		goto free_prog;
 	} else {
 		prog->aux->sig.keyring_type = BPF_SIG_KEYRING_NONE;
 		prog->aux->sig.verdict = BPF_SIG_UNSIGNED;
@@ -3169,6 +3265,19 @@ static int bpf_prog_load(union bpf_attr *attr, bpfptr_t uattr, struct bpf_log_at
 	if (err < 0)
 		goto free_used_maps;
 
+	/*
+	 * The verifier has resolved and digest-checked all used maps; now that
+	 * used_maps is populated, make sure the signed metadata map is the one
+	 * the loader actually uses (see bpf_prog_check_excl_map()).
+	 */
+	if (excl_map) {
+		err = bpf_prog_check_excl_map(prog, excl_map);
+		if (err < 0)
+			goto free_used_maps;
+		bpf_map_put(excl_map);
+		excl_map = NULL;
+	}
+
 	err = bpf_prog_mark_insn_arrays_ready(prog);
 	if (err < 0)
 		goto free_used_maps;
@@ -3201,6 +3310,8 @@ static int bpf_prog_load(union bpf_attr *attr, bpfptr_t uattr, struct bpf_log_at
 	return err;
 
 free_used_maps:
+	if (excl_map)
+		bpf_map_put(excl_map);
 	/* In case we have subprogs, we need to wait for a grace
 	 * period before we can tear down JIT memory since symbols
 	 * are already exposed under kallsyms.
@@ -3209,6 +3320,8 @@ free_used_maps:
 	return err;
 
 free_prog:
+	if (excl_map)
+		bpf_map_put(excl_map);
 	free_uid(prog->aux->user);
 	if (prog->aux->attach_btf)
 		btf_put(prog->aux->attach_btf);
