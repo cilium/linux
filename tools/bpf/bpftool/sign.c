@@ -135,9 +135,27 @@ int bpftool_prog_sign(struct bpf_load_and_run_opts *opts)
 	CMS_ContentInfo *cms = NULL;
 	long actual_sig_len = 0;
 	X509 *x509 = NULL;
+	void *data = NULL;
+	size_t data_sz;
 	int err = 0;
 
-	bd_in = BIO_new_mem_buf(opts->insns, opts->insns_sz);
+	/*
+	 * The signature covers the loader instructions concatenated with the
+	 * metadata blob the loader installs. The kernel reconstructs the same
+	 * insns || metadata at BPF_PROG_LOAD time (excl_map_fd) and verifies
+	 * it, so the loader need not check the metadata itself.
+	 */
+	data_sz = (size_t)opts->insns_sz + opts->data_sz;
+	data = malloc(data_sz);
+	if (!data) {
+		err = -ENOMEM;
+		goto cleanup;
+	}
+	memcpy(data, opts->insns, opts->insns_sz);
+	if (opts->data_sz)
+		memcpy((char *)data + opts->insns_sz, opts->data, opts->data_sz);
+
+	bd_in = BIO_new_mem_buf(data, data_sz);
 	if (!bd_in) {
 		err = -ENOMEM;
 		goto cleanup;
@@ -212,6 +230,7 @@ cleanup:
 	X509_free(x509);
 	EVP_PKEY_free(private_key);
 	BIO_free(bd_in);
+	free(data);
 	DISPLAY_OSSL_ERR(err < 0);
 	return err;
 }
