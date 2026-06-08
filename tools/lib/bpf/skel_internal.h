@@ -320,25 +320,6 @@ static inline int skel_link_create(int prog_fd, int target_fd,
 	return skel_sys_bpf(BPF_LINK_CREATE, &attr, attr_sz);
 }
 
-static inline int skel_obj_get_info_by_fd(int fd)
-{
-	const size_t attr_sz = offsetofend(union bpf_attr, info);
-	__u8 sha[SHA256_DIGEST_LENGTH];
-	struct bpf_map_info info;
-	__u32 info_len = sizeof(info);
-	union bpf_attr attr;
-
-	memset(&info, 0, sizeof(info));
-	info.hash = (long) &sha;
-	info.hash_size = SHA256_DIGEST_LENGTH;
-
-	memset(&attr, 0, attr_sz);
-	attr.info.bpf_fd = fd;
-	attr.info.info = (long) &info;
-	attr.info.info_len = info_len;
-	return skel_sys_bpf(BPF_OBJ_GET_INFO_BY_FD, &attr, attr_sz);
-}
-
 static inline int skel_map_freeze(int fd)
 {
 	const size_t attr_sz = offsetofend(union bpf_attr, map_fd);
@@ -357,7 +338,7 @@ static inline int skel_map_freeze(int fd)
 
 static inline int bpf_load_and_run(struct bpf_load_and_run_opts *opts)
 {
-	const size_t prog_load_attr_sz = offsetofend(union bpf_attr, keyring_id);
+	const size_t prog_load_attr_sz = offsetofend(union bpf_attr, excl_map_fd);
 	const size_t test_run_attr_sz = offsetofend(union bpf_attr, test);
 	int map_fd = -1, prog_fd = -1, key = 0, err;
 	union bpf_attr attr;
@@ -378,15 +359,15 @@ static inline int bpf_load_and_run(struct bpf_load_and_run_opts *opts)
 	}
 
 #ifndef __KERNEL__
+	/*
+	 * The loader metadata lives in this map. For a signed loader its
+	 * contents are covered by the program signature and verified by the
+	 * kernel at load time (see attr.excl_map_fd below), which requires the
+	 * map to be frozen so the bytes cannot change before the loader runs.
+	 */
 	err = skel_map_freeze(map_fd);
 	if (err < 0) {
 		opts->errstr = "failed to freeze map";
-		set_err;
-		goto out;
-	}
-	err = skel_obj_get_info_by_fd(map_fd);
-	if (err < 0) {
-		opts->errstr = "failed to fetch obj info";
 		set_err;
 		goto out;
 	}
@@ -400,6 +381,13 @@ static inline int bpf_load_and_run(struct bpf_load_and_run_opts *opts)
 #ifndef __KERNEL__
 	attr.signature = (long) opts->signature;
 	attr.signature_size = opts->signature_sz;
+	/*
+	 * Bind the metadata map to the signature: the kernel appends the
+	 * frozen map contents to the instructions when verifying, so the
+	 * signature covers insns || metadata.
+	 */
+	if (opts->signature)
+		attr.excl_map_fd = map_fd;
 #else
 	if (opts->signature || opts->signature_sz)
 		pr_warn("signatures are not supported from bpf_preload\n");
