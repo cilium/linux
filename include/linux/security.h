@@ -2305,6 +2305,7 @@ extern int security_bpf_map_create(struct bpf_map *map, union bpf_attr *attr,
 extern void security_bpf_map_free(struct bpf_map *map);
 extern int security_bpf_prog_load(struct bpf_prog *prog, union bpf_attr *attr,
 				  struct bpf_token *token, bool kernel);
+extern int security_bpf_prog_load_post_integrity(struct bpf_prog *prog);
 extern void security_bpf_prog_free(struct bpf_prog *prog);
 extern int security_bpf_token_create(struct bpf_token *token, union bpf_attr *attr,
 				     const struct path *path);
@@ -2339,6 +2340,11 @@ static inline void security_bpf_map_free(struct bpf_map *map)
 
 static inline int security_bpf_prog_load(struct bpf_prog *prog, union bpf_attr *attr,
 					 struct bpf_token *token, bool kernel)
+{
+	return 0;
+}
+
+static inline int security_bpf_prog_load_post_integrity(struct bpf_prog *prog)
 {
 	return 0;
 }

@@ -3269,6 +3269,14 @@ static int bpf_prog_load(union bpf_attr *attr, bpfptr_t uattr, struct bpf_log_at
 		err = bpf_prog_check_excl_map(prog, excl_map);
 		if (err < 0)
 			goto free_used_maps;
+		/*
+		 * Metadata integrity is now fully established: the signature
+		 * covered insns || metadata and the map is bound to this
+		 * program. Let policy LSMs gate on that verdict.
+		 */
+		err = security_bpf_prog_load_post_integrity(prog);
+		if (err < 0)
+			goto free_used_maps;
 		bpf_map_put(excl_map);
 		excl_map = NULL;
 	}
