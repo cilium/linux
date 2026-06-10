@@ -34,16 +34,11 @@ from lib.py import KsftSkipEx, CmdExitFailure
 
 
 def _create_netkit_pair(cfg, rxqueues=2):
-    if cfg._nk_host_ifname:
-        cmd(f"ip link del dev {cfg._nk_host_ifname}", fail=False)
-        cfg._nk_host_ifname = None
+    if cfg.nk_host_ifname:
+        cmd(f"ip link del dev {cfg.nk_host_ifname}", fail=False)
+        cfg.nk_host_ifname = None
         cfg.nk_guest_ifname = None
-    if getattr(cfg, "_tc_attached", False):
-        cmd(
-            f"tc filter del dev {cfg.ifname} ingress pref {cfg._bpf_prog_pref}",
-            fail=False,
-        )
-        cfg._tc_attached = False
+    cfg.detach_bpf()
 
     all_links = ip("-d link show", json=True)
     old_idxs = {
@@ -79,17 +74,17 @@ def _create_netkit_pair(cfg, rxqueues=2):
         raise KsftSkipEx("Failed to create netkit pair")
 
     nk_links.sort(key=lambda x: x["ifindex"])
-    cfg._nk_host_ifname = nk_links[1]["ifname"]
+    cfg.nk_host_ifname = nk_links[1]["ifname"]
     cfg.nk_guest_ifname = nk_links[0]["ifname"]
     cfg.nk_host_ifindex = nk_links[1]["ifindex"]
     cfg.nk_guest_ifindex = nk_links[0]["ifindex"]
 
     ip(f"link set dev {cfg.nk_guest_ifname} netns {cfg.netns.name}")
-    ip(f"link set dev {cfg._nk_host_ifname} up")
-    ip(f"-6 addr add fe80::1/64 dev {cfg._nk_host_ifname} nodad")
+    ip(f"link set dev {cfg.nk_host_ifname} up")
+    ip(f"-6 addr add fe80::1/64 dev {cfg.nk_host_ifname} nodad")
     ip(
         f"-6 route add {cfg.nk_guest_ipv6}/128 via fe80::2 "
-        f"dev {cfg._nk_host_ifname}"
+        f"dev {cfg.nk_host_ifname}"
     )
     ip(f"link set dev {cfg.nk_guest_ifname} up", ns=cfg.netns)
     ip(f"-6 addr add fe80::2/64 dev {cfg.nk_guest_ifname}", ns=cfg.netns)
@@ -102,7 +97,7 @@ def _create_netkit_pair(cfg, rxqueues=2):
         ns=cfg.netns,
     )
 
-    cfg._attach_bpf()
+    cfg.attach_bpf()
 
 
 def _setup_lease(cfg, rxqueues=2):
@@ -135,9 +130,9 @@ def _setup_lease(cfg, rxqueues=2):
 
 
 def _teardown_netkit(cfg):
-    if cfg._nk_host_ifname:
-        cmd(f"ip link del dev {cfg._nk_host_ifname}", fail=False)
-        cfg._nk_host_ifname = None
+    if cfg.nk_host_ifname:
+        cmd(f"ip link del dev {cfg.nk_host_ifname}", fail=False)
+        cfg.nk_host_ifname = None
         cfg.nk_guest_ifname = None
 
 
@@ -320,9 +315,9 @@ def test_destroy(cfg) -> None:
     kill_timer = threading.Timer(1, rx_proc.proc.terminate)
     kill_timer.start()
 
-    ip(f"link del dev {cfg._nk_host_ifname}")
+    ip(f"link del dev {cfg.nk_host_ifname}")
     kill_timer.join()
-    cfg._nk_host_ifname = None
+    cfg.nk_host_ifname = None
     cfg.nk_guest_ifname = None
 
     queue_info = netdevnl.queue_get(
