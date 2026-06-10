@@ -3049,6 +3049,8 @@ struct bpf_verifier_env *bpf_prep_env(struct bpf_prog **fp, union bpf_attr *attr
 				      bpfptr_t uattr, struct bpf_log_attr *attr_log);
 int bpf_free_env(struct bpf_verifier_env *env, struct bpf_log_attr *attr_log,
 		 int err);
+int bpf_prog_verify_signature(struct bpf_verifier_env *env, union bpf_attr *attr,
+			      bool is_kernel);
 int bpf_check(struct bpf_verifier_env *env, struct bpf_prog **fp,
 	      union bpf_attr *attr, bpfptr_t uattr, struct bpf_log_attr *attr_log);
 
