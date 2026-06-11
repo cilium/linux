@@ -15,6 +15,7 @@ endif
 
 TEST_GEN_FILES := \
 	$(COND_GEN_FILES) \
+	nk_xsk \
 # end of TEST_GEN_FILES
 
 TEST_PROGS = \
