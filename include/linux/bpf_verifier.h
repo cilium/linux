@@ -898,6 +898,12 @@ struct bpf_scc_info {
 
 struct bpf_liveness;
 
+/* one fd_array slot resolved to its object; exactly one of map/btf is set */
+struct bpf_fd_array {
+	struct bpf_map *map;
+	struct btf *btf;
+};
+
 /* single container for all structs
  * one verifier_env per bpf_check() call
  */
@@ -989,7 +995,9 @@ struct bpf_verifier_env {
 	u32 free_list_size;
 	u32 explored_states_size;
 	u32 num_backedges;
-	bpfptr_t fd_array;
+	struct bpf_fd_array *fd_array;	/* per-slot resolved map/BTF, by fd_array position */
+	bpfptr_t fd_array_raw;		/* program's fd_array, for resolving entries lazily */
+	u32 fd_array_cnt;		/* number of slots in fd_array */
 
 	/* bit mask to keep track of whether a register has been accessed
 	 * since the last time the function state was printed

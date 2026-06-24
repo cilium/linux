@@ -2509,20 +2509,35 @@ static struct btf *__find_kfunc_desc_btf(struct bpf_verifier_env *env,
 			return ERR_PTR(-E2BIG);
 		}
 
-		if (bpfptr_is_null(env->fd_array)) {
+		if (!env->fd_array) {
 			verbose(env, "kfunc offset > 0 without fd_array is invalid\n");
 			return ERR_PTR(-EPROTO);
 		}
 
-		if (copy_from_bpfptr_offset(&btf_fd, env->fd_array,
-					    offset * sizeof(btf_fd),
-					    sizeof(btf_fd)))
-			return ERR_PTR(-EFAULT);
+		if ((u32)offset >= env->fd_array_cnt) {
+			verbose(env, "kfunc fd_idx %d out of bounds, fd_array size is %u\n",
+				offset, env->fd_array_cnt);
+			return ERR_PTR(-EINVAL);
+		}
 
-		btf = btf_get_by_fd(btf_fd);
-		if (IS_ERR(btf)) {
-			verbose(env, "invalid module BTF fd specified\n");
-			return btf;
+		if (env->fd_array[offset].btf) {
+			btf = env->fd_array[offset].btf;
+			btf_get(btf);
+		} else if (env->fd_array[offset].map) {
+			verbose(env, "kfunc fd_idx %d is a map, not a module BTF\n",
+				offset);
+			return ERR_PTR(-EINVAL);
+		} else {
+			/* sparse fd_array: resolve on first reference */
+			if (copy_from_bpfptr_offset(&btf_fd, env->fd_array_raw,
+						    (size_t)offset * sizeof(btf_fd),
+						    sizeof(btf_fd)))
+				return ERR_PTR(-EFAULT);
+			btf = btf_get_by_fd(btf_fd);
+			if (IS_ERR(btf)) {
+				verbose(env, "invalid module BTF fd specified\n");
+				return btf;
+			}
 		}
 
 		if (!btf_is_module(btf)) {
@@ -17874,6 +17889,36 @@ static int add_used_map(struct bpf_verifier_env *env, int fd)
 	return __add_used_map(env, map);
 }
 
+static struct bpf_map *fd_array_get_map(struct bpf_verifier_env *env, u32 idx)
+{
+	int fd, map_idx;
+
+	if (!env->fd_array) {
+		verbose(env, "fd_idx without fd_array is invalid\n");
+		return ERR_PTR(-EPROTO);
+	}
+	if (idx >= env->fd_array_cnt) {
+		verbose(env, "fd_idx %u out of bounds, fd_array_cnt %u\n",
+			idx, env->fd_array_cnt);
+		return ERR_PTR(-EINVAL);
+	}
+	if (env->fd_array[idx].map)
+		return env->fd_array[idx].map;
+	if (env->fd_array[idx].btf) {
+		verbose(env, "fd_idx %u is a BTF, not a map\n", idx);
+		return ERR_PTR(-EINVAL);
+	}
+
+	if (copy_from_bpfptr_offset(&fd, env->fd_array_raw,
+				    (size_t)idx * sizeof(fd), sizeof(fd)))
+		return ERR_PTR(-EFAULT);
+	map_idx = add_used_map(env, fd);
+	if (map_idx < 0)
+		return ERR_PTR(map_idx);
+	env->fd_array[idx].map = env->used_maps[map_idx];
+	return env->fd_array[idx].map;
+}
+
 static int check_alu_fields(struct bpf_verifier_env *env, struct bpf_insn *insn)
 {
 	u8 class = BPF_CLASS(insn->code);
@@ -18143,21 +18188,17 @@ static int check_and_resolve_insns(struct bpf_verifier_env *env)
 			switch (insn[0].src_reg) {
 			case BPF_PSEUDO_MAP_IDX_VALUE:
 			case BPF_PSEUDO_MAP_IDX:
-				if (bpfptr_is_null(env->fd_array)) {
-					verbose(env, "fd_idx without fd_array is invalid\n");
-					return -EPROTO;
-				}
-				if (copy_from_bpfptr_offset(&fd, env->fd_array,
-							    insn[0].imm * sizeof(fd),
-							    sizeof(fd)))
-					return -EFAULT;
+				map = fd_array_get_map(env, insn[0].imm);
+				if (IS_ERR(map))
+					return PTR_ERR(map);
+				map_idx = __add_used_map(env, map);
 				break;
 			default:
 				fd = insn[0].imm;
+				map_idx = add_used_map(env, fd);
 				break;
 			}
 
-			map_idx = add_used_map(env, fd);
 			if (map_idx < 0)
 				return map_idx;
 			map = env->used_maps[map_idx];
@@ -19432,7 +19473,7 @@ struct btf *bpf_get_btf_vmlinux(void)
  * this case expect that every file descriptor in the array is either a map or
  * a BTF. Everything else is considered to be trash.
  */
-static int add_fd_from_fd_array(struct bpf_verifier_env *env, int fd)
+static int add_fd_from_fd_array(struct bpf_verifier_env *env, u32 idx, int fd)
 {
 	struct bpf_map *map;
 	struct btf *btf;
@@ -19444,51 +19485,61 @@ static int add_fd_from_fd_array(struct bpf_verifier_env *env, int fd)
 		err = __add_used_map(env, map);
 		if (err < 0)
 			return err;
+		env->fd_array[idx].map = map;
 		return 0;
 	}
 
 	btf = __btf_get_by_fd(f);
 	if (!IS_ERR(btf)) {
 		btf_get(btf);
-		return __add_used_btf(env, btf);
+		err = __add_used_btf(env, btf);
+		if (err < 0)
+			return err;
+		env->fd_array[idx].btf = btf;
+		return 0;
 	}
 
 	verbose(env, "fd %d is not pointing to valid bpf_map or btf\n", fd);
 	return PTR_ERR(map);
 }
 
-static int process_fd_array(struct bpf_verifier_env *env, union bpf_attr *attr, bpfptr_t uattr)
+#define MAX_FD_ARRAY_CNT (MAX_USED_MAPS + MAX_KFUNC_BTFS)
+
+static int process_fd_array(struct bpf_verifier_env *env,
+			    union bpf_attr *attr, bpfptr_t uattr)
 {
-	size_t size = sizeof(int);
-	int ret;
-	int fd;
-	u32 i;
+	bpfptr_t fd_array = make_bpfptr(attr->fd_array, uattr.is_kernel);
+	bool continuous = attr->fd_array_cnt != 0;
+	int fd, ret;
+	u32 i, cnt;
 
-	env->fd_array = make_bpfptr(attr->fd_array, uattr.is_kernel);
-
-	/*
-	 * The only difference between old (no fd_array_cnt is given) and new
-	 * APIs is that in the latter case the fd_array is expected to be
-	 * continuous and is scanned for map fds right away
-	 */
-	if (!attr->fd_array_cnt)
+	if (bpfptr_is_null(fd_array))
 		return 0;
 
-	/* Check for integer overflow */
-	if (attr->fd_array_cnt >= (U32_MAX / size)) {
-		verbose(env, "fd_array_cnt is too big (%u)\n", attr->fd_array_cnt);
-		return -EINVAL;
+	cnt = continuous ? attr->fd_array_cnt : MAX_FD_ARRAY_CNT;
+	if (cnt > MAX_FD_ARRAY_CNT) {
+		verbose(env, "fd_array has too many entries (%u, max %u)\n",
+			cnt, MAX_FD_ARRAY_CNT);
+		return -E2BIG;
 	}
 
-	for (i = 0; i < attr->fd_array_cnt; i++) {
-		if (copy_from_bpfptr_offset(&fd, env->fd_array, i * size, size))
-			return -EFAULT;
+	env->fd_array = kvcalloc(cnt, sizeof(*env->fd_array), GFP_KERNEL);
+	if (!env->fd_array)
+		return -ENOMEM;
 
-		ret = add_fd_from_fd_array(env, fd);
+	env->fd_array_cnt = cnt;
+	env->fd_array_raw = fd_array;
+	if (!continuous)
+		return 0;
+
+	for (i = 0; i < cnt; i++) {
+		if (copy_from_bpfptr_offset(&fd, fd_array,
+					    (size_t)i * sizeof(fd), sizeof(fd)))
+			return -EFAULT;
+		ret = add_fd_from_fd_array(env, i, fd);
 		if (ret)
 			return ret;
 	}
-
 	return 0;
 }
 
@@ -19990,6 +20041,7 @@ err_unlock:
 	bpf_clear_insn_aux_data(env, 0, env->prog->len);
 	vfree(env->insn_aux_data);
 err_free_env:
+	kvfree(env->fd_array);
 	bpf_stack_liveness_free(env);
 	kvfree(env->cfg.insn_postorder);
 	kvfree(env->scc_info);
