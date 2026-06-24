@@ -2509,15 +2509,18 @@ static struct btf *__find_kfunc_desc_btf(struct bpf_verifier_env *env,
 			return ERR_PTR(-E2BIG);
 		}
 
-		if (bpfptr_is_null(env->fd_array)) {
+		if (!env->fd_array) {
 			verbose(env, "kfunc offset > 0 without fd_array is invalid\n");
 			return ERR_PTR(-EPROTO);
 		}
 
-		if (copy_from_bpfptr_offset(&btf_fd, env->fd_array,
-					    offset * sizeof(btf_fd),
-					    sizeof(btf_fd)))
-			return ERR_PTR(-EFAULT);
+		if ((u32)offset >= env->fd_array_cnt) {
+			verbose(env, "kfunc fd_idx %d out of bounds, fd_array_cnt %u\n",
+				offset, env->fd_array_cnt);
+			return ERR_PTR(-EINVAL);
+		}
+
+		btf_fd = env->fd_array[offset];
 
 		btf = btf_get_by_fd(btf_fd);
 		if (IS_ERR(btf)) {
@@ -18143,14 +18146,16 @@ static int check_and_resolve_insns(struct bpf_verifier_env *env)
 			switch (insn[0].src_reg) {
 			case BPF_PSEUDO_MAP_IDX_VALUE:
 			case BPF_PSEUDO_MAP_IDX:
-				if (bpfptr_is_null(env->fd_array)) {
+				if (!env->fd_array) {
 					verbose(env, "fd_idx without fd_array is invalid\n");
 					return -EPROTO;
 				}
-				if (copy_from_bpfptr_offset(&fd, env->fd_array,
-							    insn[0].imm * sizeof(fd),
-							    sizeof(fd)))
-					return -EFAULT;
+				if ((u32)insn[0].imm >= env->fd_array_cnt) {
+					verbose(env, "fd_idx %d out of bounds, fd_array_cnt %u\n",
+						insn[0].imm, env->fd_array_cnt);
+					return -EINVAL;
+				}
+				fd = env->fd_array[insn[0].imm];
 				break;
 			default:
 				fd = insn[0].imm;
@@ -19457,34 +19462,98 @@ static int add_fd_from_fd_array(struct bpf_verifier_env *env, int fd)
 	return PTR_ERR(map);
 }
 
-static int process_fd_array(struct bpf_verifier_env *env, union bpf_attr *attr, bpfptr_t uattr)
+/*
+ * A program binds at most MAX_USED_MAPS maps and resolves at most
+ * MAX_KFUNC_BTFS module BTFs, all reached through the fd_array, so a
+ * well-formed fd_array never needs more slots than this. Cap the kernel-side
+ * snapshot accordingly; it also bounds how much a single load can pin.
+ */
+#define MAX_FD_ARRAY_CNT	(MAX_USED_MAPS + MAX_KFUNC_BTFS)
+
+/*
+ * A sparse fd_array (loaded without fd_array_cnt) carries its map and module
+ * BTF fds at the indices the program's BPF_PSEUDO_MAP_IDX and kfunc call
+ * instructions point to. Return the number of slots that have to be snapshot,
+ * i.e. the highest index any such instruction references plus one, or 0 if the
+ * program references none.
+ */
+static u32 fd_array_referenced_cnt(const struct bpf_prog *prog)
 {
-	size_t size = sizeof(int);
-	int ret;
-	int fd;
-	u32 i;
+	const struct bpf_insn *insn = prog->insnsi;
+	u32 i, cnt = 0;
 
-	env->fd_array = make_bpfptr(attr->fd_array, uattr.is_kernel);
+	for (i = 0; i < prog->len; i++, insn++) {
+		u32 idx;
 
-	/*
-	 * The only difference between old (no fd_array_cnt is given) and new
-	 * APIs is that in the latter case the fd_array is expected to be
-	 * continuous and is scanned for map fds right away
-	 */
-	if (!attr->fd_array_cnt)
-		return 0;
+		if (insn->code == (BPF_LD | BPF_IMM | BPF_DW)) {
+			bool is_idx = insn->src_reg == BPF_PSEUDO_MAP_IDX ||
+				      insn->src_reg == BPF_PSEUDO_MAP_IDX_VALUE;
 
-	/* Check for integer overflow */
-	if (attr->fd_array_cnt >= (U32_MAX / size)) {
-		verbose(env, "fd_array_cnt is too big (%u)\n", attr->fd_array_cnt);
-		return -EINVAL;
+			idx = insn->imm;
+			i++, insn++;	/* skip the second half of the ldimm64 */
+			if (!is_idx)
+				continue;
+		} else if (insn->code == (BPF_JMP | BPF_CALL) &&
+			   insn->src_reg == BPF_PSEUDO_KFUNC_CALL &&
+			   insn->off > 0) {
+			idx = insn->off;
+		} else {
+			continue;
+		}
+		if (idx < U32_MAX)
+			cnt = max(cnt, idx + 1);
 	}
 
-	for (i = 0; i < attr->fd_array_cnt; i++) {
-		if (copy_from_bpfptr_offset(&fd, env->fd_array, i * size, size))
-			return -EFAULT;
+	return cnt;
+}
 
-		ret = add_fd_from_fd_array(env, fd);
+static int process_fd_array(struct bpf_verifier_env *env, union bpf_attr *attr, bpfptr_t uattr)
+{
+	bpfptr_t fd_array = make_bpfptr(attr->fd_array, uattr.is_kernel);
+	bool continuous = attr->fd_array_cnt != 0;
+	u32 i, cnt;
+	int ret;
+
+	if (bpfptr_is_null(fd_array))
+		return 0;
+
+	/*
+	 * The fd_array holds the map and module BTF fds the program binds. It
+	 * is read more than once during load: here, and again when the pseudo
+	 * map and kfunc references are resolved. Reading it from user memory
+	 * each time leaves a TOCTOU window, where a racing thread changes an
+	 * entry in between, so the verifier inspects one fd but binds another.
+	 * Snapshot the array into kernel memory once and work off that copy;
+	 * every later read then becomes a plain in-bounds array access.
+	 *
+	 * Both shapes fold into the same kernel-side representation: with an
+	 * fd_array_cnt the array is continuous and every entry is bound up
+	 * front, otherwise it is sparse and the entries are bound lazily as the
+	 * references are resolved, in which case the snapshot only has to span
+	 * the highest index the program can reference.
+	 */
+	cnt = continuous ? attr->fd_array_cnt : fd_array_referenced_cnt(env->prog);
+	if (!cnt)
+		return 0;
+	if (cnt > MAX_FD_ARRAY_CNT) {
+		verbose(env, "fd_array has too many entries (%u, max %u)\n",
+			cnt, MAX_FD_ARRAY_CNT);
+		return -E2BIG;
+	}
+
+	env->fd_array = kvmalloc_array(cnt, sizeof(*env->fd_array), GFP_KERNEL);
+	if (!env->fd_array)
+		return -ENOMEM;
+	if (copy_from_bpfptr(env->fd_array, fd_array,
+			     cnt * sizeof(*env->fd_array)))
+		return -EFAULT;
+	env->fd_array_cnt = cnt;
+
+	if (!continuous)
+		return 0;
+
+	for (i = 0; i < cnt; i++) {
+		ret = add_fd_from_fd_array(env, env->fd_array[i]);
 		if (ret)
 			return ret;
 	}
@@ -19990,6 +20059,7 @@ err_unlock:
 	bpf_clear_insn_aux_data(env, 0, env->prog->len);
 	vfree(env->insn_aux_data);
 err_free_env:
+	kvfree(env->fd_array);
 	bpf_stack_liveness_free(env);
 	kvfree(env->cfg.insn_postorder);
 	kvfree(env->scc_info);
