@@ -130,8 +130,9 @@ reuses the existing ``fd_array``:
 #. The loader is loaded with ``signature``/``signature_size``/``keyring_id``
    set, the metadata map referenced through ``fd_array``, and ``fd_array_cnt``
    set so the kernel knows the array's length.
-#. Signature verification runs inside the verifier (``bpf_check()``), once it
-   has resolved the ``fd_array`` entries into the program's ``used_maps``. The
+#. Signature verification runs at ``BPF_PROG_LOAD``, once the verifier
+   environment preparation (``bpf_prep_env()``) has resolved the ``fd_array``
+   entries into the program's ``used_maps``. The
    maps folded into the signature are therefore the very objects the program
    binds - a single resolution of ``fd_array``, not a separate read, so the
    verified bytes cannot be swapped for a different map after the check (no
@@ -225,8 +226,9 @@ loaded.
 Admission: ``security_bpf_prog_load()``
 ---------------------------------------
 
-This hook gates admission **for every load**, from a single call site inside the
-verifier (``bpf_check()``), before the main verification work. It runs after the
+This hook gates admission **for every load**, from its original call site in
+``bpf_prog_load()``, before the verifier (``bpf_check()``) runs and thus before
+any of the verifier's own state is allocated. It runs after the
 optional signature verification, so the verdict and keyring fields are final - the
 hook can see whether, and how strongly, the program was signed, which keyring
 validated it, the load ``attr``, the BPF token and whether the load came from the

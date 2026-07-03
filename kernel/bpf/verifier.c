@@ -19899,16 +19899,16 @@ static enum bpf_sig_keyring bpf_classify_keyring(s32 keyring_id)
 }
 
 /*
- * Verify the PKCS#7 signature of a loaded program. Called from bpf_check()
- * once the program's metadata maps have been resolved into used_maps, so
- * the exact maps folded into the signature are the ones the program binds.
+ * Verify the PKCS#7 signature of a loaded program. Called from bpf_prog_load()
+ * once bpf_prep_env() has resolved the program's metadata maps into used_maps,
+ * so the exact maps folded into the signature are the ones the program binds.
  *
  * The signature covers the instructions followed by the frozen contents of
  * each map, in @maps order: insns || map_0 || map_1 || [...]. On success the
  * verdict and keyring info are recorded on prog->aux.
  */
-static int bpf_prog_verify_signature(struct bpf_verifier_env *env,
-				     union bpf_attr *attr, bool is_kernel)
+int bpf_prog_verify_signature(struct bpf_verifier_env *env,
+			      union bpf_attr *attr, bool is_kernel)
 {
 	bpfptr_t usig = make_bpfptr(attr->signature, is_kernel);
 	struct bpf_dynptr_kern sig_ptr, data_ptr;
@@ -20017,40 +20017,37 @@ out:
 	return err;
 }
 
-int bpf_check(struct bpf_prog **prog, union bpf_attr *attr, bpfptr_t uattr,
-	      struct bpf_log_attr *attr_log)
+/*
+ * Prepare the verifier environment for a program load: allocate the env,
+ * initialize the verifier log, compute the program digest for a signed
+ * load and resolve the fd_array into the program's used maps and BTFs.
+ * This runs before the LSM admission hook so that a signature covering
+ * the program and its bound metadata maps can be verified before the
+ * hook fires, while everything sizable the verifier itself needs is only
+ * allocated after admission, in bpf_check().
+ *
+ * The returned env is either handed to bpf_check(), which owns and frees
+ * it, or torn down via bpf_free_env() when the load is aborted before
+ * reaching the verifier.
+ */
+struct bpf_verifier_env *bpf_prep_env(struct bpf_prog **prog, union bpf_attr *attr,
+				      bpfptr_t uattr, struct bpf_log_attr *attr_log)
 {
-	u64 start_time = ktime_get_ns();
 	struct bpf_verifier_env *env;
-	int i, len, ret = -EINVAL, err;
-	bool is_priv;
-
-	BTF_TYPE_EMIT(enum bpf_features);
+	int ret, err;
 
 	/* no program is valid */
 	if (ARRAY_SIZE(bpf_verifier_ops) == 0)
-		return -EINVAL;
+		return ERR_PTR(-EINVAL);
 
 	/* 'struct bpf_verifier_env' can be global, but since it's not small,
-	 * allocate/free it every time bpf_check() is called
+	 * allocate/free it every time bpf_prep_env() is called
 	 */
 	env = kvzalloc_obj(struct bpf_verifier_env, GFP_KERNEL_ACCOUNT);
 	if (!env)
-		return -ENOMEM;
+		return ERR_PTR(-ENOMEM);
 
 	env->bt.env = env;
-
-	len = (*prog)->len;
-	env->insn_aux_data =
-		vzalloc(array_size(sizeof(struct bpf_insn_aux_data), len));
-	ret = -ENOMEM;
-	if (!env->insn_aux_data)
-		goto err_free_env;
-	for (i = 0; i < len; i++)
-		env->insn_aux_data[i].orig_idx = i;
-	env->succ = bpf_iarray_realloc(NULL, 2);
-	if (!env->succ)
-		goto err_free_env;
 	env->prog = *prog;
 	env->ops = bpf_verifier_ops[env->prog->type];
 
@@ -20058,8 +20055,63 @@ int bpf_check(struct bpf_prog **prog, union bpf_attr *attr, bpfptr_t uattr,
 	env->allow_uninit_stack = bpf_allow_uninit_stack(env->prog->aux->token);
 	env->bypass_spec_v1 = bpf_bypass_spec_v1(env->prog->aux->token);
 	env->bypass_spec_v4 = bpf_bypass_spec_v4(env->prog->aux->token);
-	env->bpf_capable = is_priv = bpf_token_capable(env->prog->aux->token, CAP_BPF);
+	env->bpf_capable = bpf_token_capable(env->prog->aux->token, CAP_BPF);
 	env->signature = attr->signature;
+
+	/* user could have requested verbose verifier output
+	 * and supplied buffer to store the verification trace
+	 */
+	ret = bpf_vlog_init(&env->log, attr_log->level, attr_log->ubuf,
+			    attr_log->size);
+	if (ret) {
+		kvfree(env);
+		return ERR_PTR(ret);
+	}
+	if (env->signature) {
+		ret = bpf_prog_calc_tag(env->prog);
+		if (ret < 0)
+			goto err_free;
+	}
+
+	ret = process_fd_array(env, attr, uattr);
+	if (ret)
+		goto err_free;
+
+	return env;
+err_free:
+	err = bpf_free_env(env, attr_log);
+	if (err)
+		ret = err;
+	return ERR_PTR(ret);
+}
+
+/*
+ * Tear down an env prepared by bpf_prep_env() for a load which is aborted
+ * before reaching bpf_check(): finalize the verifier log and drop the
+ * references taken while resolving the fd_array. bpf_check() must not be
+ * called with the env afterwards.
+ */
+int bpf_free_env(struct bpf_verifier_env *env, struct bpf_log_attr *attr_log)
+{
+	int err;
+
+	err = bpf_log_attr_finalize(attr_log, &env->log);
+	release_insn_arrays(env);
+	release_maps(env);
+	release_btfs(env);
+	kvfree(env->fd_array);
+	kvfree(env);
+	return err;
+}
+
+int bpf_check(struct bpf_verifier_env *env, struct bpf_prog **prog,
+	      union bpf_attr *attr, bpfptr_t uattr, struct bpf_log_attr *attr_log)
+{
+	u64 start_time = ktime_get_ns();
+	int i, len, ret = -EINVAL, err;
+	bool is_priv = env->bpf_capable;
+
+	BTF_TYPE_EMIT(enum bpf_features);
 
 	bpf_get_btf_vmlinux();
 
@@ -20067,31 +20119,16 @@ int bpf_check(struct bpf_prog **prog, union bpf_attr *attr, bpfptr_t uattr,
 	if (!is_priv)
 		mutex_lock(&bpf_verifier_lock);
 
-	/* user could have requested verbose verifier output
-	 * and supplied buffer to store the verification trace
-	 */
-	ret = bpf_vlog_init(&env->log, attr_log->level, attr_log->ubuf, attr_log->size);
-	if (ret)
-		goto err_unlock;
-	if (env->signature) {
-		ret = bpf_prog_calc_tag(env->prog);
-		if (ret < 0)
-			goto skip_full_check;
-	}
-
-	ret = process_fd_array(env, attr, uattr);
-	if (ret)
+	len = env->prog->len;
+	env->insn_aux_data =
+		vzalloc(array_size(sizeof(struct bpf_insn_aux_data), len));
+	ret = -ENOMEM;
+	if (!env->insn_aux_data)
 		goto skip_full_check;
-
-	if (env->signature) {
-		ret = bpf_prog_verify_signature(env, attr, uattr.is_kernel);
-		if (ret)
-			goto skip_full_check;
-	}
-
-	ret = security_bpf_prog_load(env->prog, attr, env->prog->aux->token,
-				     uattr.is_kernel);
-	if (ret)
+	for (i = 0; i < len; i++)
+		env->insn_aux_data[i].orig_idx = i;
+	env->succ = bpf_iarray_realloc(NULL, 2);
+	if (!env->succ)
 		goto skip_full_check;
 
 	mark_verifier_state_clean(env);
@@ -20315,12 +20352,11 @@ err_release_maps:
 	*prog = env->prog;
 
 	module_put(env->attach_btf_mod);
-err_unlock:
+
 	if (!is_priv)
 		mutex_unlock(&bpf_verifier_lock);
 	bpf_clear_insn_aux_data(env, 0, env->prog->len);
 	vfree(env->insn_aux_data);
-err_free_env:
 	kvfree(env->fd_array);
 	bpf_stack_liveness_free(env);
 	kvfree(env->cfg.insn_postorder);

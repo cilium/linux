@@ -2909,6 +2909,7 @@ static int bpf_prog_load(union bpf_attr *attr, bpfptr_t uattr, struct bpf_log_at
 {
 	enum bpf_prog_type type = attr->prog_type;
 	struct bpf_prog *prog, *dst_prog = NULL;
+	struct bpf_verifier_env *env;
 	struct btf *attach_btf = NULL;
 	struct bpf_token *token = NULL;
 	bool bpf_cap;
@@ -3116,8 +3117,32 @@ static int bpf_prog_load(union bpf_attr *attr, bpfptr_t uattr, struct bpf_log_at
 	if (err < 0)
 		goto free_prog;
 
+	/*
+	 * Prepare the verifier env: this resolves the program's fd_array
+	 * into its used maps, so that an optional signature covering the
+	 * instructions and the bound metadata maps is fully verified before
+	 * the LSM admission hook fires. The verifier itself runs after the
+	 * hook has admitted the load.
+	 */
+	env = bpf_prep_env(&prog, attr, uattr, attr_log);
+	if (IS_ERR(env)) {
+		err = PTR_ERR(env);
+		goto free_prog;
+	}
+
+	if (attr->signature) {
+		err = bpf_prog_verify_signature(env, attr, uattr.is_kernel);
+		if (err)
+			goto free_env;
+	}
+
+	err = security_bpf_prog_load(prog, attr, prog->aux->token,
+				     uattr.is_kernel);
+	if (err)
+		goto free_env;
+
 	/* run eBPF verifier */
-	err = bpf_check(&prog, attr, uattr, attr_log);
+	err = bpf_check(env, &prog, attr, uattr, attr_log);
 	if (err < 0)
 		goto free_used_maps;
 
@@ -3160,6 +3185,8 @@ free_used_maps:
 	__bpf_prog_put_noref(prog, prog->aux->real_func_cnt);
 	return err;
 
+free_env:
+	err = bpf_free_env(env, attr_log) ?: err;
 free_prog:
 	free_uid(prog->aux->user);
 	if (prog->aux->attach_btf)
