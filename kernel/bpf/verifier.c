@@ -19859,40 +19859,20 @@ int bpf_fixup_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 	return 0;
 }
 
-int bpf_check(struct bpf_prog **prog, union bpf_attr *attr, bpfptr_t uattr,
-	      struct bpf_log_attr *attr_log)
+struct bpf_verifier_env *bpf_prep_env(struct bpf_prog **prog, union bpf_attr *attr,
+				      bpfptr_t uattr, struct bpf_log_attr *attr_log)
 {
-	u64 start_time = ktime_get_ns();
 	struct bpf_verifier_env *env;
-	int i, len, ret = -EINVAL, err;
-	bool is_priv;
+	int ret, err;
 
-	BTF_TYPE_EMIT(enum bpf_features);
-
-	/* no program is valid */
 	if (ARRAY_SIZE(bpf_verifier_ops) == 0)
-		return -EINVAL;
+		return ERR_PTR(-EINVAL);
 
-	/* 'struct bpf_verifier_env' can be global, but since it's not small,
-	 * allocate/free it every time bpf_check() is called
-	 */
 	env = kvzalloc_obj(struct bpf_verifier_env, GFP_KERNEL_ACCOUNT);
 	if (!env)
-		return -ENOMEM;
+		return ERR_PTR(-ENOMEM);
 
 	env->bt.env = env;
-
-	len = (*prog)->len;
-	env->insn_aux_data =
-		vzalloc(array_size(sizeof(struct bpf_insn_aux_data), len));
-	ret = -ENOMEM;
-	if (!env->insn_aux_data)
-		goto err_free_env;
-	for (i = 0; i < len; i++)
-		env->insn_aux_data[i].orig_idx = i;
-	env->succ = bpf_iarray_realloc(NULL, 2);
-	if (!env->succ)
-		goto err_free_env;
 	env->prog = *prog;
 	env->ops = bpf_verifier_ops[env->prog->type];
 
@@ -19900,7 +19880,47 @@ int bpf_check(struct bpf_prog **prog, union bpf_attr *attr, bpfptr_t uattr,
 	env->allow_uninit_stack = bpf_allow_uninit_stack(env->prog->aux->token);
 	env->bypass_spec_v1 = bpf_bypass_spec_v1(env->prog->aux->token);
 	env->bypass_spec_v4 = bpf_bypass_spec_v4(env->prog->aux->token);
-	env->bpf_capable = is_priv = bpf_token_capable(env->prog->aux->token, CAP_BPF);
+	env->bpf_capable = bpf_token_capable(env->prog->aux->token, CAP_BPF);
+
+	ret = bpf_vlog_init(&env->log, attr_log->level, attr_log->ubuf,
+			    attr_log->size);
+	if (ret) {
+		kvfree(env);
+		return ERR_PTR(ret);
+	}
+
+	ret = process_fd_array(env, attr, uattr);
+	if (ret)
+		goto err_free;
+	return env;
+err_free:
+	err = bpf_free_env(env, attr_log);
+	if (err)
+		ret = err;
+	return ERR_PTR(ret);
+}
+
+int bpf_free_env(struct bpf_verifier_env *env, struct bpf_log_attr *attr_log)
+{
+	int err;
+
+	err = bpf_log_attr_finalize(attr_log, &env->log);
+	release_insn_arrays(env);
+	release_maps(env);
+	release_btfs(env);
+	kvfree(env->fd_array);
+	kvfree(env);
+	return err;
+}
+
+int bpf_check(struct bpf_verifier_env *env, struct bpf_prog **prog,
+	      union bpf_attr *attr, bpfptr_t uattr, struct bpf_log_attr *attr_log)
+{
+	u64 start_time = ktime_get_ns();
+	int i, len, ret = -EINVAL, err;
+	bool is_priv = env->bpf_capable;
+
+	BTF_TYPE_EMIT(enum bpf_features);
 
 	bpf_get_btf_vmlinux();
 
@@ -19908,15 +19928,16 @@ int bpf_check(struct bpf_prog **prog, union bpf_attr *attr, bpfptr_t uattr,
 	if (!is_priv)
 		mutex_lock(&bpf_verifier_lock);
 
-	/* user could have requested verbose verifier output
-	 * and supplied buffer to store the verification trace
-	 */
-	ret = bpf_vlog_init(&env->log, attr_log->level, attr_log->ubuf, attr_log->size);
-	if (ret)
-		goto err_unlock;
-
-	ret = process_fd_array(env, attr, uattr);
-	if (ret)
+	len = env->prog->len;
+	env->insn_aux_data =
+		vzalloc(array_size(sizeof(struct bpf_insn_aux_data), len));
+	ret = -ENOMEM;
+	if (!env->insn_aux_data)
+		goto skip_full_check;
+	for (i = 0; i < len; i++)
+		env->insn_aux_data[i].orig_idx = i;
+	env->succ = bpf_iarray_realloc(NULL, 2);
+	if (!env->succ)
 		goto skip_full_check;
 
 	mark_verifier_state_clean(env);
@@ -20140,12 +20161,11 @@ err_release_maps:
 	*prog = env->prog;
 
 	module_put(env->attach_btf_mod);
-err_unlock:
+
 	if (!is_priv)
 		mutex_unlock(&bpf_verifier_lock);
 	bpf_clear_insn_aux_data(env, 0, env->prog->len);
 	vfree(env->insn_aux_data);
-err_free_env:
 	kvfree(env->fd_array);
 	bpf_stack_liveness_free(env);
 	kvfree(env->cfg.insn_postorder);
