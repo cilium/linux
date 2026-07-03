@@ -444,6 +444,9 @@ void bpf_clear_insn_aux_data(struct bpf_verifier_env *env, int start, int len)
 	int end = start + len;
 	int i;
 
+	if (!aux_data)
+		return;
+
 	for (i = start; i < end; i++) {
 		if (aux_data[i].jt) {
 			kvfree(aux_data[i].jt);

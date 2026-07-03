@@ -3044,8 +3044,13 @@ int bpf_check_uarg_tail_zero(bpfptr_t uaddr, size_t expected_size,
 
 /* verify correctness of eBPF program */
 struct bpf_log_attr;
-int bpf_check(struct bpf_prog **fp, union bpf_attr *attr, bpfptr_t uattr,
-	      struct bpf_log_attr *attr_log);
+struct bpf_verifier_env;
+struct bpf_verifier_env *bpf_prep_env(struct bpf_prog **fp, union bpf_attr *attr,
+				      bpfptr_t uattr, struct bpf_log_attr *attr_log);
+int bpf_free_env(struct bpf_verifier_env *env, struct bpf_log_attr *attr_log,
+		 int err);
+int bpf_check(struct bpf_verifier_env *env, struct bpf_prog **fp,
+	      union bpf_attr *attr, bpfptr_t uattr, struct bpf_log_attr *attr_log);
 
 #ifndef CONFIG_BPF_JIT_ALWAYS_ON
 int bpf_patch_call_args(struct bpf_insn *insn, u32 stack_depth);

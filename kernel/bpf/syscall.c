@@ -2975,6 +2975,7 @@ static int bpf_prog_load(union bpf_attr *attr, bpfptr_t uattr, struct bpf_log_at
 	struct bpf_prog *prog, *dst_prog = NULL;
 	struct btf *attach_btf = NULL;
 	struct bpf_token *token = NULL;
+	struct bpf_verifier_env *env;
 	bool bpf_cap;
 	int err;
 	char license[128];
@@ -3189,12 +3190,21 @@ static int bpf_prog_load(union bpf_attr *attr, bpfptr_t uattr, struct bpf_log_at
 	if (err < 0)
 		goto free_prog;
 
+	env = bpf_prep_env(&prog, attr, uattr, attr_log);
+	if (IS_ERR(env)) {
+		err = PTR_ERR(env);
+		goto free_prog;
+	}
+
 	err = security_bpf_prog_load(prog, attr, token, uattr.is_kernel);
 	if (err)
-		goto free_prog;
+		goto free_env;
 
-	/* run eBPF verifier */
-	err = bpf_check(&prog, attr, uattr, attr_log);
+	/*
+	 * Run the BPF verifier, it internally consumes and releases
+	 * the env in any case.
+	 */
+	err = bpf_check(env, &prog, attr, uattr, attr_log);
 	if (err < 0)
 		goto free_used_maps;
 
@@ -3237,6 +3247,8 @@ free_used_maps:
 	__bpf_prog_put_noref(prog, prog->aux->real_func_cnt);
 	return err;
 
+free_env:
+	err = bpf_free_env(env, attr_log, err);
 free_prog:
 	free_uid(prog->aux->user);
 	if (prog->aux->attach_btf)
