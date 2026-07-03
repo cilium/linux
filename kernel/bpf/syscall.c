@@ -3129,7 +3129,8 @@ static int bpf_prog_load(union bpf_attr *attr, bpfptr_t uattr, struct bpf_log_at
 			goto free_env;
 	}
 
-	err = security_bpf_prog_load(prog, attr, token, uattr.is_kernel);
+	err = security_bpf_prog_load(prog, attr, prog->aux->token,
+				     uattr.is_kernel);
 	if (err)
 		goto free_env;
 
