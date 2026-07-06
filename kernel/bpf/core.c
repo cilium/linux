@@ -298,7 +298,7 @@ void __bpf_prog_free(struct bpf_prog *fp)
 	vfree(fp);
 }
 
-int bpf_prog_calc_tag(struct bpf_prog *fp)
+int bpf_prog_calc_tag(struct bpf_prog *fp, bool pseudos_resolved)
 {
 	size_t size = bpf_prog_insn_size(fp);
 	struct bpf_insn *dst;
@@ -310,14 +310,17 @@ int bpf_prog_calc_tag(struct bpf_prog *fp)
 		return -ENOMEM;
 
 	/* We need to take out the map fd for the digest calculation
-	 * since they are unstable from user space side.
+	 * since they are unstable from user space side. Once the pseudo
+	 * immediates have been resolved by the verifier, they carry
+	 * kernel pointers, thus take out all of them.
 	 */
 	for (i = 0, was_ld_map = false; i < fp->len; i++) {
 		dst[i] = fp->insnsi[i];
 		if (!was_ld_map &&
 		    dst[i].code == (BPF_LD | BPF_IMM | BPF_DW) &&
 		    (dst[i].src_reg == BPF_PSEUDO_MAP_FD ||
-		     dst[i].src_reg == BPF_PSEUDO_MAP_VALUE)) {
+		     dst[i].src_reg == BPF_PSEUDO_MAP_VALUE ||
+		     (pseudos_resolved && dst[i].src_reg != 0))) {
 			was_ld_map = true;
 			dst[i].imm = 0;
 		} else if (was_ld_map &&

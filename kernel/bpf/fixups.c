@@ -1097,7 +1097,7 @@ static int jit_subprogs(struct bpf_verifier_env *env)
 		       len * sizeof(struct bpf_insn));
 		func[i]->type = prog->type;
 		func[i]->len = len;
-		if (bpf_prog_calc_tag(func[i]))
+		if (bpf_prog_calc_tag(func[i], true))
 			goto out_free;
 		func[i]->is_func = 1;
 		func[i]->sleepable = prog->sleepable;

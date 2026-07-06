@@ -18239,7 +18239,7 @@ static int check_and_resolve_insns(struct bpf_verifier_env *env)
 	int insn_cnt = env->prog->len;
 	int i, err;
 
-	err = bpf_prog_calc_tag(env->prog);
+	err = bpf_prog_calc_tag(env->prog, false);
 	if (err)
 		return err;
 
@@ -20069,7 +20069,7 @@ int bpf_check(struct bpf_prog **prog, union bpf_attr *attr, bpfptr_t uattr,
 	if (ret)
 		goto err_free_env;
 	if (env->signature) {
-		ret = bpf_prog_calc_tag(env->prog);
+		ret = bpf_prog_calc_tag(env->prog, false);
 		if (ret < 0)
 			goto err_prep;
 	}
