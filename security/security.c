@@ -5455,6 +5455,9 @@ int security_bpf_token_capable(const struct bpf_token *token, int cap)
  */
 void security_bpf_map_free(struct bpf_map *map)
 {
+	if (!map->security)
+		return;
+
 	call_void_hook(bpf_map_free, map);
 	kfree(map->security);
 	map->security = NULL;
@@ -5468,6 +5471,9 @@ void security_bpf_map_free(struct bpf_map *map)
  */
 void security_bpf_prog_free(struct bpf_prog *prog)
 {
+	if (!prog->aux->security)
+		return;
+
 	call_void_hook(bpf_prog_free, prog);
 	kfree(prog->aux->security);
 	prog->aux->security = NULL;
@@ -5481,6 +5487,9 @@ void security_bpf_prog_free(struct bpf_prog *prog)
  */
 void security_bpf_token_free(struct bpf_token *token)
 {
+	if (!token->security)
+		return;
+
 	call_void_hook(bpf_token_free, token);
 	kfree(token->security);
 	token->security = NULL;
