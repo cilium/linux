@@ -211,7 +211,13 @@ static int lsm_backing_file_alloc(struct file *backing_file)
 static int lsm_blob_alloc(void **dest, size_t size, gfp_t gfp)
 {
 	if (size == 0) {
-		*dest = NULL;
+		/*
+		 * Keep the blob pointer non-NULL even when no LSM requires
+		 * blob space such that the free side can key on it for hook
+		 * pairing and double-release protection. kfree() of
+		 * ZERO_SIZE_PTR is a no-op.
+		 */
+		*dest = ZERO_SIZE_PTR;
 		return 0;
 	}
 
