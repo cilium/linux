@@ -6602,7 +6602,18 @@ static int check_atomic_load(struct bpf_verifier_env *env,
 {
 	int err;
 
-	err = check_load_mem(env, insn, true, false, false, "atomic_load");
+	/*
+	 * Validate src_reg before dereferencing its state below, and check the
+	 * source pointer type before the load. A load-acquire that fetches into
+	 * its own source register (dst_reg == src_reg) would otherwise have
+	 * check_load_mem() overwrite src_reg's type with the loaded scalar
+	 * before atomic_ptr_type_ok() runs, hiding a disallowed source (e.g.
+	 * ctx, pkt or sock) from the check and, since atomic loads are not
+	 * rewritten by convert_ctx_accesses(), leaking the raw access.
+	 * check_reg_arg() also rejects out-of-range register numbers so that
+	 * atomic_ptr_type_ok() does not read past the register file.
+	 */
+	err = check_reg_arg(env, insn->src_reg, SRC_OP);
 	if (err)
 		return err;
 
@@ -6613,7 +6624,7 @@ static int check_atomic_load(struct bpf_verifier_env *env,
 		return -EACCES;
 	}
 
-	return 0;
+	return check_load_mem(env, insn, true, false, false, "atomic_load");
 }
 
 static int check_atomic_store(struct bpf_verifier_env *env,
