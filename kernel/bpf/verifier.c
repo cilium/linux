@@ -4926,6 +4926,8 @@ static bool is_arena_reg(struct bpf_verifier_env *env, int regno)
 static bool atomic_ptr_type_ok(struct bpf_verifier_env *env, int regno,
 			       struct bpf_insn *insn)
 {
+	const struct bpf_reg_state *reg = reg_state(env, regno);
+
 	if (is_ctx_reg(env, regno))
 		return false;
 	if (is_pkt_reg(env, regno))
@@ -4936,6 +4938,24 @@ static bool atomic_ptr_type_ok(struct bpf_verifier_env *env, int regno,
 		return false;
 	if (is_arena_reg(env, regno))
 		return bpf_jit_supports_insn(insn, true);
+
+	/*
+	 * A BPF_LOAD_ACQ is not rewritten to a BPF_PROBE_MEM load by the
+	 * verifier, unlike a regular BPF_LDX. The JIT would emit a plain load
+	 * with no exception table entry, so a fault (e.g. NULL deref) crashes
+	 * the kernel instead of being handled.
+	 *
+	 * Reject the source pointer types that a BPF_LDX would have had that
+	 * fault protection applied to, i.e. the ones bpf_convert_ctx_accesses()
+	 * turns into BPF_PROBE_MEM: a bare PTR_TO_BTF_ID and any PTR_UNTRUSTED
+	 * pointer (untrusted btf ids, untrusted MEM_ALLOC, rdonly untrusted
+	 * memory). A PTR_TRUSTED pointer is not among them, is not converted,
+	 * and stays allowed. Writes (atomic RMW / store-release) to these types
+	 * are already rejected elsewhere, so only load-acquire needs this.
+	 */
+	if (insn->imm == BPF_LOAD_ACQ &&
+	    (reg->type == PTR_TO_BTF_ID || (type_flag(reg->type) & PTR_UNTRUSTED)))
+		return false;
 
 	return true;
 }
