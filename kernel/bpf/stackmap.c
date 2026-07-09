@@ -737,7 +737,16 @@ static long __bpf_get_stack(struct pt_regs *regs, struct task_struct *task,
 		goto err_fault;
 	}
 
-	trace_nr = trace->nr - skip;
+	/*
+	 * Clamp trace_nr to the buffer capacity (max_depth - skip). The perf
+	 * callchain entry is a per-CPU buffer that get_perf_callchain() has
+	 * already released (put_callchain_entry()) by the time we get here.
+	 * A preemptible BPF program can be scheduled out between obtaining
+	 * @trace and the copy below, letting another task reuse the buffer and
+	 * inflate trace->nr, so copy_len must not be trusted to fit into @buf.
+	 * This mirrors the clamp already done in __bpf_get_stackid().
+	 */
+	trace_nr = min_t(u32, trace->nr - skip, max_depth - skip);
 	copy_len = trace_nr * elem_size;
 
 	ips = trace->ip + skip;
