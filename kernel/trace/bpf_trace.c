@@ -3665,6 +3665,9 @@ __bpf_kfunc int bpf_copy_from_user_task_dynptr(const struct bpf_dynptr *dptr, u6
 					       u64 size, const void __user *unsafe_ptr__ign,
 					       struct task_struct *tsk)
 {
+	if (unlikely(!bpf_task_vm_access_ok(tsk)))
+		return -EACCES;
+
 	return __bpf_dynptr_copy(dptr, off, size, (const void __force *)unsafe_ptr__ign,
 				 copy_user_data_sleepable, tsk);
 }
@@ -3673,6 +3676,9 @@ __bpf_kfunc int bpf_copy_from_user_task_str_dynptr(const struct bpf_dynptr *dptr
 						   u64 size, const void __user *unsafe_ptr__ign,
 						   struct task_struct *tsk)
 {
+	if (unlikely(!bpf_task_vm_access_ok(tsk)))
+		return -EACCES;
+
 	return __bpf_dynptr_copy_str(dptr, off, size, (const void __force *)unsafe_ptr__ign,
 				     copy_user_str_sleepable, tsk);
 }

@@ -17,6 +17,7 @@
 #include <linux/jiffies.h>
 #include <linux/pid_namespace.h>
 #include <linux/poison.h>
+#include <linux/ptrace.h>
 #include <linux/proc_ns.h>
 #include <linux/sched/task.h>
 #include <linux/security.h>
@@ -679,6 +680,19 @@ const struct bpf_func_proto bpf_copy_from_user_proto = {
 	.arg3_type	= ARG_ANYTHING,
 };
 
+/*
+ * Reading the address space of another task from a BPF program is the same
+ * capability /proc/<pid>/mem provides, and that one gates the access on
+ * ptrace_may_access(). Apply the same check here, so that holding CAP_BPF
+ * and CAP_PERFMON does not grant a wider view of other tasks' memory than
+ * ptrace(2) would, in particular no view of tasks running under a different
+ * uid or marked non-dumpable.
+ */
+bool bpf_task_vm_access_ok(struct task_struct *tsk)
+{
+	return !tsk || ptrace_may_access(tsk, PTRACE_MODE_ATTACH_REALCREDS);
+}
+
 BPF_CALL_5(bpf_copy_from_user_task, void *, dst, u32, size,
 	   const void __user *, user_ptr, struct task_struct *, tsk, u64, flags)
 {
@@ -690,6 +704,11 @@ BPF_CALL_5(bpf_copy_from_user_task, void *, dst, u32, size,
 
 	if (unlikely(!size))
 		return 0;
+
+	if (unlikely(!bpf_task_vm_access_ok(tsk))) {
+		memset(dst, 0, size);
+		return -EACCES;
+	}
 
 	ret = access_process_vm(tsk, (unsigned long)user_ptr, dst, size, 0);
 	if (ret == size)
@@ -3686,6 +3705,12 @@ __bpf_kfunc int bpf_copy_from_user_task_str(void *dst, u32 dst__sz,
 
 	if (unlikely(dst__sz == 0))
 		return 0;
+
+	if (unlikely(!bpf_task_vm_access_ok(tsk))) {
+		if (flags & BPF_F_PAD_ZEROS)
+			memset(dst, 0, dst__sz);
+		return -EACCES;
+	}
 
 	ret = copy_remote_vm_str(tsk, (unsigned long)unsafe_ptr__ign, dst, dst__sz, 0);
 	if (ret < 0) {
