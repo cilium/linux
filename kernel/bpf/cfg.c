@@ -7,6 +7,13 @@
 
 #define verbose(env, fmt, args...) bpf_verifier_log_write(env, fmt, ##args)
 
+/*
+ * Upper bound on the total number of gotox successor edges in a program, of
+ * the same order as the number of instructions the verifier is willing to
+ * process. Programs with ordinary switch statements are far below this.
+ */
+#define BPF_MAX_GOTOX_EDGES	BPF_COMPLEXITY_LIMIT_INSNS
+
 /* non-recursive DFS pseudo code
  * 1  procedure DFS-iterative(G,v):
  * 2      label v as discovered
@@ -367,6 +374,23 @@ static int visit_gotox_insn(int t, struct bpf_verifier_env *env)
 			return PTR_ERR(jt);
 
 		env->insn_aux_data[t].jt = jt;
+
+		/*
+		 * Every entry of the jump table is a successor of this
+		 * instruction, and each gotox holds its own copy of the table,
+		 * so the edge count is the number of gotox instructions times
+		 * the table size. check_cfg(), bpf_compute_postorder(),
+		 * bpf_compute_scc() and the liveness computation each walk all
+		 * of them, and the copies are allocated before verification
+		 * starts, so bound the total.
+		 */
+		if (check_add_overflow(env->cfg.gotox_edges, jt->cnt,
+				       &env->cfg.gotox_edges) ||
+		    env->cfg.gotox_edges > BPF_MAX_GOTOX_EDGES) {
+			verbose(env, "number of indirect jump targets in the program exceeds %u\n",
+				BPF_MAX_GOTOX_EDGES);
+			return -E2BIG;
+		}
 	}
 
 	mark_prune_point(env, t);
