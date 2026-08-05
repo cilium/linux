@@ -13001,6 +13001,19 @@ static int check_special_kfunc(struct bpf_verifier_env *env, struct bpf_call_arg
 			regs[BPF_REG_0].btf = desc_btf;
 			regs[BPF_REG_0].btf_id = meta->arg_constant.value;
 		} else if (btf_type_is_void(ret_t)) {
+			/*
+			 * Unlike the struct case below, which reads go through
+			 * check_ptr_to_btf_access() for, a void type ID yields
+			 * unsized rdonly untrusted memory: reads from it are
+			 * fault-safe but unbounded, i.e. an arbitrary kernel
+			 * read. Require the same capability that reading
+			 * through a PTR_TO_BTF_ID does.
+			 */
+			if (!env->allow_ptr_leaks) {
+				verbose(env,
+					"kfunc bpf_rdonly_cast with void type ID is allowed only to CAP_PERFMON and CAP_SYS_ADMIN\n");
+				return -EPERM;
+			}
 			mark_reg_known_zero(env, regs, BPF_REG_0);
 			regs[BPF_REG_0].type = PTR_TO_MEM | MEM_RDONLY | PTR_UNTRUSTED;
 			regs[BPF_REG_0].mem_size = 0;
