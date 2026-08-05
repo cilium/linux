@@ -1193,6 +1193,7 @@ int mark_chain_precision(struct bpf_verifier_env *env, int regno);
 
 int bpf_is_state_visited(struct bpf_verifier_env *env, int insn_idx);
 int bpf_update_branch_counts(struct bpf_verifier_env *env, struct bpf_verifier_state *st);
+void bpf_mark_live_subregs_zext(struct bpf_verifier_env *env, struct bpf_verifier_state *vstate);
 
 void bpf_clear_jmp_history(struct bpf_verifier_state *state);
 int bpf_copy_verifier_state(struct bpf_verifier_state *dst_state,

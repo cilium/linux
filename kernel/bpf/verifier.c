@@ -3160,6 +3160,40 @@ static void mark_insn_zext(struct bpf_verifier_env *env,
 	reg->subreg_def = DEF_NOT_SUBREG;
 }
 
+/*
+ * Reaching a state equivalent to an already explored one stops the walk, so the
+ * reads that the explored path performs from here on are not repeated for this
+ * path's registers. A register that still carries a subreg_def has a pending
+ * zero extension requirement: the 64-bit read that would mark its defining
+ * instruction may exist only on the path that is no longer walked, and without
+ * the mark the JIT of an architecture that needs explicit zero extension leaves
+ * the upper half of the definition undefined.
+ *
+ * Mark the definitions of the registers that decided the equivalence, i.e. the
+ * ones live at this instruction, as those are exactly the ones that can still
+ * be read. This is conservative in that a live register which is only ever read
+ * as a sub-register also gets its definition marked, at the cost of a zero
+ * extension that is not needed.
+ */
+void bpf_mark_live_subregs_zext(struct bpf_verifier_env *env,
+				struct bpf_verifier_state *vstate)
+{
+	struct bpf_insn_aux_data *aux = env->insn_aux_data;
+	struct bpf_func_state *func;
+	u16 live_regs;
+	int i, j;
+
+	for (i = vstate->curframe; i >= 0; i--) {
+		live_regs = aux[bpf_frame_insn_idx(vstate, i)].live_regs_before;
+		func = vstate->frame[i];
+		for (j = 0; j < BPF_REG_FP; j++) {
+			if (!(live_regs & BIT(j)))
+				continue;
+			mark_insn_zext(env, &func->regs[j]);
+		}
+	}
+}
+
 static int __check_reg_arg(struct bpf_verifier_env *env, struct bpf_reg_state *regs, u32 regno,
 			   enum bpf_reg_arg_type t)
 {
