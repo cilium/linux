@@ -13842,11 +13842,21 @@ static int adjust_ptr_min_max_vals(struct bpf_verifier_env *env,
 
 	if ((known && (smin_val != smax_val || umin_val != umax_val)) ||
 	    smin_val > smax_val || umin_val > umax_val) {
-		/* Taint dst register if offset had invalid bounds derived from
-		 * e.g. dead branches.
+		/*
+		 * The offset register violates the register invariants, so this
+		 * state is not reachable, e.g. the bounds were derived on a dead
+		 * branch. Do not turn the pointer into an unknown scalar here:
+		 * that hands the pointer value to a register the verifier from
+		 * then on treats as a scalar, and is free to leak, should such a
+		 * state ever be reached or be merged into a live path by state
+		 * pruning. Branches whose refinement produces ill-formed bounds
+		 * are proven dead in simulate_both_branches_taken() and are not
+		 * walked, and a register that violates the invariants is caught
+		 * and unbounded by reg_bounds_sanity_check() where it is
+		 * computed, so no reachable program ends up here.
 		 */
-		__mark_reg_unknown(env, dst_reg);
-		return 0;
+		verbose(env, "R%d pointer arithmetic with invalid offset bounds\n", dst);
+		return -EACCES;
 	}
 
 	if (BPF_CLASS(insn->code) != BPF_ALU64) {
