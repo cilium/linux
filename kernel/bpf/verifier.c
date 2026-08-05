@@ -2053,7 +2053,7 @@ static void __reg_bound_offset(struct bpf_reg_state *reg)
 	reg->var_off = tnum_or(tnum_clear_subreg(var64_off), var32_off);
 }
 
-static bool range_bounds_violation(struct bpf_reg_state *reg);
+static bool range_bounds_violation(const struct bpf_reg_state *reg);
 
 static void reg_bounds_sync(struct bpf_reg_state *reg)
 {
@@ -2074,7 +2074,7 @@ static void reg_bounds_sync(struct bpf_reg_state *reg)
 	__update_reg_bounds(reg);
 }
 
-static bool const_tnum_range_mismatch(struct bpf_reg_state *reg)
+static bool const_tnum_range_mismatch(const struct bpf_reg_state *reg)
 {
 	if (!tnum_is_const(reg->var_off))
 		return false;
@@ -2082,7 +2082,7 @@ static bool const_tnum_range_mismatch(struct bpf_reg_state *reg)
 	return !cnum64_is_const(reg->r64) || reg->r64.base != reg->var_off.value;
 }
 
-static bool const_tnum_range_mismatch_32(struct bpf_reg_state *reg)
+static bool const_tnum_range_mismatch_32(const struct bpf_reg_state *reg)
 {
 	if (!tnum_subreg_is_const(reg->var_off))
 		return false;
@@ -2090,7 +2090,7 @@ static bool const_tnum_range_mismatch_32(struct bpf_reg_state *reg)
 	return !cnum32_is_const(reg->r32) || reg->r32.base != tnum_subreg(reg->var_off).value;
 }
 
-static bool range_bounds_violation(struct bpf_reg_state *reg)
+static bool range_bounds_violation(const struct bpf_reg_state *reg)
 {
 	return cnum32_is_empty(reg->r32) || cnum64_is_empty(reg->r64);
 }
@@ -13675,10 +13675,9 @@ static int sanitize_check_bounds(struct bpf_verifier_env *env,
 	return 0;
 }
 
-/* Handles arithmetic on a pointer and a scalar: computes new min/max and var_off.
+/*
+ * Handles arithmetic on a pointer and a scalar: computes new min/max and var_off.
  * Caller should also handle BPF_MOV case separately.
- * If we return -EACCES, caller may want to try again treating pointer as a
- * scalar.  So we only emit a diagnostic if !env->allow_ptr_leaks.
  */
 static int adjust_ptr_min_max_vals(struct bpf_verifier_env *env,
 				   struct bpf_insn *insn,
@@ -13689,8 +13688,7 @@ static int adjust_ptr_min_max_vals(struct bpf_verifier_env *env,
 	struct bpf_func_state *state = vstate->frame[vstate->curframe];
 	struct bpf_reg_state *regs = state->regs, *dst_reg;
 	bool known = tnum_is_const(off_reg->var_off);
-	s64 smin_val = reg_smin(off_reg), smax_val = reg_smax(off_reg);
-	u64 umin_val = reg_umin(off_reg), umax_val = reg_umax(off_reg);
+	s64 smin_val = reg_smin(off_reg);
 	struct bpf_sanitize_info info = {};
 	u8 opcode = BPF_OP(insn->code);
 	u32 dst = insn->dst_reg;
@@ -13698,13 +13696,12 @@ static int adjust_ptr_min_max_vals(struct bpf_verifier_env *env,
 
 	dst_reg = &regs[dst];
 
-	if ((known && (smin_val != smax_val || umin_val != umax_val)) ||
-	    smin_val > smax_val || umin_val > umax_val) {
-		/* Taint dst register if offset had invalid bounds derived from
-		 * e.g. dead branches.
-		 */
-		__mark_reg_unknown(env, dst_reg);
-		return 0;
+	if (range_bounds_violation(off_reg) ||
+	    const_tnum_range_mismatch(off_reg) ||
+	    const_tnum_range_mismatch_32(off_reg)) {
+		verifier_bug(env, "R%d pointer arithmetic with ill-formed offset bounds in R%d",
+			     dst, dst_reg == ptr_reg ? insn->src_reg : dst);
+		return -EFAULT;
 	}
 
 	if (BPF_CLASS(insn->code) != BPF_ALU64) {
