@@ -83,6 +83,7 @@
 #include "verifier_ptr_to_buf.skel.h"
 #include "verifier_raw_stack.skel.h"
 #include "verifier_raw_tp_writable.skel.h"
+#include "verifier_rdonly_cast.skel.h"
 #include "verifier_reg_equal.skel.h"
 #include "verifier_ref_tracking.skel.h"
 #include "verifier_regalloc.skel.h"
@@ -238,6 +239,7 @@ void test_verifier_private_stack(void)        { RUN(verifier_private_stack); }
 void test_verifier_ptr_to_buf(void)           { RUN(verifier_ptr_to_buf); }
 void test_verifier_raw_stack(void)            { RUN(verifier_raw_stack); }
 void test_verifier_raw_tp_writable(void)      { RUN(verifier_raw_tp_writable); }
+void test_verifier_rdonly_cast(void)          { RUN(verifier_rdonly_cast); }
 void test_verifier_reg_equal(void)            { RUN(verifier_reg_equal); }
 void test_verifier_ref_tracking(void)         { RUN(verifier_ref_tracking); }
 void test_verifier_regalloc(void)             { RUN(verifier_regalloc); }
