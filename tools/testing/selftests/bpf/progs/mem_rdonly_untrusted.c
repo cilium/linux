@@ -205,6 +205,105 @@ int misaligned_access(void *ctx)
 	return combine(bpf_rdonly_cast(&global, 0) + 1);
 }
 
+/* Not const, so that the verifier walks both branches of the helpers below,
+ * while at runtime the untrusted one is always taken.
+ */
+int take_untrusted = 1;
+char rw_mem[8];
+
+static __noinline void *mem_or_untrusted_btf_id(void)
+{
+	struct bpf_dynptr dp;
+
+	if (take_untrusted)
+		return bpf_rdonly_cast((void *)0x7fff,
+				       bpf_core_type_id_kernel(struct sock));
+
+	bpf_dynptr_from_mem(rw_mem, sizeof(rw_mem), 0, &dp);
+	return bpf_dynptr_data(&dp, 0, 8);
+}
+
+/*
+ * A single BPF_LDX reached with both PTR_TO_MEM and PTR_TO_BTF_ID |
+ * PTR_UNTRUSTED. save_aux_ptr_type() weakens this to PTR_TO_MEM |
+ * PTR_UNTRUSTED, which has to be converted to BPF_PROBE_MEM, or else the
+ * bad address below faults with no exception table entry to catch it.
+ */
+SEC("socket")
+__success
+__retval(0)
+int mixed_mem_and_untrusted_btf_id(void *ctx)
+{
+	void *p = mem_or_untrusted_btf_id();
+	u64 ret = 0;
+
+	if (!p)
+		return 0;
+	asm volatile ("%[ret] = *(u64 *)(%[p] + 0);"
+		      : [ret]"=r"(ret)
+		      : [p]"r"(p));
+	return ret;
+}
+
+static __noinline void *untrusted_mem_first(void)
+{
+	struct bpf_dynptr dp;
+
+	if (take_untrusted)
+		return bpf_rdonly_cast((void *)0x7fff, 0);
+
+	bpf_dynptr_from_mem(rw_mem, sizeof(rw_mem), 0, &dp);
+	return bpf_dynptr_data(&dp, 0, 8);
+}
+
+static __noinline void *untrusted_mem_last(void)
+{
+	struct bpf_dynptr dp;
+
+	if (!take_untrusted) {
+		bpf_dynptr_from_mem(rw_mem, sizeof(rw_mem), 0, &dp);
+		return bpf_dynptr_data(&dp, 0, 8);
+	}
+	return bpf_rdonly_cast((void *)0x7fff, 0);
+}
+
+/*
+ * Same, but both pointers share the PTR_TO_MEM base type and differ only in
+ * flags, so reg_type_mismatch() does not trigger. Weakening still has to
+ * happen, independent of the order in which the two paths are walked.
+ */
+SEC("socket")
+__success
+__retval(0)
+int mixed_mem_and_rdonly_untrusted_mem_1(void *ctx)
+{
+	void *p = untrusted_mem_first();
+	u64 ret = 0;
+
+	if (!p)
+		return 0;
+	asm volatile ("%[ret] = *(u64 *)(%[p] + 0);"
+		      : [ret]"=r"(ret)
+		      : [p]"r"(p));
+	return ret;
+}
+
+SEC("socket")
+__success
+__retval(0)
+int mixed_mem_and_rdonly_untrusted_mem_2(void *ctx)
+{
+	void *p = untrusted_mem_last();
+	u64 ret = 0;
+
+	if (!p)
+		return 0;
+	asm volatile ("%[ret] = *(u64 *)(%[p] + 0);"
+		      : [ret]"=r"(ret)
+		      : [p]"r"(p));
+	return ret;
+}
+
 __weak int return_one(void)
 {
 	return 1;
