@@ -877,6 +877,11 @@ int bpf_convert_ctx_accesses(struct bpf_verifier_env *env)
 		 */
 		case PTR_TO_BTF_ID | MEM_ALLOC | PTR_UNTRUSTED:
 		case PTR_TO_MEM | MEM_RDONLY | PTR_UNTRUSTED:
+		/* save_aux_ptr_type() can weaken a PTR_TO_MEM meeting an
+		 * untrusted pointer into PTR_TO_MEM | PTR_UNTRUSTED, that is,
+		 * without MEM_RDONLY, since only the latter is writable.
+		 */
+		case PTR_TO_MEM | PTR_UNTRUSTED:
 			if (type == BPF_READ) {
 				if (BPF_MODE(insn->code) == BPF_MEM)
 					insn->code = BPF_LDX | BPF_PROBE_MEM |

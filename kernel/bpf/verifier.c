@@ -17195,7 +17195,15 @@ static int save_aux_ptr_type(struct bpf_verifier_env *env, enum bpf_reg_type typ
 		 * save type to validate intersecting paths
 		 */
 		*prev_type = type;
-	} else if (reg_type_mismatch(type, *prev_type)) {
+		return 0;
+	}
+	if (type == *prev_type)
+		return 0;
+	if (!allow_trust_mismatch ||
+	    !is_ptr_to_mem_or_btf_id(type) ||
+	    !is_ptr_to_mem_or_btf_id(*prev_type)) {
+		if (!reg_type_mismatch(type, *prev_type))
+			return 0;
 		/* Abuser program is trying to use the same insn
 		 * dst_reg = *(u32*) (src_reg + off)
 		 * with different pointer types:
@@ -17203,30 +17211,29 @@ static int save_aux_ptr_type(struct bpf_verifier_env *env, enum bpf_reg_type typ
 		 * src_reg == stack|map in some other branch.
 		 * Reject it.
 		 */
-		if (allow_trust_mismatch &&
-		    is_ptr_to_mem_or_btf_id(type) &&
-		    is_ptr_to_mem_or_btf_id(*prev_type)) {
-			/*
-			 * Have to support a use case when one path through
-			 * the program yields TRUSTED pointer while another
-			 * is UNTRUSTED. Fallback to UNTRUSTED to generate
-			 * BPF_PROBE_MEM/BPF_PROBE_MEMSX.
-			 * Same behavior of MEM_RDONLY flag.
-			 */
-			if (is_ptr_to_mem(type) || is_ptr_to_mem(*prev_type))
-				merged_type = PTR_TO_MEM;
-			else
-				merged_type = PTR_TO_BTF_ID;
-			if ((type & PTR_UNTRUSTED) || (*prev_type & PTR_UNTRUSTED))
-				merged_type |= PTR_UNTRUSTED;
-			if ((type & MEM_RDONLY) || (*prev_type & MEM_RDONLY))
-				merged_type |= MEM_RDONLY;
-			*prev_type = merged_type;
-		} else {
-			verbose(env, "same insn cannot be used with different pointers\n");
-			return -EINVAL;
-		}
+		verbose(env, "same insn cannot be used with different pointers\n");
+		return -EINVAL;
 	}
+	/*
+	 * Have to support a use case when one path through the program yields
+	 * TRUSTED pointer while another is UNTRUSTED. Fallback to UNTRUSTED to
+	 * generate BPF_PROBE_MEM/BPF_PROBE_MEMSX. Same behavior of MEM_RDONLY
+	 * flag.
+	 *
+	 * The weakening must not be gated on reg_type_mismatch(): two types
+	 * sharing the PTR_TO_MEM base are not a mismatch, so a PTR_UNTRUSTED
+	 * one meeting a trusted one would otherwise leave *prev_type at
+	 * whichever path was walked first.
+	 */
+	if (is_ptr_to_mem(type) || is_ptr_to_mem(*prev_type))
+		merged_type = PTR_TO_MEM;
+	else
+		merged_type = PTR_TO_BTF_ID;
+	if ((type & PTR_UNTRUSTED) || (*prev_type & PTR_UNTRUSTED))
+		merged_type |= PTR_UNTRUSTED;
+	if ((type & MEM_RDONLY) || (*prev_type & MEM_RDONLY))
+		merged_type |= MEM_RDONLY;
+	*prev_type = merged_type;
 
 	return 0;
 }
