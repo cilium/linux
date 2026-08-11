@@ -92,4 +92,26 @@ extern int bpf_set_dentry_xattr(struct dentry *dentry, const char *name__str,
 				const struct bpf_dynptr *value_p, int flags) __ksym __weak;
 extern int bpf_remove_dentry_xattr(struct dentry *dentry, const char *name__str) __ksym __weak;
 
+struct path;
+extern int bpf_get_path_xattr(const struct path *path, const char *name__str,
+			      struct bpf_dynptr *value_p) __ksym __weak;
+extern int bpf_set_path_xattr(const struct path *path, const char *name__str,
+			      const struct bpf_dynptr *value_p, int flags) __ksym __weak;
+extern int bpf_remove_path_xattr(const struct path *path, const char *name__str) __ksym __weak;
+
+extern int bpf_get_inode_xattr(struct inode *inode, const char *name__str,
+			       struct bpf_dynptr *value_p) __ksym __weak;
+extern int bpf_get_dentry_inode_xattr(struct dentry *dentry, struct inode *inode,
+				      const char *name__str,
+				      struct bpf_dynptr *value_p) __ksym __weak;
+extern int bpf_list_dentry_xattr(struct dentry *dentry,
+				 struct bpf_dynptr *buf_p) __ksym __weak;
+
+/* BPF LSM label operations, only valid from the bpf_lsm_inode_*_label hooks. */
+extern int bpf_inode_init_xattr(const char *name__str,
+				const struct bpf_dynptr *value_p) __ksym __weak;
+extern int bpf_set_label_value(const struct bpf_dynptr *value_p) __ksym __weak;
+extern int bpf_add_label_name(const char *name__str) __ksym __weak;
+extern int bpf_claim_label(void) __ksym __weak;
+
 #endif
