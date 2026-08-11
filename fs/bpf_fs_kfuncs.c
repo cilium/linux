@@ -363,9 +363,9 @@ __bpf_kfunc int bpf_inode_init_xattr(const char *name__str,
 	 * The array is only allocated when the filesystem supplied an
 	 * initxattrs() callback, i.e. when it is able to store xattrs at all.
 	 */
-	if (!lctx->xattrs)
+	if (!lctx->init.xattrs)
 		return -EOPNOTSUPP;
-	if (lctx->xattr_avail <= 0)
+	if (lctx->init.avail <= 0)
 		return -ENOSPC;
 
 	value_len = __bpf_dynptr_size(value_ptr);
@@ -390,11 +390,111 @@ __bpf_kfunc int bpf_inode_init_xattr(const char *name__str,
 	memcpy(buf, value, value_len);
 	memcpy(buf + value_len, suffix, name_len + 1);
 
-	slot = lsm_get_xattr_slot(lctx->xattrs, lctx->xattr_count);
+	slot = lsm_get_xattr_slot(lctx->init.xattrs, lctx->init.count);
 	slot->value = buf;
 	slot->value_len = value_len;
 	slot->name = buf + value_len;
-	lctx->xattr_avail--;
+	lctx->init.avail--;
+	lctx->handled = true;
+
+	return 0;
+}
+
+/**
+ * bpf_set_label_value - supply the label value for a pending label read
+ * @value_p: label value
+ *
+ * Answer the bpf_lsm_inode_get_label() call in progress with the contents of
+ * *value_p*, which becomes the result of getxattr() for that label. This lets
+ * a policy present something other than the raw bytes stored on disk, and lets
+ * it present a label at all on a filesystem that cannot store xattrs.
+ *
+ * Not calling this leaves the read to fall back on the on-disk value, as does
+ * returning an error from here without retrying.
+ *
+ * Return: 0 on success, a negative value on error.
+ */
+__bpf_kfunc int bpf_set_label_value(const struct bpf_dynptr *value_p)
+{
+	const struct bpf_dynptr_kern *value_ptr = (struct bpf_dynptr_kern *)value_p;
+	struct bpf_lsm_label_ctx *lctx = current->bpf_lsm_label;
+	const void *value;
+	u32 value_len;
+
+	if (!lctx || lctx->op != BPF_LSM_LABEL_OP_GET)
+		return -EINVAL;
+
+	value_len = __bpf_dynptr_size(value_ptr);
+	value = __bpf_dynptr_data(value_ptr, value_len);
+	if (!value)
+		return -EINVAL;
+	if (value_len > lctx->get.size)
+		return -E2BIG;
+
+	memcpy(lctx->get.buf, value, value_len);
+	lctx->get.used = value_len;
+	lctx->handled = true;
+
+	return 0;
+}
+
+/**
+ * bpf_add_label_name - advertise a label name for a pending label listing
+ * @name__str: name of the label
+ *
+ * Append *name__str* to the name list being built by the
+ * bpf_lsm_inode_list_labels() call in progress, so that listxattr() reports
+ * the label even when nothing is stored on disk for it. May be called more
+ * than once to advertise several labels.
+ *
+ * For security reasons, only *name__str* with prefix "security.bpf." is
+ * allowed.
+ *
+ * Return: 0 on success, a negative value on error. -ERANGE means the caller
+ * supplied buffer is too small, and is reported back to it.
+ */
+__bpf_kfunc int bpf_add_label_name(const char *name__str)
+{
+	struct bpf_lsm_label_ctx *lctx = current->bpf_lsm_label;
+	int ret;
+
+	if (!lctx || lctx->op != BPF_LSM_LABEL_OP_LIST)
+		return -EINVAL;
+	if (!match_security_bpf_prefix(name__str))
+		return -EPERM;
+
+	ret = xattr_list_one(lctx->list.buf, lctx->list.remaining, name__str);
+	if (ret) {
+		/*
+		 * Whether the listing fits is the caller's business, not the
+		 * policy's, so make sure it is reported even if the program
+		 * ignores the return value.
+		 */
+		lctx->error = ret;
+		return ret;
+	}
+	lctx->handled = true;
+
+	return 0;
+}
+
+/**
+ * bpf_claim_label - take responsibility for the pending label operation
+ *
+ * Tell the LSM layer that this policy answered for the inode, without handing
+ * back a value. Needed on the bpf_lsm_inode_set_label() path, where the label
+ * has nowhere on-disk to live and the program is expected to have stored it
+ * itself, typically in inode local storage.
+ *
+ * Return: 0 on success, a negative value on error.
+ */
+__bpf_kfunc int bpf_claim_label(void)
+{
+	struct bpf_lsm_label_ctx *lctx = current->bpf_lsm_label;
+
+	if (!lctx)
+		return -EINVAL;
+	lctx->handled = true;
 
 	return 0;
 }
@@ -464,18 +564,30 @@ BTF_ID_FLAGS(func, bpf_set_dentry_xattr, KF_SLEEPABLE)
 BTF_ID_FLAGS(func, bpf_remove_dentry_xattr, KF_SLEEPABLE)
 BTF_ID_FLAGS(func, bpf_real_data_inode, KF_SLEEPABLE | KF_RET_NULL)
 BTF_ID_FLAGS(func, bpf_inode_init_xattr, KF_SLEEPABLE)
+BTF_ID_FLAGS(func, bpf_set_label_value)
+BTF_ID_FLAGS(func, bpf_add_label_name)
+BTF_ID_FLAGS(func, bpf_claim_label)
 BTF_KFUNCS_END(bpf_fs_kfunc_set_ids)
 
-BTF_ID_LIST_SINGLE(bpf_inode_init_xattr_ids, func, bpf_inode_init_xattr)
-
 /*
- * bpf_inode_init_xattr() claims a slot out of an array that only exists while
- * the inode_init_security() shim is running, so it is restricted to the hook
- * that shim drives.
+ * These operate on the struct bpf_lsm_label_ctx that the shims in
+ * bpf_lsm_proto.c publish on current, which only exists while one of the label
+ * hooks is running. Restrict them to those hooks; which of the four kfuncs
+ * suits which hook is then enforced at runtime against ctx->op.
  */
-BTF_SET_START(init_label_hooks)
+BTF_SET_START(label_kfunc_ids)
+BTF_ID(func, bpf_inode_init_xattr)
+BTF_ID(func, bpf_set_label_value)
+BTF_ID(func, bpf_add_label_name)
+BTF_ID(func, bpf_claim_label)
+BTF_SET_END(label_kfunc_ids)
+
+BTF_SET_START(label_hooks)
 BTF_ID(func, bpf_lsm_inode_init_label)
-BTF_SET_END(init_label_hooks)
+BTF_ID(func, bpf_lsm_inode_get_label)
+BTF_ID(func, bpf_lsm_inode_set_label)
+BTF_ID(func, bpf_lsm_inode_list_labels)
+BTF_SET_END(label_hooks)
 
 static int bpf_fs_kfuncs_filter(const struct bpf_prog *prog, u32 kfunc_id)
 {
@@ -483,8 +595,8 @@ static int bpf_fs_kfuncs_filter(const struct bpf_prog *prog, u32 kfunc_id)
 		return 0;
 	if (prog->type != BPF_PROG_TYPE_LSM)
 		return -EACCES;
-	if (kfunc_id == bpf_inode_init_xattr_ids[0] &&
-	    !btf_id_set_contains(&init_label_hooks, prog->aux->attach_btf_id))
+	if (btf_id_set_contains(&label_kfunc_ids, kfunc_id) &&
+	    !btf_id_set_contains(&label_hooks, prog->aux->attach_btf_id))
 		return -EACCES;
 	return 0;
 }

@@ -53,8 +53,29 @@ __weak noinline int bpf_lsm_inode_init_label(struct inode *inode,
 	return 0;
 }
 
+__weak noinline int bpf_lsm_inode_get_label(struct inode *inode,
+					    const char *name)
+{
+	return 0;
+}
+
+__weak noinline int bpf_lsm_inode_set_label(struct inode *inode,
+					    const char *name, const void *value,
+					    size_t size, int flags)
+{
+	return 0;
+}
+
+__weak noinline int bpf_lsm_inode_list_labels(struct inode *inode)
+{
+	return 0;
+}
+
 BTF_SET_START(bpf_lsm_label_hooks)
 BTF_ID(func, bpf_lsm_inode_init_label)
+BTF_ID(func, bpf_lsm_inode_get_label)
+BTF_ID(func, bpf_lsm_inode_set_label)
+BTF_ID(func, bpf_lsm_inode_list_labels)
 BTF_SET_END(bpf_lsm_label_hooks)
 
 BTF_SET_START(bpf_lsm_disabled_hooks)
@@ -62,6 +83,7 @@ BTF_ID(func, bpf_lsm_vm_enough_memory)
 BTF_ID(func, bpf_lsm_inode_need_killpriv)
 BTF_ID(func, bpf_lsm_inode_getsecurity)
 BTF_ID(func, bpf_lsm_inode_listsecurity)
+BTF_ID(func, bpf_lsm_inode_setsecurity)
 BTF_ID(func, bpf_lsm_inode_init_security)
 BTF_ID(func, bpf_lsm_inode_copy_up_xattr)
 BTF_ID(func, bpf_lsm_getselfattr)
@@ -340,7 +362,9 @@ BTF_ID(func, bpf_lsm_inode_create)
 BTF_ID(func, bpf_lsm_inode_free_security)
 BTF_ID(func, bpf_lsm_inode_getattr)
 BTF_ID(func, bpf_lsm_inode_getxattr)
+BTF_ID(func, bpf_lsm_inode_get_label)
 BTF_ID(func, bpf_lsm_inode_init_label)
+BTF_ID(func, bpf_lsm_inode_list_labels)
 BTF_ID(func, bpf_lsm_inode_mknod)
 BTF_ID(func, bpf_lsm_inode_need_killpriv)
 BTF_ID(func, bpf_lsm_inode_post_setxattr)
@@ -350,6 +374,7 @@ BTF_ID(func, bpf_lsm_inode_removexattr)
 BTF_ID(func, bpf_lsm_inode_rename)
 BTF_ID(func, bpf_lsm_inode_rmdir)
 BTF_ID(func, bpf_lsm_inode_setattr)
+BTF_ID(func, bpf_lsm_inode_set_label)
 BTF_ID(func, bpf_lsm_inode_setxattr)
 BTF_ID(func, bpf_lsm_inode_symlink)
 BTF_ID(func, bpf_lsm_inode_unlink)
