@@ -31,8 +31,15 @@ static int __init bpf_lsm_init(void)
 	return 0;
 }
 
+/*
+ * Reserving xattr slots makes security_inode_init_security() allocate and walk
+ * its slot array on every inode creation, the same cost SELinux and Smack
+ * already impose. It is what lets a policy label an inode from within the
+ * creating transaction instead of racing to set the xattr afterwards.
+ */
 struct lsm_blob_sizes bpf_lsm_blob_sizes __ro_after_init = {
 	.lbs_inode = sizeof(struct bpf_storage_blob),
+	.lbs_xattr_count = BPF_LSM_INODE_INIT_XATTRS,
 };
 
 DEFINE_LSM(bpf) = {

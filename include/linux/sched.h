@@ -1605,6 +1605,14 @@ struct task_struct {
 	/* Used for BPF run context */
 	struct bpf_run_ctx		*bpf_ctx;
 #endif
+#ifdef CONFIG_BPF_LSM
+	/*
+	 * Scratch space for the BPF LSM label hooks. Only ever set and
+	 * cleared by the shims in kernel/bpf/bpf_lsm_proto.c, around a
+	 * single hook invocation.
+	 */
+	struct bpf_lsm_label_ctx	*bpf_lsm_label;
+#endif
 	/* Used by BPF for per-TASK xdp storage */
 	struct bpf_net_context		*bpf_net_context;
 

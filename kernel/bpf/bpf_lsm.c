@@ -36,11 +36,33 @@ BTF_SET_START(bpf_lsm_hooks)
 #undef LSM_HOOK
 BTF_SET_END(bpf_lsm_hooks)
 
+/*
+ * BPF-friendly counterparts of the LSM hooks whose signatures require the
+ * module to hand back memory it allocated itself. The strong hook overrides in
+ * bpf_lsm_proto.c own that allocation and drive these instead.
+ *
+ * Unlike the generated hooks above, these default to 0 even where the LSM hook
+ * they stand in for defaults to -EOPNOTSUPP: BPF_MODIFY_RETURN only overrides
+ * the return value when a program returns non-zero, so "I handled it" has to be
+ * communicated out of band, through struct bpf_lsm_label_ctx.
+ */
+__weak noinline int bpf_lsm_inode_init_label(struct inode *inode,
+					     struct inode *dir,
+					     const struct qstr *qstr)
+{
+	return 0;
+}
+
+BTF_SET_START(bpf_lsm_label_hooks)
+BTF_ID(func, bpf_lsm_inode_init_label)
+BTF_SET_END(bpf_lsm_label_hooks)
+
 BTF_SET_START(bpf_lsm_disabled_hooks)
 BTF_ID(func, bpf_lsm_vm_enough_memory)
 BTF_ID(func, bpf_lsm_inode_need_killpriv)
 BTF_ID(func, bpf_lsm_inode_getsecurity)
 BTF_ID(func, bpf_lsm_inode_listsecurity)
+BTF_ID(func, bpf_lsm_inode_init_security)
 BTF_ID(func, bpf_lsm_inode_copy_up_xattr)
 BTF_ID(func, bpf_lsm_getselfattr)
 BTF_ID(func, bpf_lsm_getprocattr)
@@ -134,7 +156,8 @@ int bpf_lsm_verify_prog(struct bpf_verifier_log *vlog,
 		return -EINVAL;
 	}
 
-	if (!btf_id_set_contains(&bpf_lsm_hooks, btf_id)) {
+	if (!btf_id_set_contains(&bpf_lsm_hooks, btf_id) &&
+	    !btf_id_set_contains(&bpf_lsm_label_hooks, btf_id)) {
 		bpf_log(vlog, "attach_btf_id %u points to wrong type name %s\n",
 			btf_id, func_name);
 		return -EINVAL;
@@ -317,6 +340,7 @@ BTF_ID(func, bpf_lsm_inode_create)
 BTF_ID(func, bpf_lsm_inode_free_security)
 BTF_ID(func, bpf_lsm_inode_getattr)
 BTF_ID(func, bpf_lsm_inode_getxattr)
+BTF_ID(func, bpf_lsm_inode_init_label)
 BTF_ID(func, bpf_lsm_inode_mknod)
 BTF_ID(func, bpf_lsm_inode_need_killpriv)
 BTF_ID(func, bpf_lsm_inode_post_setxattr)

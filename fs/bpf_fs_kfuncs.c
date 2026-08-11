@@ -326,6 +326,79 @@ __bpf_kfunc int bpf_remove_dentry_xattr(struct dentry *dentry, const char *name_
 	return ret;
 }
 
+/**
+ * bpf_inode_init_xattr - attach a xattr to an inode that is being created
+ * @name__str: name of the xattr
+ * @value_p: xattr value
+ *
+ * Claim one of the slots the BPF LSM reserved in the xattr array that
+ * security_inode_init_security() hands to the filesystem, so that xattr
+ * *name__str* is written out as part of the transaction creating the inode.
+ * Compared to setting the xattr from a hook that runs after creation this
+ * leaves no window in which the inode exists unlabelled.
+ *
+ * Only callable from a bpf_lsm_inode_init_label() program, and only for
+ * *name__str* with prefix "security.bpf.". At most BPF_LSM_INODE_INIT_XATTRS
+ * xattrs can be attached to one inode.
+ *
+ * Return: 0 on success, a negative value on error.
+ */
+__bpf_kfunc int bpf_inode_init_xattr(const char *name__str,
+				     const struct bpf_dynptr *value_p)
+{
+	const struct bpf_dynptr_kern *value_ptr = (struct bpf_dynptr_kern *)value_p;
+	struct bpf_lsm_label_ctx *lctx = current->bpf_lsm_label;
+	const char *suffix;
+	struct xattr *slot;
+	const void *value;
+	u32 value_len;
+	size_t name_len;
+	char *buf;
+
+	if (!lctx || lctx->op != BPF_LSM_LABEL_OP_INIT)
+		return -EINVAL;
+	if (!match_security_bpf_prefix(name__str))
+		return -EPERM;
+	/*
+	 * The array is only allocated when the filesystem supplied an
+	 * initxattrs() callback, i.e. when it is able to store xattrs at all.
+	 */
+	if (!lctx->xattrs)
+		return -EOPNOTSUPP;
+	if (lctx->xattr_avail <= 0)
+		return -ENOSPC;
+
+	value_len = __bpf_dynptr_size(value_ptr);
+	value = __bpf_dynptr_data(value_ptr, value_len);
+	if (!value)
+		return -EINVAL;
+	if (value_len > XATTR_SIZE_MAX)
+		return -E2BIG;
+
+	/*
+	 * The slot stores the name without the "security." prefix, which
+	 * initxattrs() puts back. security_inode_init_security() releases
+	 * ->value but not ->name, so carve both out of one allocation anchored
+	 * at ->value and the trailing name copy is freed along with it.
+	 */
+	suffix = name__str + XATTR_SECURITY_PREFIX_LEN;
+	name_len = strlen(suffix);
+
+	buf = kmalloc(value_len + name_len + 1, GFP_NOFS);
+	if (!buf)
+		return -ENOMEM;
+	memcpy(buf, value, value_len);
+	memcpy(buf + value_len, suffix, name_len + 1);
+
+	slot = lsm_get_xattr_slot(lctx->xattrs, lctx->xattr_count);
+	slot->value = buf;
+	slot->value_len = value_len;
+	slot->name = buf + value_len;
+	lctx->xattr_avail--;
+
+	return 0;
+}
+
 #ifdef CONFIG_CGROUPS
 /**
  * bpf_cgroup_read_xattr - read xattr of a cgroup's node in cgroupfs
@@ -390,14 +463,30 @@ BTF_ID_FLAGS(func, bpf_get_file_xattr, KF_SLEEPABLE)
 BTF_ID_FLAGS(func, bpf_set_dentry_xattr, KF_SLEEPABLE)
 BTF_ID_FLAGS(func, bpf_remove_dentry_xattr, KF_SLEEPABLE)
 BTF_ID_FLAGS(func, bpf_real_data_inode, KF_SLEEPABLE | KF_RET_NULL)
+BTF_ID_FLAGS(func, bpf_inode_init_xattr, KF_SLEEPABLE)
 BTF_KFUNCS_END(bpf_fs_kfunc_set_ids)
+
+BTF_ID_LIST_SINGLE(bpf_inode_init_xattr_ids, func, bpf_inode_init_xattr)
+
+/*
+ * bpf_inode_init_xattr() claims a slot out of an array that only exists while
+ * the inode_init_security() shim is running, so it is restricted to the hook
+ * that shim drives.
+ */
+BTF_SET_START(init_label_hooks)
+BTF_ID(func, bpf_lsm_inode_init_label)
+BTF_SET_END(init_label_hooks)
 
 static int bpf_fs_kfuncs_filter(const struct bpf_prog *prog, u32 kfunc_id)
 {
-	if (!btf_id_set8_contains(&bpf_fs_kfunc_set_ids, kfunc_id) ||
-	    prog->type == BPF_PROG_TYPE_LSM)
+	if (!btf_id_set8_contains(&bpf_fs_kfunc_set_ids, kfunc_id))
 		return 0;
-	return -EACCES;
+	if (prog->type != BPF_PROG_TYPE_LSM)
+		return -EACCES;
+	if (kfunc_id == bpf_inode_init_xattr_ids[0] &&
+	    !btf_id_set_contains(&init_label_hooks, prog->aux->attach_btf_id))
+		return -EACCES;
+	return 0;
 }
 
 /* bpf_[set|remove]_dentry_xattr.* hooks have KF_SLEEPABLE, so they are only
