@@ -5678,6 +5678,15 @@ BTF_TYPE_SAFE_TRUSTED(struct file) {
 	struct inode *f_inode;
 };
 
+/*
+ * A super_block outlives every inode on it, so walking here from a trusted
+ * inode stays trusted. This is what lets an LSM program reach super_block
+ * local storage from the inode hooks.
+ */
+BTF_TYPE_SAFE_TRUSTED(struct inode) {
+	struct super_block *i_sb;
+};
+
 BTF_TYPE_SAFE_TRUSTED_OR_NULL(struct dentry) {
 	struct inode *d_inode;
 };
@@ -5722,6 +5731,7 @@ static bool type_is_trusted(struct bpf_verifier_env *env,
 	BTF_TYPE_EMIT(BTF_TYPE_SAFE_TRUSTED(struct bpf_iter__task));
 	BTF_TYPE_EMIT(BTF_TYPE_SAFE_TRUSTED(struct linux_binprm));
 	BTF_TYPE_EMIT(BTF_TYPE_SAFE_TRUSTED(struct file));
+	BTF_TYPE_EMIT(BTF_TYPE_SAFE_TRUSTED(struct inode));
 
 	return btf_nested_type_is_trusted(&env->log, reg, field_name, btf_id, "__safe_trusted");
 }
@@ -8630,6 +8640,12 @@ static int check_map_func_compatibility(struct bpf_verifier_env *env,
 		    func_id != BPF_FUNC_kptr_xchg)
 			goto error;
 		break;
+	case BPF_MAP_TYPE_SB_STORAGE:
+		if (func_id != BPF_FUNC_sb_storage_get &&
+		    func_id != BPF_FUNC_sb_storage_delete &&
+		    func_id != BPF_FUNC_kptr_xchg)
+			goto error;
+		break;
 	case BPF_MAP_TYPE_TASK_STORAGE:
 		if (func_id != BPF_FUNC_task_storage_get &&
 		    func_id != BPF_FUNC_task_storage_delete &&
@@ -8749,6 +8765,11 @@ static int check_map_func_compatibility(struct bpf_verifier_env *env,
 	case BPF_FUNC_inode_storage_get:
 	case BPF_FUNC_inode_storage_delete:
 		if (map->map_type != BPF_MAP_TYPE_INODE_STORAGE)
+			goto error;
+		break;
+	case BPF_FUNC_sb_storage_get:
+	case BPF_FUNC_sb_storage_delete:
+		if (map->map_type != BPF_MAP_TYPE_SB_STORAGE)
 			goto error;
 		break;
 	case BPF_FUNC_task_storage_get:
@@ -17795,6 +17816,7 @@ static int check_map_prog_compatibility(struct bpf_verifier_env *env,
 		case BPF_MAP_TYPE_RINGBUF:
 		case BPF_MAP_TYPE_USER_RINGBUF:
 		case BPF_MAP_TYPE_INODE_STORAGE:
+		case BPF_MAP_TYPE_SB_STORAGE:
 		case BPF_MAP_TYPE_SK_STORAGE:
 		case BPF_MAP_TYPE_TASK_STORAGE:
 		case BPF_MAP_TYPE_CGRP_STORAGE:

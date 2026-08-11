@@ -126,9 +126,21 @@ static inline struct bpf_storage_blob *bpf_inode(
 	return inode->i_security + bpf_lsm_blob_sizes.lbs_inode;
 }
 
+static inline struct bpf_storage_blob *bpf_sb(
+	const struct super_block *sb)
+{
+	if (unlikely(!sb->s_security))
+		return NULL;
+
+	return sb->s_security + bpf_lsm_blob_sizes.lbs_superblock;
+}
+
 extern const struct bpf_func_proto bpf_inode_storage_get_proto;
 extern const struct bpf_func_proto bpf_inode_storage_delete_proto;
+extern const struct bpf_func_proto bpf_sb_storage_get_proto;
+extern const struct bpf_func_proto bpf_sb_storage_delete_proto;
 void bpf_inode_storage_free(struct inode *inode);
+void bpf_sb_storage_free(struct super_block *sb);
 
 void bpf_lsm_find_cgroup_shim(const struct bpf_prog *prog, bpf_func_t *bpf_func);
 
@@ -169,7 +181,17 @@ static inline struct bpf_storage_blob *bpf_inode(
 	return NULL;
 }
 
+static inline struct bpf_storage_blob *bpf_sb(
+	const struct super_block *sb)
+{
+	return NULL;
+}
+
 static inline void bpf_inode_storage_free(struct inode *inode)
+{
+}
+
+static inline void bpf_sb_storage_free(struct super_block *sb)
 {
 }
 

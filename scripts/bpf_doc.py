@@ -729,6 +729,7 @@ class PrinterHelpersHeader(Printer):
             'struct unix_sock',
             'struct task_struct',
             'struct cgroup',
+            'struct super_block',
 
             'struct __sk_buff',
             'struct sk_msg_md',
@@ -787,6 +788,7 @@ class PrinterHelpersHeader(Printer):
             'struct unix_sock',
             'struct task_struct',
             'struct cgroup',
+            'struct super_block',
             'struct path',
             'const struct path',
             'struct btf_ptr',

@@ -1048,6 +1048,7 @@ enum bpf_map_type {
 	BPF_MAP_TYPE_ARENA,
 	BPF_MAP_TYPE_INSN_ARRAY,
 	BPF_MAP_TYPE_RHASH,
+	BPF_MAP_TYPE_SB_STORAGE,
 	__MAX_BPF_MAP_TYPE
 };
 
@@ -5972,6 +5973,41 @@ union bpf_attr {
  *		0 on success.
  *
  *		**-ENOENT** if the bpf_local_storage cannot be found.
+ *
+ * void *bpf_sb_storage_get(struct bpf_map *map, struct super_block *sb, void *value, u64 flags)
+ *	Description
+ *		Get a bpf_local_storage from the *sb*.
+ *
+ *		Logically, it could be thought of as getting the value from
+ *		a *map* with *sb* as the **key**.  From this perspective, the
+ *		usage is not much different from **bpf_map_lookup_elem**\ (*map*,
+ *		**&**\ *sb*) except this helper enforces the key must be a
+ *		super_block struct and the map must also be a
+ *		**BPF_MAP_TYPE_SB_STORAGE**.
+ *
+ *		In reality, the local-storage value is embedded directly inside
+ *		of the *sb* object itself, rather than being located in the
+ *		**BPF_MAP_TYPE_SB_STORAGE** map.
+ *
+ *		An optional *flags* (**BPF_LOCAL_STORAGE_GET_F_CREATE**) can be
+ *		used such that a new bpf_local_storage will be created if one
+ *		does not exist.  *value* can be used together with
+ *		**BPF_LOCAL_STORAGE_GET_F_CREATE** to specify the initial value
+ *		of a bpf_local_storage.  If *value* is **NULL**, the new
+ *		bpf_local_storage will be zero initialized.
+ *	Return
+ *		A bpf_local_storage pointer is returned on success.
+ *
+ *		**NULL** if not found or there was an error in adding
+ *		a new bpf_local_storage.
+ *
+ * long bpf_sb_storage_delete(struct bpf_map *map, struct super_block *sb)
+ *	Description
+ *		Delete a bpf_local_storage from a *sb*.
+ *	Return
+ *		0 on success.
+ *
+ *		**-ENOENT** if the bpf_local_storage cannot be found.
  */
 #define ___BPF_FUNC_MAPPER(FN, ctx...)			\
 	FN(unspec, 0, ##ctx)				\
@@ -6186,6 +6222,8 @@ union bpf_attr {
 	FN(user_ringbuf_drain, 209, ##ctx)		\
 	FN(cgrp_storage_get, 210, ##ctx)		\
 	FN(cgrp_storage_delete, 211, ##ctx)		\
+	FN(sb_storage_get, 212, ##ctx)			\
+	FN(sb_storage_delete, 213, ##ctx)		\
 	/* This helper list is effectively frozen. If you are trying to	\
 	 * add a new helper, you should add a kfunc instead which has	\
 	 * less stability guarantees. See Documentation/bpf/kfuncs.rst	\

@@ -324,6 +324,7 @@ static int probe_map_create(enum bpf_map_type map_type)
 		break;
 	case BPF_MAP_TYPE_SK_STORAGE:
 	case BPF_MAP_TYPE_INODE_STORAGE:
+	case BPF_MAP_TYPE_SB_STORAGE:
 	case BPF_MAP_TYPE_TASK_STORAGE:
 	case BPF_MAP_TYPE_CGRP_STORAGE:
 		btf_key_type_id = 1;

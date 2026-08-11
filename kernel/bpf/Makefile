@@ -53,7 +53,7 @@ obj-$(CONFIG_BPF_SYSCALL) += cpumask.o
 #
 # Notably, this is a temporary workaround whilst the deduplication
 # semantics within pahole are revisited accordingly.
-obj-${CONFIG_BPF_LSM} += bpf_lsm_proto.o bpf_lsm.o
+obj-${CONFIG_BPF_LSM} += bpf_lsm_proto.o bpf_lsm.o bpf_sb_storage.o
 endif
 ifneq ($(CONFIG_CRYPTO),)
 obj-$(CONFIG_BPF_SYSCALL) += crypto.o
