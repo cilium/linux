@@ -137,6 +137,9 @@ int bpf_lsm_get_retval_range(const struct bpf_prog *prog,
 int bpf_set_dentry_xattr_locked(struct dentry *dentry, const char *name__str,
 				const struct bpf_dynptr *value_p, int flags);
 int bpf_remove_dentry_xattr_locked(struct dentry *dentry, const char *name__str);
+int bpf_set_path_xattr_locked(const struct path *path, const char *name__str,
+			      const struct bpf_dynptr *value_p, int flags);
+int bpf_remove_path_xattr_locked(const struct path *path, const char *name__str);
 bool bpf_lsm_has_d_inode_locked(const struct bpf_prog *prog);
 bool bpf_lsm_hook_returns_errno(u32 btf_id);
 
@@ -186,6 +189,15 @@ static inline int bpf_set_dentry_xattr_locked(struct dentry *dentry, const char 
 	return -EOPNOTSUPP;
 }
 static inline int bpf_remove_dentry_xattr_locked(struct dentry *dentry, const char *name__str)
+{
+	return -EOPNOTSUPP;
+}
+static inline int bpf_set_path_xattr_locked(const struct path *path, const char *name__str,
+					    const struct bpf_dynptr *value_p, int flags)
+{
+	return -EOPNOTSUPP;
+}
+static inline int bpf_remove_path_xattr_locked(const struct path *path, const char *name__str)
 {
 	return -EOPNOTSUPP;
 }

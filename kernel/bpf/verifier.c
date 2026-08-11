@@ -11072,6 +11072,8 @@ enum special_kfunc_type {
 	KF_bpf_iter_num_destroy,
 	KF_bpf_set_dentry_xattr,
 	KF_bpf_remove_dentry_xattr,
+	KF_bpf_set_path_xattr,
+	KF_bpf_remove_path_xattr,
 	KF_bpf_res_spin_lock,
 	KF_bpf_res_spin_unlock,
 	KF_bpf_res_spin_lock_irqsave,
@@ -11161,6 +11163,8 @@ BTF_ID(func, bpf_iter_num_destroy)
 #ifdef CONFIG_BPF_LSM
 BTF_ID(func, bpf_set_dentry_xattr)
 BTF_ID(func, bpf_remove_dentry_xattr)
+BTF_ID(func, bpf_set_path_xattr)
+BTF_ID(func, bpf_remove_path_xattr)
 #else
 BTF_ID_UNUSED
 BTF_ID_UNUSED
@@ -19733,6 +19737,12 @@ static int specialize_kfunc(struct bpf_verifier_env *env, struct bpf_kfunc_desc 
 	} else if (func_id == special_kfunc_list[KF_bpf_remove_dentry_xattr]) {
 		if (bpf_lsm_has_d_inode_locked(prog))
 			addr = (unsigned long)bpf_remove_dentry_xattr_locked;
+	} else if (func_id == special_kfunc_list[KF_bpf_set_path_xattr]) {
+		if (bpf_lsm_has_d_inode_locked(prog))
+			addr = (unsigned long)bpf_set_path_xattr_locked;
+	} else if (func_id == special_kfunc_list[KF_bpf_remove_path_xattr]) {
+		if (bpf_lsm_has_d_inode_locked(prog))
+			addr = (unsigned long)bpf_remove_path_xattr_locked;
 	} else if (func_id == special_kfunc_list[KF_bpf_dynptr_from_file]) {
 		if (!env->insn_aux_data[insn_idx].non_sleepable)
 			addr = (unsigned long)bpf_dynptr_from_file_sleepable;
