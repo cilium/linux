@@ -290,6 +290,29 @@ int bpf_remove_dentry_xattr_locked(struct dentry *dentry, const char *name__str)
 	return ret;
 }
 
+/**
+ * bpf_set_file_xattr_locked - set a xattr of a file
+ * @file: file to set the xattr on
+ * @name__str: name of the xattr
+ * @value_p: xattr value
+ * @flags: flags to pass into filesystem operations
+ *
+ * Set xattr *name__str* of *file* to the value in *value_ptr*.
+ *
+ * For security reasons, only *name__str* with prefix "security.bpf."
+ * is allowed.
+ *
+ * The caller already locked the inode of *file*.
+ *
+ * Return: 0 on success, a negative value on error.
+ */
+int bpf_set_file_xattr_locked(struct file *file, const char *name__str,
+			      const struct bpf_dynptr *value_p, int flags)
+{
+	return bpf_set_dentry_xattr_locked(file_dentry(file), name__str,
+					   value_p, flags);
+}
+
 __bpf_kfunc_start_defs();
 
 /**
@@ -321,6 +344,33 @@ __bpf_kfunc int bpf_set_dentry_xattr(struct dentry *dentry, const char *name__st
 	ret = bpf_set_dentry_xattr_locked(dentry, name__str, value_p, flags);
 	inode_unlock(inode);
 	return ret;
+}
+
+/**
+ * bpf_set_file_xattr - set a xattr of a file
+ * @file: file to set the xattr on
+ * @name__str: name of the xattr
+ * @value_p: xattr value
+ * @flags: flags to pass into filesystem operations
+ *
+ * Set xattr *name__str* of *file* to the value in *value_ptr*.
+ *
+ * For security reasons, only *name__str* with prefix "security.bpf."
+ * is allowed.
+ *
+ * The caller has not locked the inode of *file*.
+ *
+ * This is the write side of bpf_get_file_xattr(). It exists because
+ * struct file carries only f_inode in its trusted field set, so a
+ * sleepable LSM program that holds a struct file cannot derive a
+ * trusted dentry to pass to bpf_set_dentry_xattr().
+ *
+ * Return: 0 on success, a negative value on error.
+ */
+__bpf_kfunc int bpf_set_file_xattr(struct file *file, const char *name__str,
+				   const struct bpf_dynptr *value_p, int flags)
+{
+	return bpf_set_dentry_xattr(file_dentry(file), name__str, value_p, flags);
 }
 
 /**
@@ -603,6 +653,7 @@ BTF_ID_FLAGS(func, bpf_get_vma_file, KF_ACQUIRE | KF_RET_NULL)
 BTF_ID_FLAGS(func, bpf_path_d_path)
 BTF_ID_FLAGS(func, bpf_get_dentry_xattr, KF_SLEEPABLE)
 BTF_ID_FLAGS(func, bpf_get_file_xattr, KF_SLEEPABLE)
+BTF_ID_FLAGS(func, bpf_set_file_xattr, KF_SLEEPABLE)
 BTF_ID_FLAGS(func, bpf_set_dentry_xattr, KF_SLEEPABLE)
 BTF_ID_FLAGS(func, bpf_remove_dentry_xattr, KF_SLEEPABLE)
 BTF_ID_FLAGS(func, bpf_real_data_inode, KF_SLEEPABLE | KF_RET_NULL)
@@ -617,6 +668,7 @@ BTF_KFUNCS_END(bpf_fs_kfunc_set_ids)
 /* Side-effecting kfuncs that stay exclusive to LSM programs. */
 BTF_SET_START(bpf_fs_kfunc_lsm_only_ids)
 BTF_ID(func, bpf_set_dentry_xattr)
+BTF_ID(func, bpf_set_file_xattr)
 BTF_ID(func, bpf_remove_dentry_xattr)
 BTF_SET_END(bpf_fs_kfunc_lsm_only_ids)
 
@@ -677,6 +729,10 @@ static int bpf_fs_kfuncs_filter(const struct bpf_prog *prog, u32 kfunc_id)
  * Specifically, hooks in the following list (d_inode_locked_hooks)
  * should call bpf_[set|remove]_dentry_xattr_locked; while other hooks
  * should call bpf_[set|remove]_dentry_xattr.
+ *
+ * bpf_set_file_xattr is routed the same way: a struct file can be
+ * acquired in any LSM program (bpf_get_task_exe_file), so it too has to
+ * pick the locked variant when the attach hook already holds i_rwsem.
  */
 BTF_SET_START(d_inode_locked_hooks)
 BTF_ID(func, bpf_lsm_inode_post_removexattr)
