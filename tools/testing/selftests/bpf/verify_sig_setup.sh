@@ -28,7 +28,7 @@ authorityKeyIdentifier=keyid
 
 usage()
 {
-	echo "Usage: $0 <setup-rsa|cleanup <existing_tmp_dir>"
+	echo "Usage: $0 <setup-rsa|setup-mldsa|cleanup <existing_tmp_dir>"
 	exit 1
 }
 
@@ -53,6 +53,61 @@ setup_rsa()
 
 	genkey "${tmp_dir}"
 	key_id=$(cat ${tmp_dir}/signing_key.der | keyctl padd asymmetric ebpf_testing_key @s)
+	keyring_id=$(keyctl newring ebpf_testing_keyring @s)
+	keyctl link $key_id $keyring_id
+}
+
+# ML-DSA key types were added in openssl-3.5. Probe for the key manager
+# rather than parsing "openssl version", the same way the
+# OPENSSL_SUPPORTS_ML_DSA check in certs/Kconfig does; that also covers an
+# openssl built without the algorithm and an openssl too old to know the
+# "list -key-managers" subcommand at all.
+mldsa_supported()
+{
+	openssl list -key-managers 2>/dev/null | grep -q "ML-DSA-87"
+}
+
+genkey_mldsa()
+{
+	local tmp_dir="$1"
+
+	echo "${x509_genkey_content}" > ${tmp_dir}/x509.genkey
+
+	# No -<digest> here: ML-DSA hashes the message itself, and openssl
+	# rejects an explicit digest for it.
+	openssl req -new -nodes -utf8 -days 36500 \
+			-batch -x509 -newkey ML-DSA-87 \
+			-config ${tmp_dir}/x509.genkey \
+			-outform PEM -out ${tmp_dir}/signing_key.pem \
+			-keyout ${tmp_dir}/signing_key.pem 2>&1
+
+	openssl x509 -in ${tmp_dir}/signing_key.pem -out \
+		${tmp_dir}/signing_key.der -outform der
+}
+
+# Leaves ${tmp_dir} empty so the caller can rmdir() it, and exits 77, the
+# usual "skipped" convention, so the caller can tell an openssl that cannot
+# do ML-DSA apart from a genuine failure.
+mldsa_skip()
+{
+	local tmp_dir="$1"
+
+	rm -f ${tmp_dir}/x509.genkey ${tmp_dir}/signing_key.pem \
+		${tmp_dir}/signing_key.der
+	exit 77
+}
+
+# An openssl without ML-DSA is the only skip here. The kernel side is covered
+# by CONFIG_CRYPTO_MLDSA in the selftest config, so a kernel that will not
+# take the certificate is a real failure and is reported as one.
+setup_mldsa()
+{
+	local tmp_dir="$1"
+
+	mldsa_supported || mldsa_skip "${tmp_dir}"
+	genkey_mldsa "${tmp_dir}"
+	key_id=$(cat ${tmp_dir}/signing_key.der |
+		 keyctl padd asymmetric ebpf_testing_key @s)
 	keyring_id=$(keyctl newring ebpf_testing_keyring @s)
 	keyctl link $key_id $keyring_id
 }
@@ -110,6 +165,8 @@ main()
 
 	if [[ "${action}" == "setup-rsa" ]]; then
 		setup_rsa "${tmp_dir}"
+	elif [[ "${action}" == "setup-mldsa" ]]; then
+		setup_mldsa "${tmp_dir}"
 	elif [[ "${action}" == "genkey" ]]; then
 		genkey "${tmp_dir}"
 	elif [[ "${action}" == "cleanup" ]]; then
