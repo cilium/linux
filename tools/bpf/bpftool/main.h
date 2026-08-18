@@ -57,7 +57,12 @@ static inline void *u64_to_ptr(__u64 ptr)
 	})
 
 #define ERR_MAX_LEN	1024
-#define MAX_SIG_SIZE	4096
+/*
+ * Large enough for an ML-DSA-87 CMS signature, which is a little over 4900
+ * bytes; RSA and ECDSA need only a few hundred. Kept well under the kernel's
+ * own BPF_PROG_MAX_SIGNATURE_SIZE bound.
+ */
+#define MAX_SIG_SIZE	16384
 
 #define BPF_TAG_FMT	"%02hhx%02hhx%02hhx%02hhx%02hhx%02hhx%02hhx%02hhx"
 

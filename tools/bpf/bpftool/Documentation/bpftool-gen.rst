@@ -191,7 +191,9 @@ OPTIONS
     **-k** and **-i**. Using this flag implicitly enables **--use-loader**.
 
 -k <private_key.pem>
-    Path to the private key file in PEM format, required for signing.
+    Path to the private key file in PEM format, required for signing. RSA,
+    ECDSA and ML-DSA-44/65/87 keys are supported; ML-DSA requires OpenSSL 3.5
+    or later, and a kernel built with CONFIG_CRYPTO_MLDSA to verify against.
 
 -i <certificate.x509>
     Path to the X.509 certificate file in PEM or DER format, required for
