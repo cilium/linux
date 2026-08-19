@@ -57,14 +57,27 @@ setup_rsa()
 	keyctl link $key_id $keyring_id
 }
 
-# ML-DSA key types were added in openssl-3.5. Probe for the key manager
-# rather than parsing "openssl version", the same way the
-# OPENSSL_SUPPORTS_ML_DSA check in certs/Kconfig does; that also covers an
-# openssl built without the algorithm and an openssl too old to know the
-# "list -key-managers" subcommand at all.
+# ML-DSA key types were added in openssl-3.5, and the test needs that on two
+# sides which are not necessarily the same openssl: the CLI has to generate
+# the key here, and sign-file has to sign with it through whatever libcrypto
+# it was linked against. Asking the CLI alone, say through "list
+# -key-managers", says nothing about the second, and a system where the two
+# differ then gets past the probe only to fail at signing.
+#
+# So probe by doing it: generate the key and sign a scratch file with it. That
+# also covers an openssl built without the algorithm and one too old to know
+# the ML-DSA-87 key type at all, and it leaves the key behind for the caller,
+# as generating it is the first half of the probe.
 mldsa_supported()
 {
-	openssl list -key-managers 2>/dev/null | grep -q "ML-DSA-87"
+	local tmp_dir="$1"
+
+	genkey_mldsa "${tmp_dir}" || return 1
+	: > ${tmp_dir}/probe
+	# Same digest as the caller signs with, see sign_buf_digest().
+	./sign-file -d sha512 ${tmp_dir}/signing_key.pem \
+		${tmp_dir}/signing_key.pem ${tmp_dir}/probe || return 1
+	rm -f ${tmp_dir}/probe ${tmp_dir}/probe.p7s
 }
 
 genkey_mldsa()
@@ -93,19 +106,19 @@ mldsa_skip()
 	local tmp_dir="$1"
 
 	rm -f ${tmp_dir}/x509.genkey ${tmp_dir}/signing_key.pem \
-		${tmp_dir}/signing_key.der
+		${tmp_dir}/signing_key.der ${tmp_dir}/probe \
+		${tmp_dir}/probe.p7s
 	exit 77
 }
 
-# An openssl without ML-DSA is the only skip here. The kernel side is covered
-# by CONFIG_CRYPTO_MLDSA in the selftest config, so a kernel that will not
-# take the certificate is a real failure and is reported as one.
+# A userspace that cannot do ML-DSA is the only skip here. The kernel side is
+# covered by CONFIG_CRYPTO_MLDSA in the selftest config, so a kernel that will
+# not take the certificate is a real failure and is reported as one.
 setup_mldsa()
 {
 	local tmp_dir="$1"
 
-	mldsa_supported || mldsa_skip "${tmp_dir}"
-	genkey_mldsa "${tmp_dir}"
+	mldsa_supported "${tmp_dir}" || mldsa_skip "${tmp_dir}"
 	key_id=$(cat ${tmp_dir}/signing_key.der |
 		 keyctl padd asymmetric ebpf_testing_key @s)
 	keyring_id=$(keyctl newring ebpf_testing_keyring @s)
@@ -146,7 +159,10 @@ catch()
 	local exit_code="$1"
 	local log_file="$2"
 
-	if [[ "${exit_code}" -ne 0 ]]; then
+	# 77 is mldsa_skip(), an expected outcome rather than a failure, and
+	# its probe leaves the noise of the openssl or sign-file that could
+	# not do ML-DSA behind in the log. Do not report that as an error.
+	if [[ "${exit_code}" -ne 0 && "${exit_code}" -ne 77 ]]; then
 		cat "${log_file}" >&3
 	fi
 
