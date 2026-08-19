@@ -71,6 +71,38 @@ static int load_loader(const void *insns, __u32 insns_sz, int map_fd,
 	return fd < 0 ? -errno : fd;
 }
 
+/*
+ * As load_loader(), but captures the verifier log. A signature made by a key
+ * outside the keyring and a keyring that was never consulted both surface as
+ * -ENOKEY, so the log line is what tells the two apart.
+ */
+static int load_loader_log(const void *insns, __u32 insns_sz, int map_fd,
+			   const void *sig, __u32 sig_sz, __s32 keyring_id,
+			   __u32 fd_array_cnt, char *log_buf, __u32 log_sz)
+{
+	union bpf_attr attr;
+	int fd;
+
+	memset(&attr, 0, sizeof(attr));
+	attr.prog_type = BPF_PROG_TYPE_SYSCALL;
+	attr.insns = ptr_to_u64(insns);
+	attr.insn_cnt = insns_sz / sizeof(struct bpf_insn);
+	attr.license = ptr_to_u64("Dual BSD/GPL");
+	attr.prog_flags = BPF_F_SLEEPABLE;
+	attr.fd_array = ptr_to_u64(&map_fd);
+	attr.fd_array_cnt = fd_array_cnt;
+	attr.signature = ptr_to_u64(sig);
+	attr.signature_size = sig_sz;
+	attr.keyring_id = keyring_id;
+	attr.log_level = 1;
+	attr.log_buf = ptr_to_u64(log_buf);
+	attr.log_size = log_sz;
+	memcpy(attr.prog_name, "__loader.prog", sizeof("__loader.prog"));
+	fd = syscall(__NR_bpf, BPF_PROG_LOAD, &attr,
+		     offsetofend(union bpf_attr, keyring_id));
+	return fd < 0 ? -errno : fd;
+}
+
 static int run_gen_loader(const void *insns, __u32 insns_sz,
 			  const void *data, __u32 data_sz,
 			  const void *excl, __u32 excl_sz,
@@ -170,6 +202,28 @@ static int run_setup(const char *cmd, const char *dir)
 	if (!WIFEXITED(status))
 		return -EINVAL;
 	return -WEXITSTATUS(status);
+}
+
+/*
+ * Remove what the genkey action of verify_sig_setup.sh leaves behind. Its
+ * cleanup action is no use here: that one unlinks the session keyring keys
+ * which genkey never adds in the first place.
+ */
+static void genkey_dir_fini(const char *dir)
+{
+	static const char * const files[] = {
+		"signing_key.der", "signing_key.pem", "x509.genkey",
+	};
+	char path[PATH_MAX];
+	size_t i;
+
+	if (!dir)
+		return;
+	for (i = 0; i < ARRAY_SIZE(files); i++) {
+		snprintf(path, sizeof(path), "%s/%s", dir, files[i]);
+		unlink(path);
+	}
+	rmdir(dir);
 }
 
 static int sign_buf_digest(const char *dir, const void *buf, __u32 len,
@@ -645,11 +699,62 @@ static void signature_bad_keyring(void)
 	gen_loader_fixture_fini(&f);
 }
 
+/*
+ * Locate the ".bpf" keyring in /proc/keys, returning its serial and, via
+ * @nr_keys, how many keys it holds. Lines look like:
+ *
+ *   0b6d5d35 I------ 1 perm 082f0000 0 0 keyring   .bpf: empty
+ *   0b6d5d35 I------ 1 perm 082f0000 0 0 keyring   .bpf: 1
+ */
+static int bpf_keyring_lookup(int *nr_keys)
+{
+	char line[512], type[32], desc[64];
+	int serial = -ENOENT;
+	FILE *f;
+
+	f = fopen("/proc/keys", "r");
+	if (!f)
+		return -errno;
+
+	while (fgets(line, sizeof(line), f)) {
+		unsigned int hex;
+		char *sum;
+
+		if (sscanf(line, "%x %*s %*s %*s %*s %*s %*s %31s %63s",
+			   &hex, type, desc) != 3)
+			continue;
+		if (strcmp(type, "keyring") || strcmp(desc, ".bpf:"))
+			continue;
+
+		serial = (int)hex;
+		if (nr_keys) {
+			sum = strstr(line, ".bpf: ");
+			*nr_keys = (sum && !strncmp(sum + 6, "empty", 5)) ?
+				   0 : atoi(sum + 6);
+		}
+		break;
+	}
+	fclose(f);
+	return serial;
+}
+
 static void bpf_keyring_sealed(void)
 {
 	static const __u8 junk[64] = {};
 	struct gen_loader_fixture f;
-	int fd;
+	int fd, nr_keys = 0;
+
+	/*
+	 * bpf_keyring_provisioned() restricts the keyring for the rest of the
+	 * boot, and that cannot be undone, so once it has run this is no
+	 * longer the state under test.
+	 */
+	if (bpf_keyring_lookup(&nr_keys) >= 0 && nr_keys != 0) {
+		printf("%s:SKIP:the .bpf keyring has been provisioned\n",
+		       __func__);
+		test__skip();
+		return;
+	}
 
 	if (gen_loader_fixture_init(&f) == 0) {
 		/*
@@ -667,6 +772,219 @@ static void bpf_keyring_sealed(void)
 			close(fd);
 	}
 	gen_loader_fixture_fini(&f);
+}
+
+/*
+ * The other half of bpf_keyring_sealed: provision the .bpf keyring, restrict
+ * it to activate it, and check that a program signed by the enrolled key then
+ * loads when it names BPF_KEYRING_BPF.
+ *
+ * Needs bpf.keyring_unsealed=1 on the guest kernel command line, which
+ * vmtest.sh can pass via KERNEL_CMDLINE_EXTRA. There is deliberately no way
+ * to unseal the keyring from here, so without it the test skips. It also only
+ * works once per boot, as restricting a keyring cannot be undone.
+ */
+static void bpf_keyring_provisioned(void)
+{
+	char dir_tmpl[] = "/tmp/bpfkeyringXXXXXX";
+	char bad_tmpl[] = "/tmp/bpfkeyringbadXXXXXX";
+	int map_fd = -1, prog_fd = -1, serial, err;
+	__u8 *sig = NULL, *bad = NULL, *buf = NULL;
+	int nr_keys = 0, der_fd = -1;
+	struct gen_loader_fixture f;
+	__u32 sig_sz = 8192, bad_sz;
+	bool have_fixture = false;
+	char *dir, *bad_dir = NULL;
+	char log_buf[1024] = {};
+	char path[PATH_MAX];
+	__u8 der[4096];
+	ssize_t der_sz;
+
+	serial = bpf_keyring_lookup(&nr_keys);
+	if (serial < 0) {
+		printf("%s:SKIP:no .bpf keyring (needs CONFIG_KEYS)\n", __func__);
+		test__skip();
+		return;
+	}
+	if (nr_keys != 0) {
+		printf("%s:SKIP:the .bpf keyring has already been provisioned\n",
+		       __func__);
+		test__skip();
+		return;
+	}
+
+	dir = mkdtemp(dir_tmpl);
+	if (!ASSERT_OK_PTR(dir, "mkdtemp"))
+		return;
+	if (!ASSERT_OK(run_setup("genkey", dir), "verify_sig_setup genkey"))
+		goto rmdir;
+
+	snprintf(path, sizeof(path), "%s/signing_key.der", dir);
+	der_fd = open(path, O_RDONLY);
+	if (!ASSERT_OK_FD(der_fd, "open signing_key.der"))
+		goto rmdir;
+	der_sz = read(der_fd, der, sizeof(der));
+	close(der_fd);
+	if (!ASSERT_GT(der_sz, 0, "read signing_key.der"))
+		goto rmdir;
+
+	/*
+	 * A sealed keyring answers this with -EPERM, out of the
+	 * restrict_link_reject() restriction that bpf_keyring_init() installs,
+	 * and that is the state the kernel is in unless it was booted with
+	 * bpf.keyring_unsealed=1. The attempt is the probe: there is nothing
+	 * else to ask. Any other errno is a keyring that ought to have taken
+	 * the key and did not, so report that rather than bury it in a skip.
+	 */
+	err = syscall(__NR_add_key, "asymmetric", "", der, (size_t)der_sz,
+		      serial);
+	if (err < 0 && errno == EPERM) {
+		printf("%s:SKIP:the .bpf keyring is sealed, need bpf.keyring_unsealed=1\n",
+		       __func__);
+		test__skip();
+		goto rmdir;
+	}
+	if (!ASSERT_GE(err, 0, "add the signing key to the .bpf keyring"))
+		goto rmdir;
+
+	/*
+	 * Still inert at this point: the keyring is non-empty but carries no
+	 * restriction, so it is not handed out yet.
+	 */
+	sig = malloc(sig_sz);
+	if (!ASSERT_OK_PTR(sig, "sig buf"))
+		goto out;
+	if (gen_loader_fixture_init(&f) != 0)
+		goto out;
+	have_fixture = true;
+
+	buf = malloc((size_t)f.gopts.insns_sz + f.data_sz);
+	if (!ASSERT_OK_PTR(buf, "signbuf"))
+		goto out;
+	memcpy(buf, f.gopts.insns, f.gopts.insns_sz);
+	memcpy(buf + f.gopts.insns_sz, f.blob, f.data_sz);
+	if (!ASSERT_OK(sign_buf(dir, buf, f.gopts.insns_sz + f.data_sz, sig,
+				&sig_sz), "sign insns||metadata"))
+		goto out;
+
+	map_fd = setup_meta_map(&f);
+	if (!ASSERT_OK_FD(map_fd, "meta_map_unrestricted"))
+		goto out;
+	prog_fd = load_loader(f.gopts.insns, f.gopts.insns_sz, map_fd, sig,
+			      sig_sz, BPF_KEYRING_BPF, 1);
+	close(map_fd);
+	map_fd = -1;
+	ASSERT_EQ(prog_fd, -ENOKEY, "unrestricted keyring still not consulted");
+	if (prog_fd >= 0)
+		close(prog_fd);
+	prog_fd = -1;
+
+	/* Restricting it is what turns it on. */
+	if (!ASSERT_OK(syscall(__NR_keyctl, KEYCTL_RESTRICT_KEYRING, serial,
+			       NULL, NULL), "restrict .bpf keyring"))
+		goto out;
+
+	map_fd = setup_meta_map(&f);
+	if (!ASSERT_OK_FD(map_fd, "meta_map_restricted"))
+		goto out;
+	prog_fd = load_loader(f.gopts.insns, f.gopts.insns_sz, map_fd, sig,
+			      sig_sz, BPF_KEYRING_BPF, 1);
+	close(map_fd);
+	map_fd = -1;
+	if (!ASSERT_OK_FD(prog_fd, "load signed by a key in the .bpf keyring"))
+		goto out;
+	close(prog_fd);
+	prog_fd = -1;
+
+	/*
+	 * That load on its own only shows that something accepted the
+	 * signature. A PKCS#7 blob carries the certificate it was made with,
+	 * so it verifies against itself; what makes it a trust decision is the
+	 * keyring lookup. Sign the same payload with a key that was never
+	 * enrolled and it has to be refused.
+	 */
+	bad_dir = mkdtemp(bad_tmpl);
+	if (!ASSERT_OK_PTR(bad_dir, "mkdtemp unenrolled"))
+		goto out;
+	if (!ASSERT_OK(run_setup("genkey", bad_dir), "verify_sig_setup genkey unenrolled"))
+		goto out;
+	bad_sz = 8192;
+	bad = malloc(bad_sz);
+	if (!ASSERT_OK_PTR(bad, "bad sig buf"))
+		goto out;
+	if (!ASSERT_OK(sign_buf(bad_dir, buf, f.gopts.insns_sz + f.data_sz, bad,
+				&bad_sz), "sign with an unenrolled key"))
+		goto out;
+
+	map_fd = setup_meta_map(&f);
+	if (!ASSERT_OK_FD(map_fd, "meta_map_unenrolled"))
+		goto out;
+	prog_fd = load_loader_log(f.gopts.insns, f.gopts.insns_sz, map_fd, bad,
+				  bad_sz, BPF_KEYRING_BPF, 1, log_buf,
+				  sizeof(log_buf));
+	close(map_fd);
+	map_fd = -1;
+	ASSERT_EQ(prog_fd, -ENOKEY, "key outside the .bpf keyring refused");
+	/*
+	 * A keyring that was not consulted answers -ENOKEY as well, so pin
+	 * that the signature was checked rather than the keyring bypassed:
+	 * only bpf_verify_pkcs7_signature() having run produces this line.
+	 */
+	ASSERT_HAS_SUBSTR(log_buf, "signature verification failed",
+			  "the .bpf keyring was consulted");
+	if (prog_fd >= 0)
+		close(prog_fd);
+	prog_fd = -1;
+
+	/*
+	 * The payload is covered too, not just the key: flip a byte of the
+	 * metadata the signature spans and the signature no longer matches.
+	 * Tamper with f.blob rather than the insns, as the latter feeds the
+	 * loader's hash and the load would be rejected over the map's
+	 * excl_prog_hash before it ever reaches the signature. -EKEYREJECTED
+	 * is unambiguous here; no early return in bpf_prog_verify_signature()
+	 * produces it.
+	 */
+	f.blob[0] ^= 0xff;
+	map_fd = setup_meta_map(&f);
+	f.blob[0] ^= 0xff;
+	if (!ASSERT_OK_FD(map_fd, "meta_map_tampered"))
+		goto out;
+	prog_fd = load_loader(f.gopts.insns, f.gopts.insns_sz, map_fd, sig,
+			      sig_sz, BPF_KEYRING_BPF, 1);
+	close(map_fd);
+	map_fd = -1;
+	ASSERT_EQ(prog_fd, -EKEYREJECTED, "tampered metadata refused");
+	if (prog_fd >= 0)
+		close(prog_fd);
+	prog_fd = -1;
+
+	/*
+	 * Having used the keyring, a caller-supplied one is no longer an
+	 * acceptable origin: the same signature naming the session keyring is
+	 * refused even though it would have been taken a moment ago.
+	 */
+	map_fd = setup_meta_map(&f);
+	if (!ASSERT_OK_FD(map_fd, "meta_map_session"))
+		goto out;
+	prog_fd = load_loader(f.gopts.insns, f.gopts.insns_sz, map_fd, sig,
+			      sig_sz, KEY_SPEC_SESSION_KEYRING, 1);
+	close(map_fd);
+	map_fd = -1;
+	ASSERT_EQ(prog_fd, -EPERM, "caller-supplied keyring refused once .bpf is in use");
+out:
+	if (prog_fd >= 0)
+		close(prog_fd);
+	if (map_fd >= 0)
+		close(map_fd);
+	if (have_fixture)
+		gen_loader_fixture_fini(&f);
+	genkey_dir_fini(bad_dir);
+	free(buf);
+	free(bad);
+	free(sig);
+rmdir:
+	genkey_dir_fini(dir);
 }
 
 /*
@@ -1907,7 +2225,14 @@ cleanup:
 	run_setup("cleanup", dir);
 }
 
-void test_signed_loader(void)
+/*
+ * Serial: bpf_keyring_provisioned() activates the .bpf keyring, and from that
+ * moment the kernel refuses every caller-supplied keyring for the rest of the
+ * boot. Other tests load signed light skeletons against the session keyring
+ * test_progs sets up in main(), so they must not be running in another worker
+ * while this one gets there.
+ */
+void serial_test_signed_loader(void)
 {
 	if (test__start_subtest("loadtime_no_map"))
 		loadtime_no_map();
@@ -1971,4 +2296,11 @@ void test_signed_loader(void)
 		signed_map_by_fd_rejected();
 	if (test__start_subtest("signed_sparse_fd_array_rejected"))
 		signed_sparse_fd_array_rejected();
+	/*
+	 * Keep last. Activating the .bpf keyring is irreversible for the boot
+	 * and stops caller-supplied keyrings being accepted, which every other
+	 * signed load here relies on.
+	 */
+	if (test__start_subtest("bpf_keyring_provisioned"))
+		bpf_keyring_provisioned();
 }
