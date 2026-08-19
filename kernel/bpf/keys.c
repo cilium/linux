@@ -13,10 +13,16 @@
 #define MODULE_PARAM_PREFIX "bpf."
 
 static struct key *bpf_keyring;
+static bool bpf_keyring_active;
 
 static bool bpf_keyring_unsealed __ro_after_init;
 module_param_named(keyring_unsealed, bpf_keyring_unsealed, bool, 0444);
 MODULE_PARM_DESC(keyring_unsealed, "Leave the .bpf keyring unsealed");
+
+bool bpf_keyring_was_active(void)
+{
+	return READ_ONCE(bpf_keyring_active);
+}
 
 struct bpf_key *bpf_lookup_keyring(void)
 {
@@ -27,6 +33,8 @@ struct bpf_key *bpf_lookup_keyring(void)
 	if (!READ_ONCE(bpf_keyring->keys.nr_leaves_on_tree) ||
 	    !READ_ONCE(bpf_keyring->restrict_link))
 		return NULL;
+
+	WRITE_ONCE(bpf_keyring_active, true);
 
 	bkey = kmalloc_obj(*bkey);
 	if (!bkey)
