@@ -11,6 +11,7 @@
 #include <linux/fsnotify.h>
 #include <linux/file.h>
 #include <linux/kernfs.h>
+#include <linux/lsm_hooks.h>
 #include <linux/mm.h>
 #include <linux/net.h>
 #include <linux/xattr.h>
@@ -328,6 +329,100 @@ __bpf_kfunc int bpf_remove_dentry_xattr(struct dentry *dentry, const char *name_
 	return ret;
 }
 
+static int bpf_init_inode_xattrs_used(const struct xattr *xattrs, int xattr_count)
+{
+	const size_t prefix_len = sizeof(XATTR_BPF_LSM_SUFFIX) - 1;
+	int i, n = 0;
+
+	for (i = 0; i < xattr_count; i++) {
+		const char *name = xattrs[i].name;
+
+		if (name && !strncmp(name, XATTR_BPF_LSM_SUFFIX, prefix_len))
+			n++;
+	}
+	return n;
+}
+
+/**
+ * bpf_init_inode_xattr - set an xattr on a new inode from inode_init_security
+ * @xattrs: xattr array passed to the inode_init_security hook
+ * @xattr_count__ctx_out: xattr count passed to the inode_init_security hook
+ * @name__str: xattr name (e.g., "bpf.file_label")
+ * @value_p: dynptr containing the xattr value
+ *
+ * Claim the next free slot in *xattrs* via lsm_get_xattr_slot() and fill it
+ * with *name__str* and the value in *value_p*. Both *xattrs* and
+ * *xattr_count__ctx_out* must be the hook's own arguments, passed through
+ * unmodified; the verifier enforces this.
+ *
+ * For security reasons, only *name__str* with prefix "bpf." is allowed. The
+ * LSM infrastructure prepends "security." when the xattr is written to disk,
+ * making the resulting name "security.bpf.*".
+ *
+ * Callers can invoke this function from non-sleepable context. At most
+ * BPF_LSM_INODE_INIT_XATTRS xattrs can be added per inode, matching the
+ * slots reserved by the BPF LSM.
+ *
+ * Return: 0 on success, a negative errno on failure.
+ */
+__bpf_kfunc int bpf_init_inode_xattr(struct xattr *xattrs,
+				     int *xattr_count__ctx_out,
+				     const char *name__str,
+				     const struct bpf_dynptr *value_p)
+{
+	struct bpf_dynptr_kern *value_ptr = (struct bpf_dynptr_kern *)value_p;
+	int *xattr_count = xattr_count__ctx_out;
+	void *xattr_value;
+	struct xattr *xattr;
+	const void *value;
+	size_t name_len;
+	u32 value_len;
+
+	/* NULL when the filesystem does not support LSM-managed xattrs. */
+	if (!xattrs)
+		return -EOPNOTSUPP;
+
+	if (bpf_init_inode_xattrs_used(xattrs, *xattr_count) >=
+	    BPF_LSM_INODE_INIT_XATTRS)
+		return -ENOSPC;
+
+	name_len = strlen(name__str);
+	if (name_len == 0 || name_len > XATTR_NAME_MAX)
+		return -EINVAL;
+	if (strncmp(name__str, XATTR_BPF_LSM_SUFFIX,
+		    sizeof(XATTR_BPF_LSM_SUFFIX) - 1))
+		return -EPERM;
+
+	value_len = __bpf_dynptr_size(value_ptr);
+	if (value_len == 0 || value_len > XATTR_SIZE_MAX)
+		return -EINVAL;
+
+	value = __bpf_dynptr_data(value_ptr, value_len);
+	if (!value)
+		return -EINVAL;
+
+	/* Combine xattr value + name into one allocation. */
+	xattr_value = kmalloc(value_len + name_len + 1, GFP_NOWAIT);
+	if (!xattr_value)
+		return -ENOMEM;
+
+	memcpy(xattr_value, value, value_len);
+	memcpy(xattr_value + value_len, name__str, name_len);
+	((char *)xattr_value)[value_len + name_len] = '\0';
+
+	xattr = lsm_get_xattr_slot(xattrs, xattr_count);
+	if (!xattr) {
+		kfree(xattr_value);
+		return -ENOSPC;
+	}
+
+	xattr->value = xattr_value;
+	xattr->name = (const char *)xattr_value + value_len;
+	xattr->value_len = value_len;
+
+	return 0;
+}
+
 #ifdef CONFIG_CGROUPS
 /**
  * bpf_cgroup_read_xattr - read xattr of a cgroup's node in cgroupfs
@@ -424,6 +519,7 @@ BTF_ID_FLAGS(func, bpf_get_dentry_xattr, KF_SLEEPABLE)
 BTF_ID_FLAGS(func, bpf_get_file_xattr, KF_SLEEPABLE)
 BTF_ID_FLAGS(func, bpf_set_dentry_xattr, KF_SLEEPABLE)
 BTF_ID_FLAGS(func, bpf_remove_dentry_xattr, KF_SLEEPABLE)
+BTF_ID_FLAGS(func, bpf_init_inode_xattr)
 BTF_ID_FLAGS(func, bpf_real_data_inode, KF_SLEEPABLE | KF_RET_NULL)
 #ifdef CONFIG_NET
 BTF_ID_FLAGS(func, bpf_sock_read_xattr, KF_RCU)
