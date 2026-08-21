@@ -6532,6 +6532,8 @@ static int check_mem_access(struct bpf_verifier_env *env, int insn_idx, struct b
 					regs[value_regno].btf = info.btf;
 					regs[value_regno].btf_id = info.btf_id;
 					regs[value_regno].id = info.ref_id;
+				} else if (base_type(info.reg_type) == PTR_TO_MEM) {
+					regs[value_regno].mem_size = info.mem_size;
 				}
 				if (type_may_be_null(info.reg_type) && !regs[value_regno].id)
 					regs[value_regno].id = ++env->id_gen;
@@ -11458,6 +11460,11 @@ static bool is_kfunc_arg_irq_flag(const struct btf *btf, const struct btf_param 
 	return btf_param_match_suffix(btf, arg, "__irq_flag");
 }
 
+static bool is_kfunc_arg_ctx_out(const struct btf *btf, const struct btf_param *arg)
+{
+	return btf_param_match_suffix(btf, arg, "__ctx_out");
+}
+
 static bool is_kfunc_arg_arena(const struct btf *btf, const struct btf_param *arg)
 {
 	return btf_param_match_suffix(btf, arg, "__arena__nullable") ||
@@ -11685,6 +11692,7 @@ enum kfunc_ptr_arg_type {
 	KF_ARG_PTR_TO_RES_SPIN_LOCK,
 	KF_ARG_PTR_TO_TASK_WORK,
 	KF_ARG_PTR_TO_ARENA,
+	KF_ARG_PTR_TO_CTX_OUT,	       /* Hook output argument passed through from ctx */
 };
 
 enum special_kfunc_type {
@@ -12010,7 +12018,14 @@ get_kfunc_arg_type(struct bpf_verifier_env *env, struct bpf_call_arg_meta *meta,
 		arg_type = KF_ARG_PTR_TO_IRQ_FLAG;
 	else if (is_kfunc_arg_res_spin_lock(meta->btf, &args[arg]))
 		arg_type = KF_ARG_PTR_TO_RES_SPIN_LOCK;
-	else if (is_kfunc_arg_callback(env, meta->btf, &args[arg]))
+	else if (is_kfunc_arg_ctx_out(meta->btf, &args[arg])) {
+		if (!btf_type_is_scalar(ref_t)) {
+			verbose(env, "%s __ctx_out argument must point to a scalar\n",
+				reg_arg_name(env, argno));
+			return -EINVAL;
+		}
+		arg_type = KF_ARG_PTR_TO_CTX_OUT;
+	} else if (is_kfunc_arg_callback(env, meta->btf, &args[arg]))
 		arg_type = KF_ARG_PTR_TO_CALLBACK;
 	else if (is_kfunc_arg_arena(meta->btf, &args[arg])) {
 		if (!bpf_jit_supports_arena_args()) {
@@ -12790,6 +12805,7 @@ static int check_kfunc_args(struct bpf_verifier_env *env, struct bpf_call_arg_me
 		case KF_ARG_PTR_TO_IRQ_FLAG:
 		case KF_ARG_PTR_TO_RES_SPIN_LOCK:
 		case KF_ARG_PTR_TO_ARENA:
+		case KF_ARG_PTR_TO_CTX_OUT:
 			break;
 		case KF_ARG_PTR_TO_DYNPTR:
 			arg_type = ARG_PTR_TO_DYNPTR;
@@ -13169,6 +13185,33 @@ check_ok:
 							bpf_diag_reg_type_plain(env, reg->type));
 					return ret;
 				}
+			}
+			break;
+		case KF_ARG_PTR_TO_CTX_OUT:
+			if (reg->type != (PTR_TO_MEM | MEM_RDONLY | PTR_TRUSTED)) {
+				verbose(env,
+					"%s expected a hook output argument loaded from ctx, but got %s\n",
+					reg_arg_name(env, argno), reg_type_str(env, reg->type));
+				bpf_diag_call_arg_fmt(env, insn_idx, argno, func_name,
+						      "Pass the attach hook's own output argument, loaded directly from the program context.",
+						      "the kfunc expects a hook output argument from the program context, but %s is %s",
+						      reg_arg_name(env, argno),
+						      bpf_diag_reg_type_plain(env, reg->type));
+				return -EINVAL;
+			}
+			resolve_ret = btf_resolve_size(btf, ref_t, &type_size);
+			if (IS_ERR(resolve_ret)) {
+				verbose(env,
+					"%s reference type('%s %s') size cannot be determined: %ld\n",
+					reg_arg_name(env, argno), btf_type_str(ref_t),
+					ref_tname, PTR_ERR(resolve_ret));
+				return -EINVAL;
+			}
+			if (reg->mem_size != type_size) {
+				verbose(env,
+					"%s expected %u bytes of ctx-provided memory, got %u\n",
+					reg_arg_name(env, argno), type_size, reg->mem_size);
+				return -EINVAL;
 			}
 			break;
 		case KF_ARG_CONST_MEM_SIZE:

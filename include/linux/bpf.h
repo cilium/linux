@@ -1113,6 +1113,8 @@ struct bpf_insn_access_aux {
 			u32 ref_id;
 		};
 	};
+	/* valid when base_type(reg_type) == PTR_TO_MEM */
+	u32 mem_size;
 	struct bpf_verifier_log *log; /* for verbose logs */
 	bool is_retval; /* is accessing function return value ? */
 };
@@ -1683,6 +1685,8 @@ struct bpf_ctx_arg_aux {
 	struct btf *btf;
 	u32 btf_id;
 	u32 ref_id;
+	/* valid when base_type(reg_type) == PTR_TO_MEM */
+	u32 mem_size;
 	bool refcounted;
 };
 
