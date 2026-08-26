@@ -116,8 +116,11 @@ void bpf_lsm_find_cgroup_shim(const struct bpf_prog *prog,
 }
 #endif
 
+BTF_ID_LIST_SINGLE(bpf_lsm_inode_init_security_btf_id, func,
+		   bpf_lsm_inode_init_security)
+
 int bpf_lsm_verify_prog(struct bpf_verifier_log *vlog,
-			const struct bpf_prog *prog)
+			struct bpf_prog *prog)
 {
 	u32 btf_id = prog->aux->attach_btf_id;
 	const char *func_name = prog->aux->attach_func_name;
@@ -138,6 +141,17 @@ int bpf_lsm_verify_prog(struct bpf_verifier_log *vlog,
 		bpf_log(vlog, "attach_btf_id %u points to wrong type name %s\n",
 			btf_id, func_name);
 		return -EINVAL;
+	}
+
+	if (btf_id == bpf_lsm_inode_init_security_btf_id[0]) {
+		/* inode, dir, qstr, xattrs, xattr_count */
+		static const struct bpf_ctx_arg_aux xattr_count_arg_info = {
+			.offset		= 4 * sizeof(u64),
+			.reg_type	= PTR_TO_MEM | MEM_RDONLY | PTR_TRUSTED,
+			.mem_size	= sizeof(int),
+		};
+
+		return bpf_prog_ctx_arg_info_init(prog, &xattr_count_arg_info, 1);
 	}
 
 	return 0;
@@ -317,6 +331,7 @@ BTF_ID(func, bpf_lsm_inode_create)
 BTF_ID(func, bpf_lsm_inode_free_security)
 BTF_ID(func, bpf_lsm_inode_getattr)
 BTF_ID(func, bpf_lsm_inode_getxattr)
+BTF_ID(func, bpf_lsm_inode_init_security)
 BTF_ID(func, bpf_lsm_inode_mknod)
 BTF_ID(func, bpf_lsm_inode_need_killpriv)
 BTF_ID(func, bpf_lsm_inode_post_setxattr)
