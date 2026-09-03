@@ -34,6 +34,7 @@
 #include <net/xdp.h>
 #include <linux/trace_events.h>
 #include <linux/kallsyms.h>
+#include <asm/sections.h>
 
 #include "diagnostics.h"
 #include "disasm.h"
@@ -19959,6 +19960,32 @@ static int check_struct_ops_btf_id(struct bpf_verifier_env *env)
 }
 #define SECURITY_PREFIX "security_"
 
+/*
+ * Functions tagged __fmod_ret / __fmod_ret_sleepable opted into having their
+ * return value overridden by an fmod_ret program, see linux/btf.h. They are
+ * emitted into dedicated text sections, so the opt-in is an address range
+ * check on the attach target. @mod is the module the target belongs to, or
+ * NULL when it is in vmlinux.
+ */
+static bool within_fmod_ret_sleepable_text(const struct module *mod,
+					   unsigned long addr)
+{
+	if (mod)
+		return within_module_fmod_ret_sleepable_text(addr, mod);
+	return addr >= (unsigned long)__fmod_ret_sleepable_text_start &&
+	       addr < (unsigned long)__fmod_ret_sleepable_text_end;
+}
+
+static bool within_fmod_ret_text(const struct module *mod, unsigned long addr)
+{
+	if (within_fmod_ret_sleepable_text(mod, addr))
+		return true;
+	if (mod)
+		return within_module_fmod_ret_text(addr, mod);
+	return addr >= (unsigned long)__fmod_ret_text_start &&
+	       addr < (unsigned long)__fmod_ret_text_end;
+}
+
 #ifdef CONFIG_FUNCTION_ERROR_INJECTION
 
 /* list of non-sleepable functions that are otherwise on
@@ -20057,10 +20084,11 @@ static bool is_tracing_multi_id(const struct bpf_prog *prog, u32 btf_id)
 }
 
 static int btf_id_allow_sleepable(u32 btf_id, unsigned long addr, const struct bpf_prog *prog,
-				  const struct btf *btf)
+				  const struct btf *btf, const struct module *mod)
 {
 	const struct btf_type *t;
 	const char *tname;
+	u32 *flags;
 
 	if (!btf_is_kernel(btf))
 		return -EINVAL;
@@ -20084,15 +20112,16 @@ static int btf_id_allow_sleepable(u32 btf_id, unsigned long addr, const struct b
 		if (!check_attach_sleepable(btf_id, addr, tname))
 			return 0;
 		/*
-		 * fentry/fexit/fmod_ret progs can also be sleepable if they are
-		 * in the fmodret id set with the KF_SLEEPABLE flag.
+		 * fentry/fexit/fmod_ret progs can also be sleepable if the
+		 * target is a gate declared as being called from sleepable
+		 * context, or if it is in the fmodret id set with the
+		 * KF_SLEEPABLE flag.
 		 */
-		else {
-			u32 *flags = btf_kfunc_is_modify_return(btf, btf_id, prog);
-
-			if (flags && (*flags & KF_SLEEPABLE))
-				return 0;
-		}
+		if (within_fmod_ret_sleepable_text(mod, addr))
+			return 0;
+		flags = btf_kfunc_is_modify_return(btf, btf_id, prog);
+		if (flags && (*flags & KF_SLEEPABLE))
+			return 0;
 		break;
 	case BPF_PROG_TYPE_LSM:
 		/*
@@ -20481,7 +20510,7 @@ int bpf_check_attach_target(struct bpf_verifier_log *log,
 		}
 
 		if (prog->sleepable) {
-			ret = btf_id_allow_sleepable(btf_id, addr, prog, btf);
+			ret = btf_id_allow_sleepable(btf_id, addr, prog, btf, mod);
 			if (ret) {
 				module_put(mod);
 				bpf_log(log, "%s is not sleepable\n", tname);
@@ -20494,7 +20523,8 @@ int bpf_check_attach_target(struct bpf_verifier_log *log,
 				return -EINVAL;
 			}
 			ret = -EINVAL;
-			if (btf_kfunc_is_modify_return(btf, btf_id, prog) ||
+			if (within_fmod_ret_text(mod, addr) ||
+			    btf_kfunc_is_modify_return(btf, btf_id, prog) ||
 			    !check_attach_modify_return(addr, tname))
 				ret = 0;
 			if (ret) {
@@ -20735,7 +20765,8 @@ int bpf_check_attach_btf_id_multi(struct btf *btf, struct bpf_prog *prog, u32 bt
 
 	/* Check sleepable program attachment. */
 	if (prog->sleepable) {
-		err = btf_id_allow_sleepable(btf_id, addr, prog, btf);
+		err = btf_id_allow_sleepable(btf_id, addr, prog, btf,
+					     btf_is_module(btf) ? prog->aux->mod : NULL);
 		if (err)
 			return err;
 	}
