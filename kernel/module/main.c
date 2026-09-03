@@ -2741,6 +2741,11 @@ static int find_module_sections(struct module *mod, struct load_info *info)
 					    sizeof(*mod->ei_funcs),
 					    &mod->num_ei_funcs);
 #endif
+	mod->fmod_ret_text_start = section_objs(info, ".fmod_ret.text", 1,
+						&mod->fmod_ret_text_size);
+	mod->fmod_ret_sleepable_text_start =
+		section_objs(info, ".fmod_ret.sleepable.text", 1,
+			     &mod->fmod_ret_sleepable_text_size);
 #ifdef CONFIG_KPROBES
 	mod->kprobes_text_start = section_objs(info, ".kprobes.text", 1,
 						&mod->kprobes_text_size);

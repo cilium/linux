@@ -578,6 +578,11 @@ struct module {
 	struct error_injection_entry *ei_funcs;
 	unsigned int num_ei_funcs;
 #endif
+	/* BPF_MODIFY_RETURN gates, see __fmod_ret in linux/btf.h. */
+	void *fmod_ret_text_start;
+	unsigned int fmod_ret_text_size;
+	void *fmod_ret_sleepable_text_start;
+	unsigned int fmod_ret_sleepable_text_size;
 #ifdef CONFIG_DYNAMIC_DEBUG_CORE
 	struct _ddebug_info dyndbg_info;
 #endif
@@ -657,6 +662,22 @@ static inline bool within_module_init(unsigned long addr,
 static inline bool within_module(unsigned long addr, const struct module *mod)
 {
 	return within_module_init(addr, mod) || within_module_core(addr, mod);
+}
+
+static inline bool within_module_fmod_ret_text(unsigned long addr,
+					       const struct module *mod)
+{
+	return mod->fmod_ret_text_size &&
+	       addr - (unsigned long)mod->fmod_ret_text_start <
+	       mod->fmod_ret_text_size;
+}
+
+static inline bool within_module_fmod_ret_sleepable_text(unsigned long addr,
+							 const struct module *mod)
+{
+	return mod->fmod_ret_sleepable_text_size &&
+	       addr - (unsigned long)mod->fmod_ret_sleepable_text_start <
+	       mod->fmod_ret_sleepable_text_size;
 }
 
 /* Search for module by name: must be in a RCU critical section. */
@@ -819,6 +840,18 @@ static inline bool within_module_init(unsigned long addr,
 }
 
 static inline bool within_module(unsigned long addr, const struct module *mod)
+{
+	return false;
+}
+
+static inline bool within_module_fmod_ret_text(unsigned long addr,
+					       const struct module *mod)
+{
+	return false;
+}
+
+static inline bool within_module_fmod_ret_sleepable_text(unsigned long addr,
+							 const struct module *mod)
 {
 	return false;
 }
