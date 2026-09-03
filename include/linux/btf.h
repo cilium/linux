@@ -89,6 +89,31 @@
  */
 #define __bpf_kfunc __used __retain __noclone noinline
 
+/*
+ * Tag marking a kernel function as a BPF_MODIFY_RETURN target, that is, as a
+ * gate whose return value a fmod_ret program is allowed to override.
+ *
+ * Tagged functions are emitted into a dedicated text section. Attachability is
+ * therefore a property of the function definition itself: the verifier only
+ * range-checks the target address and no separate registration of the function
+ * is required.
+ *
+ * The attribute bundle matches __bpf_kfunc and adds __weak on top. A static
+ * noinline definition could be optimized away entirely, and a global noinline
+ * one keeps the definition but still lets interprocedural analysis propagate
+ * the return value into the caller and drop the call. __weak tells the
+ * compiler that the definition it sees may be replaced at link time, which
+ * forces the callsite to be emitted.
+ *
+ * __fmod_ret_sleepable in addition declares that the gate is only called from
+ * sleepable context, which is what allows sleepable fentry/fexit/fmod_ret
+ * programs to attach to it.
+ */
+#define __fmod_ret_attrs	__weak __used __retain __noclone noinline
+#define __fmod_ret		__fmod_ret_attrs __section(".fmod_ret.text")
+#define __fmod_ret_sleepable	__fmod_ret_attrs					\
+				__section(".fmod_ret.sleepable.text")
+
 #define __bpf_kfunc_start_defs()					       \
 	__diag_push();							       \
 	__diag_ignore_all("-Wmissing-declarations",			       \

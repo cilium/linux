@@ -571,6 +571,20 @@
 		__cpuidle_text_end = .;					\
 		__noinstr_text_end = .;
 
+/*
+ * Text section holding the BPF_MODIFY_RETURN gates tagged with __fmod_ret
+ * and __fmod_ret_sleepable. Membership in these ranges is what makes a
+ * function attachable by an fmod_ret program, see __fmod_ret in btf.h.
+ */
+#define FMOD_RET_TEXT							\
+		ALIGN_FUNCTION();					\
+		__fmod_ret_text_start = .;				\
+		*(.fmod_ret.text)					\
+		__fmod_ret_text_end = .;				\
+		__fmod_ret_sleepable_text_start = .;			\
+		*(.fmod_ret.sleepable.text)				\
+		__fmod_ret_sleepable_text_end = .;
+
 #define TEXT_SPLIT							\
 		__split_text_start = .;					\
 		*(.text.split .text.split.[0-9a-zA-Z_]*)		\
@@ -607,6 +621,7 @@
 		TEXT_HOT						\
 		*(TEXT_MAIN .text.fixup)				\
 		NOINSTR_TEXT						\
+		FMOD_RET_TEXT						\
 		*(.ref.text)
 
 /* sched.text is aling to function alignment to secure we have same
