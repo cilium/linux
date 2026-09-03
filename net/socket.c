@@ -53,6 +53,7 @@
  */
 
 #include <linux/bpf-cgroup.h>
+#include <linux/btf.h>
 #include <linux/ethtool.h>
 #include <linux/mm.h>
 #include <linux/socket.h>
@@ -1791,24 +1792,12 @@ struct file *__sys_socket_file(int family, int type, int protocol)
 	return sock_alloc_file(sock, flags, NULL);
 }
 
-/*	A hook for bpf progs to attach to and update socket protocol.
- *
- *	A static noinline declaration here could cause the compiler to
- *	optimize away the function. A global noinline declaration will
- *	keep the definition, but may optimize away the callsite.
- *	Therefore, __weak is needed to ensure that the call is still
- *	emitted, by telling the compiler that we don't know what the
- *	function might eventually be.
- */
+/*	A gate for fmod_ret progs to attach to and update socket protocol. */
 
-__bpf_hook_start();
-
-__weak noinline int update_socket_protocol(int family, int type, int protocol)
+__fmod_ret int update_socket_protocol(int family, int type, int protocol)
 {
 	return protocol;
 }
-
-__bpf_hook_end();
 
 int __sys_socket(int family, int type, int protocol)
 {
