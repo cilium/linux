@@ -20088,7 +20088,6 @@ static int btf_id_allow_sleepable(u32 btf_id, unsigned long addr, const struct b
 {
 	const struct btf_type *t;
 	const char *tname;
-	u32 *flags;
 
 	if (!btf_is_kernel(btf))
 		return -EINVAL;
@@ -20114,13 +20113,9 @@ static int btf_id_allow_sleepable(u32 btf_id, unsigned long addr, const struct b
 		/*
 		 * fentry/fexit/fmod_ret progs can also be sleepable if the
 		 * target is a gate declared as being called from sleepable
-		 * context, or if it is in the fmodret id set with the
-		 * KF_SLEEPABLE flag.
+		 * context.
 		 */
 		if (within_fmod_ret_sleepable_text(mod, addr))
-			return 0;
-		flags = btf_kfunc_is_modify_return(btf, btf_id, prog);
-		if (flags && (*flags & KF_SLEEPABLE))
 			return 0;
 		break;
 	case BPF_PROG_TYPE_LSM:
@@ -20524,7 +20519,6 @@ int bpf_check_attach_target(struct bpf_verifier_log *log,
 			}
 			ret = -EINVAL;
 			if (within_fmod_ret_text(mod, addr) ||
-			    btf_kfunc_is_modify_return(btf, btf_id, prog) ||
 			    !check_attach_modify_return(addr, tname))
 				ret = 0;
 			if (ret) {
