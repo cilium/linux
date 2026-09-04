@@ -432,6 +432,90 @@ __bpf_kfunc int bpf_inode_init_xattr(struct xattr *xattrs,
 	return 0;
 }
 
+/**
+ * bpf_kernfs_read_xattr - read a xattr of a kernfs node
+ * @kn: kernfs node to read the xattr from
+ * @name__str: name of the xattr
+ * @value_p: output buffer for the xattr value
+ *
+ * Read xattr *name__str* of *kn* into *value_p*.
+ *
+ * For security reasons, only *name__str* with prefix "security.bpf." or
+ * "user." is allowed, so that a policy cannot read the label another LSM
+ * put on the node.
+ *
+ * Return: length of the xattr value on success, a negative value on error.
+ */
+__bpf_kfunc int bpf_kernfs_read_xattr(struct kernfs_node *kn,
+				      const char *name__str,
+				      struct bpf_dynptr *value_p)
+{
+	struct bpf_dynptr_kern *value_ptr = (struct bpf_dynptr_kern *)value_p;
+	u32 value_len;
+	void *value;
+
+	if (strncmp(name__str, XATTR_USER_PREFIX, XATTR_USER_PREFIX_LEN) &&
+	    !match_security_bpf_prefix(name__str))
+		return -EPERM;
+
+	value_len = __bpf_dynptr_size(value_ptr);
+	value = __bpf_dynptr_data_rw(value_ptr, value_len);
+	if (!value)
+		return -EINVAL;
+
+	return kernfs_xattr_get(kn, name__str, value, value_len);
+}
+
+/**
+ * bpf_kernfs_set_xattr - attach a xattr to a kernfs node being created
+ * @kn: kernfs node the kernfs_init_security hook was handed
+ * @name__str: name of the xattr
+ * @value_p: xattr value
+ *
+ * Set xattr *name__str* on *kn*. Called from the kernfs_init_security hook,
+ * the node is not yet linked into its parent, so the xattr is in place
+ * before anything can look the node up. Where an inode carries its labels
+ * out of a transaction, a kernfs node has none to speak of: the hook runs
+ * on the creation path and the node is torn down again if it fails.
+ *
+ * For security reasons, only *name__str* with prefix "security.bpf." is
+ * allowed, and it has to name something below that prefix.
+ *
+ * Both nodes the hook was handed may be named, so a policy is free to
+ * update the parent's own label rather than only the new node's.
+ *
+ * Return: 0 on success, a negative value on error.
+ */
+__bpf_kfunc int bpf_kernfs_set_xattr(struct kernfs_node *kn,
+				     const char *name__str,
+				     const struct bpf_dynptr *value_p)
+{
+	const struct bpf_dynptr_kern *value_ptr = (struct bpf_dynptr_kern *)value_p;
+	const void *value;
+	size_t name_len;
+	u32 value_len;
+
+	if (!match_security_bpf_prefix(name__str))
+		return -EPERM;
+	/*
+	 * The name has to name something below "security.bpf.", and unlike an
+	 * inode's xattrs kernfs stores it whole, so the prefix counts towards
+	 * the bound.
+	 */
+	name_len = strlen(name__str);
+	if (name_len <= XATTR_NAME_BPF_LSM_LEN || name_len > XATTR_NAME_MAX)
+		return -EINVAL;
+
+	value_len = __bpf_dynptr_size(value_ptr);
+	value = __bpf_dynptr_data(value_ptr, value_len);
+	if (!value)
+		return -EINVAL;
+	if (value_len > XATTR_SIZE_MAX)
+		return -E2BIG;
+
+	return kernfs_xattr_set(kn, name__str, value, value_len, 0);
+}
+
 #ifdef CONFIG_CGROUPS
 /**
  * bpf_cgroup_read_xattr - read xattr of a cgroup's node in cgroupfs
@@ -530,6 +614,8 @@ BTF_ID_FLAGS(func, bpf_set_dentry_xattr, KF_SLEEPABLE)
 BTF_ID_FLAGS(func, bpf_remove_dentry_xattr, KF_SLEEPABLE)
 BTF_ID_FLAGS(func, bpf_real_data_inode, KF_SLEEPABLE | KF_RET_NULL)
 BTF_ID_FLAGS(func, bpf_inode_init_xattr)
+BTF_ID_FLAGS(func, bpf_kernfs_read_xattr)
+BTF_ID_FLAGS(func, bpf_kernfs_set_xattr, KF_SLEEPABLE)
 #ifdef CONFIG_NET
 BTF_ID_FLAGS(func, bpf_sock_read_xattr, KF_RCU)
 #endif
@@ -547,6 +633,15 @@ BTF_SET_START(bpf_inode_init_xattr_hooks)
 BTF_ID(func, bpf_lsm_inode_init_security)
 BTF_SET_END(bpf_inode_init_xattr_hooks)
 
+BTF_SET_START(bpf_kernfs_xattr_ids)
+BTF_ID(func, bpf_kernfs_read_xattr)
+BTF_ID(func, bpf_kernfs_set_xattr)
+BTF_SET_END(bpf_kernfs_xattr_ids)
+
+BTF_SET_START(bpf_kernfs_xattr_hooks)
+BTF_ID(func, bpf_lsm_kernfs_init_security)
+BTF_SET_END(bpf_kernfs_xattr_hooks)
+
 static int bpf_fs_kfuncs_filter(const struct bpf_prog *prog, u32 kfunc_id)
 {
 	if (!btf_id_set8_contains(&bpf_fs_kfunc_set_ids, kfunc_id))
@@ -555,6 +650,14 @@ static int bpf_fs_kfuncs_filter(const struct bpf_prog *prog, u32 kfunc_id)
 		if (prog->type != BPF_PROG_TYPE_LSM ||
 		    prog->expected_attach_type != BPF_LSM_MAC ||
 		    !btf_id_set_contains(&bpf_inode_init_xattr_hooks,
+					 prog->aux->attach_btf_id))
+			return -EACCES;
+		return 0;
+	}
+	if (btf_id_set_contains(&bpf_kernfs_xattr_ids, kfunc_id)) {
+		if (prog->type != BPF_PROG_TYPE_LSM ||
+		    prog->expected_attach_type != BPF_LSM_MAC ||
+		    !btf_id_set_contains(&bpf_kernfs_xattr_hooks,
 					 prog->aux->attach_btf_id))
 			return -EACCES;
 		return 0;
