@@ -525,7 +525,10 @@ __bpf_kfunc int bpf_kernfs_set_xattr(struct kernfs_node *kn,
  *
  * Get xattr *name__str* of *cgroup* and store the output in *value_ptr*.
  *
- * For security reasons, only *name__str* with prefix "user." is allowed.
+ * For security reasons, only *name__str* with prefix "user." or
+ * "security.bpf." is allowed. The latter is what bpf_kernfs_set_xattr()
+ * writes, so a policy that labels a cgroup as it is created can ask for
+ * that label back from any other hook.
  *
  * Return: length of the xattr value on success, a negative value on error.
  */
@@ -536,8 +539,8 @@ __bpf_kfunc int bpf_cgroup_read_xattr(struct cgroup *cgroup, const char *name__s
 	u32 value_len;
 	void *value;
 
-	/* Only allow reading "user.*" xattrs */
-	if (strncmp(name__str, XATTR_USER_PREFIX, XATTR_USER_PREFIX_LEN))
+	if (strncmp(name__str, XATTR_USER_PREFIX, XATTR_USER_PREFIX_LEN) &&
+	    !match_security_bpf_prefix(name__str))
 		return -EPERM;
 
 	value_len = __bpf_dynptr_size(value_ptr);
