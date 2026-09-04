@@ -103,4 +103,19 @@ struct xattr;
 extern int bpf_inode_init_xattr(struct xattr *xattrs, int *xattr_count,
 				const char *name__str,
 				const struct bpf_dynptr *value_p) __ksym __weak;
+
+/*
+ * Description
+ *  Read a xattr of a kernfs node, and attach one to a kernfs node that is
+ *  being created. Both are callable from a program on the
+ *  kernfs_init_security LSM hook, on the nodes the hook was handed.
+ * Returns
+ *  Length of the value read, 0 on a successful claim, a negative value on
+ *  error
+ */
+struct kernfs_node;
+extern int bpf_kernfs_read_xattr(struct kernfs_node *kn, const char *name__str,
+				 struct bpf_dynptr *value_p) __ksym __weak;
+extern int bpf_kernfs_set_xattr(struct kernfs_node *kn, const char *name__str,
+				const struct bpf_dynptr *value_p) __ksym __weak;
 #endif
