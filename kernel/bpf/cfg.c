@@ -316,6 +316,21 @@ static int compute_subprog_jts(struct bpf_verifier_env *env)
 			continue;
 		}
 
+		/*
+		 * Not every insn_array map of a program is a jump table, and
+		 * one that reaches past the subprog of its first entry is the
+		 * jump table of no subprog at all. Skip it rather than reject
+		 * the program: a map used to track instruction offsets is
+		 * allowed to span the whole program. Remember that it was
+		 * skipped, so that create_jt() can tell a subprog that comes
+		 * without a jump table from one whose table was discarded.
+		 */
+		if (jt_cur->items[jt_cur->cnt - 1] >= (subprog + 1)->start) {
+			subprog->jt_spans_subprogs = true;
+			kvfree(jt_cur);
+			continue;
+		}
+
 		old_cnt = subprog->jt ? subprog->jt->cnt : 0;
 		jt = bpf_iarray_realloc(subprog->jt, old_cnt + jt_cur->cnt);
 		if (!jt) {
@@ -346,6 +361,7 @@ static void free_subprog_jts(struct bpf_verifier_env *env)
 	for (i = 0; i < ARRAY_SIZE(env->subprog_info); i++) {
 		kvfree(env->subprog_info[i].jt);
 		env->subprog_info[i].jt = NULL;
+		env->subprog_info[i].jt_spans_subprogs = false;
 	}
 	env->cfg.subprog_jts_ready = false;
 }
@@ -354,9 +370,8 @@ static struct bpf_iarray *
 create_jt(int t, struct bpf_verifier_env *env)
 {
 	struct bpf_subprog_info *subprog;
-	int subprog_start, subprog_end;
 	struct bpf_iarray *jt;
-	int i, err;
+	int subprog_start, err;
 
 	if (!env->cfg.subprog_jts_ready) {
 		err = compute_subprog_jts(env);
@@ -366,7 +381,17 @@ create_jt(int t, struct bpf_verifier_env *env)
 
 	subprog = bpf_find_containing_subprog(env, t);
 	subprog_start = subprog->start;
-	subprog_end = (subprog + 1)->start;
+
+	if (!subprog->jt && subprog->jt_spans_subprogs) {
+		verbose(env, "jump table of subprog starting at %u spans multiple subprogs\n",
+			subprog_start);
+		bpf_diag_program_structure(
+			env, subprog_start, "jump table spans subprograms",
+			"Keep every entry of a jump table inside one subprogram.",
+			"The only jump table found for the subprogram that starts at instruction %u reaches past its end at instruction %u.",
+			subprog_start, (subprog + 1)->start);
+		return ERR_PTR(-EINVAL);
+	}
 
 	if (!subprog->jt) {
 		verbose(env, "no jump tables found for subprog starting at %u\n", subprog_start);
@@ -382,20 +407,6 @@ create_jt(int t, struct bpf_verifier_env *env)
 	if (!jt)
 		return ERR_PTR(-ENOMEM);
 	memcpy(jt->items, subprog->jt->items, subprog->jt->cnt << 2);
-
-	for (i = 0; i < jt->cnt; i++) {
-		if (jt->items[i] < subprog_start || jt->items[i] >= subprog_end) {
-			verbose(env, "jump table for insn %d points outside of the subprog [%u,%u]\n",
-					t, subprog_start, subprog_end);
-			bpf_diag_program_structure(
-				env, t, "jump table target out of range",
-				"Keep every jump-table target inside the same subprogram.",
-				"The jump table for instruction %d points outside subprogram range [%u,%u).",
-				t, subprog_start, subprog_end);
-			kvfree(jt);
-			return ERR_PTR(-EINVAL);
-		}
-	}
 
 	return jt;
 }
