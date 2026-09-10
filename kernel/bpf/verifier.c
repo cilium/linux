@@ -2183,7 +2183,15 @@ out:
 		     reg->var_off.value, reg->var_off.mask);
 	if (env->test_reg_invariants)
 		return -EFAULT;
+	/*
+	 * Reset the tnum along with the ranges. Leaving a const var_off in
+	 * place keeps the register in the very state that was just rejected,
+	 * and is_reg_const() consults only the tnum. The id is kept on purpose:
+	 * check_cond_jmp_op() cross-checks the ids of the two branch copies of
+	 * a register against each other.
+	 */
 	__mark_reg_unbounded(reg);
+	reg->var_off = tnum_unknown;
 	return 0;
 }
 
