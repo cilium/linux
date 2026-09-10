@@ -643,7 +643,7 @@ static void print_reg_state(struct bpf_verifier_env *env,
 		if (state->frameno != reg->frameno)
 			verbose(env, "[%d]", reg->frameno);
 		if (tnum_is_const(reg->var_off)) {
-			verbose_snum(env, reg->var_off.value + reg->delta);
+			verbose_snum(env, reg->var_off.value);
 			return;
 		}
 	}
@@ -664,10 +664,6 @@ static void print_reg_state(struct bpf_verifier_env *env,
 		verbose_a("ks=%d,vs=%d",
 			  reg->map_ptr->key_size,
 			  reg->map_ptr->value_size);
-	}
-	if (t != SCALAR_VALUE && reg->delta) {
-		verbose_a("off=");
-		verbose_snum(env, reg->delta);
 	}
 	if (type_is_pkt_pointer(t)) {
 		verbose_a("r=");

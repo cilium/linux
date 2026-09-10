@@ -4032,8 +4032,8 @@ static struct bpf_reg_state *reg_state(struct bpf_verifier_env *env, int regno)
 
 /* Read the stack at 'reg + off' and put the result into the register
  * 'dst_regno'.
- * 'off' includes the pointer register's fixed offset(i.e. 'reg->off'),
- * but not its variable offset.
+ * 'off' includes the constant part of the pointer register's offset, but not
+ * its variable part.
  * 'size' is assumed to be <= reg size and the access is assumed to be aligned.
  *
  * As opposed to check_stack_read_fixed_off, this function doesn't deal with
