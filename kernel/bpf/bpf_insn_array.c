@@ -252,6 +252,22 @@ void bpf_insn_array_adjust(struct bpf_map *map, u32 off, u32 len)
 	}
 }
 
+void bpf_insn_array_retarget(struct bpf_map *map, u32 from, u32 to)
+{
+	struct bpf_insn_array *insn_array = cast_insn_array(map);
+	int i;
+
+	if (from == to)
+		return;
+
+	for (i = 0; i < map->max_entries; i++) {
+		if (insn_array->values[i].xlated_off == INSN_DELETED)
+			continue;
+		if (insn_array->values[i].xlated_off == from)
+			insn_array->values[i].xlated_off = to;
+	}
+}
+
 void bpf_insn_array_adjust_after_remove(struct bpf_map *map, u32 off, u32 len)
 {
 	struct bpf_insn_array *insn_array = cast_insn_array(map);
