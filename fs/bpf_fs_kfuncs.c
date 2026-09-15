@@ -64,6 +64,28 @@ __bpf_kfunc void bpf_put_file(struct file *file)
 }
 
 /**
+ * bpf_get_vma_file - get a reference on the file backing a memory mapping
+ * @vma: the virtual memory area whose backing file to acquire
+ *
+ * Returns a reference-counted pointer to the struct file backing *vma*, or
+ * NULL for an anonymous mapping. The returned reference must be released with
+ * bpf_put_file().
+ *
+ * This is intended for atomic LSM hooks such as file_mprotect, which run under
+ * mmap_lock and therefore cannot call the sleepable xattr and fsverity
+ * readers. Pair it with a verdict cached in inode local storage by a sleepable
+ * hook such as file_open: measure a file at open time, enforce at mprotect
+ * time. Holding the reference guarantees the backing inode stays valid for the
+ * lookup.
+ *
+ * This BPF kfunc may only be called from BPF LSM programs.
+ */
+__bpf_kfunc struct file *bpf_get_vma_file(struct vm_area_struct *vma)
+{
+	return vma->vm_file ? get_file(vma->vm_file) : NULL;
+}
+
+/**
  * bpf_path_d_path - resolve the pathname for the supplied path
  * @path: path to resolve the pathname for
  * @buf: buffer to return the resolved pathname in
@@ -503,6 +525,7 @@ __bpf_kfunc_end_defs();
 BTF_KFUNCS_START(bpf_fs_kfunc_set_ids)
 BTF_ID_FLAGS(func, bpf_get_task_exe_file, KF_ACQUIRE | KF_RET_NULL)
 BTF_ID_FLAGS(func, bpf_put_file, KF_RELEASE)
+BTF_ID_FLAGS(func, bpf_get_vma_file, KF_ACQUIRE | KF_RET_NULL)
 BTF_ID_FLAGS(func, bpf_path_d_path)
 BTF_ID_FLAGS(func, bpf_get_dentry_xattr, KF_SLEEPABLE)
 BTF_ID_FLAGS(func, bpf_get_file_xattr, KF_SLEEPABLE)
