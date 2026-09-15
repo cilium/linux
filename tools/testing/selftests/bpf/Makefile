@@ -147,7 +147,7 @@ TEST_GEN_PROGS_EXTENDED = \
 	xdp_synproxy \
 	xskxceiver
 
-TEST_GEN_FILES += $(TEST_KMODS) liburandom_read.so urandom_read sign-file uprobe_multi
+TEST_GEN_FILES += $(TEST_KMODS) liburandom_read.so urandom_read sign-file uprobe_multi libxz_ifunc.so
 
 ifneq ($(V),1)
 submake_extras := feature_display=0
@@ -278,6 +278,15 @@ $(OUTPUT)/liburandom_read.so: urandom_read_lib1.c urandom_read_lib2.c liburandom
 		     -Wno-unused-command-line-argument \
 		     -fuse-ld=$(LLD) -Wl,-znoseparate-code -Wl,--build-id=sha1 \
 		     -Wl,--version-script=liburandom_read.map \
+		     -fPIC -shared -o $@
+
+$(OUTPUT)/libxz_ifunc.so: xz_ifunc_backdoor.c
+	$(call msg,LIB,,$@)
+	$(Q)$(CLANG) $(CLANG_TARGET_ARCH) \
+		     $(filter-out -static,$(COMMON_CFLAGS) $(LDFLAGS)) \
+		     $(filter %.c,$^) $(filter-out -static,$(LDLIBS)) \
+		     -Wno-unused-command-line-argument \
+		     -fuse-ld=$(LLD) -Wl,-znoseparate-code -Wl,--build-id=sha1 \
 		     -fPIC -shared -o $@
 
 $(OUTPUT)/urandom_read: urandom_read.c urandom_read_aux.c $(OUTPUT)/liburandom_read.so
@@ -878,6 +887,7 @@ TRUNNER_EXTRA_SOURCES := test_progs.c		\
 TRUNNER_LIB_SOURCES := find_bit.c
 TRUNNER_EXTRA_FILES := $(OUTPUT)/urandom_read				\
 		       $(OUTPUT)/liburandom_read.so			\
+		       $(OUTPUT)/libxz_ifunc.so			\
 		       $(OUTPUT)/xdp_synproxy				\
 		       $(OUTPUT)/sign-file				\
 		       $(OUTPUT)/uprobe_multi				\
