@@ -118,4 +118,13 @@ extern int bpf_get_kernfs_xattr(struct kernfs_node *kn, const char *name__str,
 				struct bpf_dynptr *value_p) __ksym __weak;
 extern int bpf_set_kernfs_xattr(struct kernfs_node *kn, const char *name__str,
 				const struct bpf_dynptr *value_p) __ksym __weak;
+
+/*
+ * Description
+ *  Set a xattr of a file, the write side of bpf_get_file_xattr.
+ * Returns
+ *  0 on success, a negative value on error
+ */
+extern int bpf_set_file_xattr(struct file *file, const char *name__str,
+			      const struct bpf_dynptr *value_p, int flags) __ksym __weak;
 #endif
