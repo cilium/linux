@@ -218,6 +218,8 @@ LSM_HOOK(int, 0, file_truncate, struct file *file)
 LSM_HOOK(int, 0, task_alloc, struct task_struct *task,
 	 u64 clone_flags)
 LSM_HOOK(void, LSM_RET_VOID, task_free, struct task_struct *task)
+LSM_HOOK(int, 0, task_cgroup_attach, struct task_struct *task,
+	 struct cgroup *dst_cgrp)
 LSM_HOOK(int, 0, cred_alloc_blank, struct cred *cred, gfp_t gfp)
 LSM_HOOK(void, LSM_RET_VOID, cred_free, struct cred *cred)
 LSM_HOOK(int, 0, cred_prepare, struct cred *new, const struct cred *old,
