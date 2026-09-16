@@ -3280,6 +3280,24 @@ int security_task_movememory(struct task_struct *p)
 }
 
 /**
+ * security_task_cgroup_attach() - Check if attaching a task to a cgroup is allowed
+ * @task: task being moved
+ * @dst_cgrp: destination cgroup
+ *
+ * Check permission before *task* is migrated to *dst_cgrp*. Called from the
+ * cgroup.procs/cgroup.threads write path and, for CLONE_INTO_CGROUP, from the
+ * fork path, so a module sees both the task and its destination cgroup at the
+ * point of migration rather than reconstructing it from the control-file open.
+ *
+ * Return: Returns 0 if permission is granted.
+ */
+int security_task_cgroup_attach(struct task_struct *task,
+				struct cgroup *dst_cgrp)
+{
+	return call_int_hook(task_cgroup_attach, task, dst_cgrp);
+}
+
+/**
  * security_task_kill() - Check if sending a signal is allowed
  * @p: target process
  * @info: signal information

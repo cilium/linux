@@ -45,6 +45,7 @@ struct rlimit;
 struct kernel_siginfo;
 struct sembuf;
 struct kern_ipc_perm;
+struct cgroup;
 struct audit_context;
 struct super_block;
 struct inode;
@@ -496,6 +497,8 @@ int security_file_open(struct file *file);
 int security_file_post_open(struct file *file, int mask);
 int security_file_truncate(struct file *file);
 int security_task_alloc(struct task_struct *task, u64 clone_flags);
+int security_task_cgroup_attach(struct task_struct *task,
+				struct cgroup *dst_cgrp);
 void security_task_free(struct task_struct *task);
 int security_cred_alloc_blank(struct cred *cred, gfp_t gfp);
 void security_cred_free(struct cred *cred);
@@ -1234,6 +1237,12 @@ static inline int security_file_post_open(struct file *file, int mask)
 }
 
 static inline int security_file_truncate(struct file *file)
+{
+	return 0;
+}
+
+static inline int security_task_cgroup_attach(struct task_struct *task,
+					      struct cgroup *dst_cgrp)
 {
 	return 0;
 }

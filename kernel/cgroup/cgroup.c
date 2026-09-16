@@ -40,6 +40,7 @@
 #include <linux/rcupdate.h>
 #include <linux/sched.h>
 #include <linux/sched/task.h>
+#include <linux/security.h>
 #include <linux/slab.h>
 #include <linux/spinlock.h>
 #include <linux/percpu-rwsem.h>
@@ -3093,6 +3094,10 @@ int cgroup_attach_task(struct cgroup *dst_cgrp, struct task_struct *leader,
 	DEFINE_CGROUP_MGCTX(mgctx);
 	struct task_struct *task;
 	int ret = 0;
+
+	ret = security_task_cgroup_attach(leader, dst_cgrp);
+	if (ret)
+		return ret;
 
 	/* look up all src csets */
 	spin_lock_irq(&css_set_lock);
@@ -6999,6 +7004,15 @@ int cgroup_can_fork(struct task_struct *child, struct kernel_clone_args *kargs)
 	ret = cgroup_css_set_fork(kargs);
 	if (ret)
 		return ret;
+
+	/* CLONE_INTO_CGROUP: an explicit destination, gate the migration. */
+	if (kargs->cgrp) {
+		ret = security_task_cgroup_attach(child, kargs->cgrp);
+		if (ret) {
+			cgroup_css_set_put_fork(kargs);
+			return ret;
+		}
+	}
 
 	do_each_subsys_mask(ss, i, have_canfork_callback) {
 		ret = ss->can_fork(child, kargs->cset);
