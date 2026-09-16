@@ -37,8 +37,8 @@ struct kernfs_node *kernfs_create_link(struct kernfs_node *parent,
 	}
 
 	kn = kernfs_new_node(parent, name, S_IFLNK|0777, uid, gid, KERNFS_LINK);
-	if (!kn)
-		return ERR_PTR(-ENOMEM);
+	if (IS_ERR(kn))
+		return kn;
 
 	if (kernfs_ns_enabled(parent))
 		kn->ns = target->ns;

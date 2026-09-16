@@ -1049,8 +1049,8 @@ struct kernfs_node *__kernfs_create_file(struct kernfs_node *parent,
 
 	kn = kernfs_new_node(parent, name, (mode & S_IALLUGO) | S_IFREG,
 			     uid, gid, flags);
-	if (!kn)
-		return ERR_PTR(-ENOMEM);
+	if (IS_ERR(kn))
+		return kn;
 
 	kn->attr.ops = ops;
 	kn->attr.size = size;
