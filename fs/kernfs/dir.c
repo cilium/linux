@@ -660,11 +660,13 @@ static struct kernfs_node *__kernfs_new_node(struct kernfs_root *root,
 
 	name = kstrdup_const(name, GFP_KERNEL);
 	if (!name)
-		return NULL;
+		return ERR_PTR(-ENOMEM);
 
 	kn = kmem_cache_zalloc(kernfs_node_cache, GFP_KERNEL);
-	if (!kn)
+	if (!kn) {
+		ret = -ENOMEM;
 		goto err_out1;
+	}
 
 	idr_preload(GFP_KERNEL);
 	spin_lock(&root->kernfs_idr_lock);
@@ -726,7 +728,7 @@ static struct kernfs_node *__kernfs_new_node(struct kernfs_root *root,
 	kmem_cache_free(kernfs_node_cache, kn);
  err_out1:
 	kfree_const(name);
-	return NULL;
+	return ERR_PTR(ret);
 }
 
 struct kernfs_node *kernfs_new_node(struct kernfs_node *parent,
@@ -1046,10 +1048,10 @@ struct kernfs_root *kernfs_create_root(struct kernfs_syscall_ops *scops,
 	kn = __kernfs_new_node(root, NULL, "", S_IFDIR | S_IRUGO | S_IXUGO,
 			       GLOBAL_ROOT_UID, GLOBAL_ROOT_GID,
 			       KERNFS_DIR);
-	if (!kn) {
+	if (IS_ERR(kn)) {
 		idr_destroy(&root->ino_idr);
 		kfree(root);
-		return ERR_PTR(-ENOMEM);
+		return ERR_CAST(kn);
 	}
 
 	kn->priv = priv;
@@ -1119,8 +1121,8 @@ struct kernfs_node *kernfs_create_dir_ns(struct kernfs_node *parent,
 	/* allocate */
 	kn = kernfs_new_node(parent, name, mode | S_IFDIR,
 			     uid, gid, KERNFS_DIR);
-	if (!kn)
-		return ERR_PTR(-ENOMEM);
+	if (IS_ERR(kn))
+		return kn;
 
 	kn->dir.root = parent->dir.root;
 	kn->ns = ns;
@@ -1151,8 +1153,8 @@ struct kernfs_node *kernfs_create_empty_dir(struct kernfs_node *parent,
 	/* allocate */
 	kn = kernfs_new_node(parent, name, S_IRUGO|S_IXUGO|S_IFDIR,
 			     GLOBAL_ROOT_UID, GLOBAL_ROOT_GID, KERNFS_DIR);
-	if (!kn)
-		return ERR_PTR(-ENOMEM);
+	if (IS_ERR(kn))
+		return kn;
 
 	kn->flags |= KERNFS_EMPTY_DIR;
 	kn->dir.root = parent->dir.root;
