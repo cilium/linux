@@ -132,6 +132,7 @@
 #include "verifier_lsm.skel.h"
 #include "verifier_lsm_init_xattr.skel.h"
 #include "verifier_lsm_kernfs_xattr.skel.h"
+#include "verifier_lsm_d_instantiate.skel.h"
 #include "verifier_lsm_path_dentry.skel.h"
 #include "verifier_jit_inline.skel.h"
 #include "irq.skel.h"
@@ -299,6 +300,7 @@ void test_verifier_set_retval(void)            { RUN(verifier_set_retval); }
 void test_verifier_lsm(void)                  { RUN(verifier_lsm); }
 void test_verifier_lsm_init_xattr(void)       { RUN(verifier_lsm_init_xattr); }
 void test_verifier_lsm_kernfs_xattr(void)      { RUN(verifier_lsm_kernfs_xattr); }
+void test_verifier_lsm_d_instantiate(void)     { RUN(verifier_lsm_d_instantiate); }
 void test_verifier_lsm_path_dentry(void)       { RUN(verifier_lsm_path_dentry); }
 void test_irq(void)			      { RUN(irq); }
 void test_verifier_mtu(void)		      { RUN(verifier_mtu); }

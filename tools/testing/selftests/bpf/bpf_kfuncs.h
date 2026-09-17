@@ -91,6 +91,16 @@ extern int bpf_set_dentry_xattr(struct dentry *dentry, const char *name__str,
 				const struct bpf_dynptr *value_p, int flags) __ksym __weak;
 extern int bpf_remove_dentry_xattr(struct dentry *dentry, const char *name__str) __ksym __weak;
 
+/* Description
+ *  Returns xattr of an inode, through *dentry* if the hook has one for it,
+ *  or an alias of the inode if *dentry* is NULL
+ * Returns
+ *  Length of the xattr value on success, or a negative error
+ */
+extern int bpf_get_inode_xattr(struct inode *inode, struct dentry *dentry,
+			       const char *name__str,
+			       struct bpf_dynptr *value_p) __ksym __weak;
+
 /*
  * Description
  *  Attach a xattr to an inode that is being created, from a program on the
