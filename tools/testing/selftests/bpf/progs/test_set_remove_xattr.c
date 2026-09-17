@@ -131,3 +131,56 @@ int BPF_PROG(test_inode_setxattr, struct mnt_idmap *idmap,
 
 	return 0;
 }
+
+const char xattr_baz[] = "security.bpf.baz";
+bool file_set_security_bpf_baz_success;
+bool file_remove_security_bpf_baz_success;
+bool file_set_security_selinux_fail;
+bool file_remove_security_selinux_fail;
+
+/* Test bpf_set_file_xattr and bpf_remove_file_xattr, for the hooks that
+ * hand out a struct file and no trusted dentry.
+ */
+SEC("lsm.s/file_open")
+int BPF_PROG(test_file_open, struct file *file)
+{
+	struct bpf_dynptr value_ptr;
+	__u32 pid;
+	int ret;
+
+	pid = bpf_get_current_pid_tgid() >> 32;
+	if (pid != monitored_pid)
+		return 0;
+
+	bpf_dynptr_from_mem(read_value, sizeof(read_value), 0, &value_ptr);
+
+	/* Only do the following for the file carrying security.bpf.foo */
+	if (bpf_get_file_xattr(file, xattr_foo, &value_ptr) < 0)
+		return 0;
+
+	/* read security.bpf.baz */
+	ret = bpf_get_file_xattr(file, xattr_baz, &value_ptr);
+
+	if (ret < 0) {
+		/* If security.bpf.baz doesn't exist, set it */
+		bpf_dynptr_from_mem(value_bar, sizeof(value_bar), 0, &value_ptr);
+
+		ret = bpf_set_file_xattr(file, xattr_baz, &value_ptr, 0);
+		if (!ret)
+			file_set_security_bpf_baz_success = true;
+		ret = bpf_set_file_xattr(file, xattr_selinux, &value_ptr, 0);
+		if (ret)
+			file_set_security_selinux_fail = true;
+	} else {
+		/* If security.bpf.baz exists, remove it */
+		ret = bpf_remove_file_xattr(file, xattr_baz);
+		if (!ret)
+			file_remove_security_bpf_baz_success = true;
+
+		ret = bpf_remove_file_xattr(file, xattr_selinux);
+		if (ret)
+			file_remove_security_selinux_fail = true;
+	}
+
+	return 0;
+}
