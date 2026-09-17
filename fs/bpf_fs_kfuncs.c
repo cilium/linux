@@ -684,9 +684,11 @@ BTF_SET_END(bpf_fs_kfunc_xattr_writer_ids)
  * which vfs_unlink() and vfs_rmdir() lock only afterwards, are unlocked
  * while the parents in the struct path arguments are, so neither variant
  * of the writers is right for every dentry a program can reach, and they
- * are refused.
+ * are refused. d_instantiate is one of them too: a create instantiates
+ * with the inode unlocked, vfs_link() with it locked.
  */
 BTF_SET_START(d_inode_mixed_hooks)
+BTF_ID(func, bpf_lsm_d_instantiate)
 #ifdef CONFIG_SECURITY_PATH
 BTF_ID(func, bpf_lsm_path_link)
 BTF_ID(func, bpf_lsm_path_rename)
