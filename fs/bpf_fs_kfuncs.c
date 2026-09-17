@@ -344,7 +344,7 @@ static int bpf_inode_init_xattrs_claimed(const struct xattr *xattrs, int xattr_c
 }
 
 /**
- * bpf_inode_init_xattr - attach a xattr to an inode that is being created
+ * bpf_init_inode_xattr - attach a xattr to an inode that is being created
  * @xattrs: xattr array the inode_init_security hook was handed
  * @xattr_count__ctx_out: xattr count the inode_init_security hook was handed
  * @name__str: name of the xattr
@@ -362,7 +362,7 @@ static int bpf_inode_init_xattrs_claimed(const struct xattr *xattrs, int xattr_c
  *
  * Return: 0 on success, a negative value on error.
  */
-__bpf_kfunc int bpf_inode_init_xattr(struct xattr *xattrs,
+__bpf_kfunc int bpf_init_inode_xattr(struct xattr *xattrs,
 				     int *xattr_count__ctx_out,
 				     const char *name__str,
 				     const struct bpf_dynptr *value_p)
@@ -447,7 +447,7 @@ __bpf_kfunc int bpf_cgroup_read_xattr(struct cgroup *cgroup, const char *name__s
 
 #ifdef CONFIG_NET
 /**
- * bpf_sock_read_xattr - read xattr of a socket's inode in sockfs
+ * bpf_get_sock_xattr - read xattr of a socket's inode in sockfs
  * @sock: socket to get xattr from
  * @name__str: name of the xattr
  * @value_p: output buffer of the xattr value
@@ -458,8 +458,8 @@ __bpf_kfunc int bpf_cgroup_read_xattr(struct cgroup *cgroup, const char *name__s
  *
  * Return: length of the xattr value on success, a negative value on error.
  */
-__bpf_kfunc int bpf_sock_read_xattr(struct socket *sock, const char *name__str,
-				    struct bpf_dynptr *value_p)
+__bpf_kfunc int bpf_get_sock_xattr(struct socket *sock, const char *name__str,
+				   struct bpf_dynptr *value_p)
 {
 	struct bpf_dynptr_kern *value_ptr = (struct bpf_dynptr_kern *)value_p;
 	u32 value_len;
@@ -509,9 +509,9 @@ BTF_ID_FLAGS(func, bpf_get_file_xattr, KF_SLEEPABLE)
 BTF_ID_FLAGS(func, bpf_set_dentry_xattr, KF_SLEEPABLE)
 BTF_ID_FLAGS(func, bpf_remove_dentry_xattr, KF_SLEEPABLE)
 BTF_ID_FLAGS(func, bpf_real_data_inode, KF_SLEEPABLE | KF_RET_NULL)
-BTF_ID_FLAGS(func, bpf_inode_init_xattr)
+BTF_ID_FLAGS(func, bpf_init_inode_xattr)
 #ifdef CONFIG_NET
-BTF_ID_FLAGS(func, bpf_sock_read_xattr, KF_RCU)
+BTF_ID_FLAGS(func, bpf_get_sock_xattr, KF_RCU)
 #endif
 BTF_KFUNCS_END(bpf_fs_kfunc_set_ids)
 
@@ -521,20 +521,20 @@ BTF_ID(func, bpf_set_dentry_xattr)
 BTF_ID(func, bpf_remove_dentry_xattr)
 BTF_SET_END(bpf_fs_kfunc_lsm_only_ids)
 
-BTF_ID_LIST_SINGLE(bpf_inode_init_xattr_ids, func, bpf_inode_init_xattr)
+BTF_ID_LIST_SINGLE(bpf_init_inode_xattr_ids, func, bpf_init_inode_xattr)
 
-BTF_SET_START(bpf_inode_init_xattr_hooks)
+BTF_SET_START(bpf_init_inode_xattr_hooks)
 BTF_ID(func, bpf_lsm_inode_init_security)
-BTF_SET_END(bpf_inode_init_xattr_hooks)
+BTF_SET_END(bpf_init_inode_xattr_hooks)
 
 static int bpf_fs_kfuncs_filter(const struct bpf_prog *prog, u32 kfunc_id)
 {
 	if (!btf_id_set8_contains(&bpf_fs_kfunc_set_ids, kfunc_id))
 		return 0;
-	if (kfunc_id == bpf_inode_init_xattr_ids[0]) {
+	if (kfunc_id == bpf_init_inode_xattr_ids[0]) {
 		if (prog->type != BPF_PROG_TYPE_LSM ||
 		    prog->expected_attach_type != BPF_LSM_MAC ||
-		    !btf_id_set_contains(&bpf_inode_init_xattr_hooks,
+		    !btf_id_set_contains(&bpf_init_inode_xattr_hooks,
 					 prog->aux->attach_btf_id))
 			return -EACCES;
 		return 0;

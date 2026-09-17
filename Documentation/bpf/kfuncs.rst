@@ -327,7 +327,7 @@ program itself cannot write through the pointer; the kfunc may.
 
 An example is given below::
 
-        __bpf_kfunc int bpf_inode_init_xattr(struct xattr *xattrs,
+        __bpf_kfunc int bpf_init_inode_xattr(struct xattr *xattrs,
                                              int *xattr_count__ctx_out,
                                              ...)
         {

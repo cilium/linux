@@ -38,7 +38,7 @@ int BPF_PROG(reject_unchecked_xattrs, struct inode *inode, struct inode *dir,
 	struct bpf_dynptr value;
 
 	bpf_dynptr_from_mem(value_buf, sizeof(value_buf), 0, &value);
-	bpf_inode_init_xattr(xattrs, xattr_count, xattr_zone, &value);
+	bpf_init_inode_xattr(xattrs, xattr_count, xattr_zone, &value);
 	return 0;
 }
 
@@ -63,7 +63,7 @@ int BPF_PROG(allow_spilled_count, struct inode *inode, struct inode *dir,
 		return 0;
 
 	bpf_dynptr_from_mem(value_buf, sizeof(value_buf), 0, &value);
-	bpf_inode_init_xattr(xattrs, saved, xattr_zone, &value);
+	bpf_init_inode_xattr(xattrs, saved, xattr_zone, &value);
 	return 0;
 }
 
@@ -78,7 +78,7 @@ int BPF_PROG(reject_forged_count, struct inode *inode, struct inode *dir,
 		return 0;
 
 	bpf_dynptr_from_mem(value_buf, sizeof(value_buf), 0, &value);
-	bpf_inode_init_xattr(xattrs, &scratch_count, xattr_zone, &value);
+	bpf_init_inode_xattr(xattrs, &scratch_count, xattr_zone, &value);
 	return 0;
 }
 
@@ -94,7 +94,7 @@ int BPF_PROG(reject_stack_count, struct inode *inode, struct inode *dir,
 		return 0;
 
 	bpf_dynptr_from_mem(value_buf, sizeof(value_buf), 0, &value);
-	bpf_inode_init_xattr(xattrs, &local, xattr_zone, &value);
+	bpf_init_inode_xattr(xattrs, &local, xattr_zone, &value);
 	return 0;
 }
 
@@ -109,7 +109,7 @@ int BPF_PROG(reject_other_ctx_arg, struct inode *inode, struct inode *dir,
 		return 0;
 
 	bpf_dynptr_from_mem(value_buf, sizeof(value_buf), 0, &value);
-	bpf_inode_init_xattr(xattrs, (int *)xattrs, xattr_zone, &value);
+	bpf_init_inode_xattr(xattrs, (int *)xattrs, xattr_zone, &value);
 	return 0;
 }
 
@@ -124,7 +124,7 @@ int BPF_PROG(reject_null_count, struct inode *inode, struct inode *dir,
 		return 0;
 
 	bpf_dynptr_from_mem(value_buf, sizeof(value_buf), 0, &value);
-	bpf_inode_init_xattr(xattrs, NULL, xattr_zone, &value);
+	bpf_init_inode_xattr(xattrs, NULL, xattr_zone, &value);
 	return 0;
 }
 
@@ -139,7 +139,7 @@ int BPF_PROG(reject_shifted_count, struct inode *inode, struct inode *dir,
 		return 0;
 
 	bpf_dynptr_from_mem(value_buf, sizeof(value_buf), 0, &value);
-	bpf_inode_init_xattr(xattrs, xattr_count + 1, xattr_zone, &value);
+	bpf_init_inode_xattr(xattrs, xattr_count + 1, xattr_zone, &value);
 	return 0;
 }
 
@@ -154,7 +154,7 @@ int BPF_PROG(reject_var_shifted_count, struct inode *inode, struct inode *dir,
 		return 0;
 
 	bpf_dynptr_from_mem(value_buf, sizeof(value_buf), 0, &value);
-	bpf_inode_init_xattr(xattrs, xattr_count + (scratch_count & 1),
+	bpf_init_inode_xattr(xattrs, xattr_count + (scratch_count & 1),
 			     xattr_zone, &value);
 	return 0;
 }
@@ -168,7 +168,7 @@ int reject_ctx_forged_count(unsigned long long *ctx)
 
 	bpf_dynptr_from_mem(value_buf, sizeof(value_buf), 0, &value);
 	slot[4] = 0;
-	bpf_inode_init_xattr((struct xattr *)(long)slot[3],
+	bpf_init_inode_xattr((struct xattr *)(long)slot[3],
 			     (int *)(long)slot[4], xattr_zone, &value);
 	return 0;
 }
@@ -176,7 +176,7 @@ int reject_ctx_forged_count(unsigned long long *ctx)
 static __noinline int claim_via_subprog(struct xattr *xattrs, int *xattr_count,
 					struct bpf_dynptr *value)
 {
-	return bpf_inode_init_xattr(xattrs, xattr_count, xattr_zone, value);
+	return bpf_init_inode_xattr(xattrs, xattr_count, xattr_zone, value);
 }
 
 SEC("lsm/inode_init_security")
@@ -205,7 +205,7 @@ int BPF_PROG(reject_shifted_xattrs, struct inode *inode, struct inode *dir,
 		return 0;
 
 	bpf_dynptr_from_mem(value_buf, sizeof(value_buf), 0, &value);
-	bpf_inode_init_xattr(xattrs + 1, xattr_count, xattr_zone, &value);
+	bpf_init_inode_xattr(xattrs + 1, xattr_count, xattr_zone, &value);
 	return 0;
 }
 
@@ -218,7 +218,7 @@ int BPF_PROG(reject_sleepable, struct inode *inode, struct inode *dir,
 }
 
 SEC("lsm_cgroup/inode_init_security")
-__failure __msg("calling kernel function bpf_inode_init_xattr is not allowed")
+__failure __msg("calling kernel function bpf_init_inode_xattr is not allowed")
 int BPF_PROG(reject_lsm_cgroup, struct inode *inode, struct inode *dir,
 	     const struct qstr *qstr, struct xattr *xattrs, int *xattr_count)
 {
@@ -228,18 +228,18 @@ int BPF_PROG(reject_lsm_cgroup, struct inode *inode, struct inode *dir,
 		return 0;
 
 	bpf_dynptr_from_mem(value_buf, sizeof(value_buf), 0, &value);
-	bpf_inode_init_xattr(xattrs, xattr_count, xattr_zone, &value);
+	bpf_init_inode_xattr(xattrs, xattr_count, xattr_zone, &value);
 	return 0;
 }
 
 SEC("lsm/inode_setxattr")
-__failure __msg("calling kernel function bpf_inode_init_xattr is not allowed")
+__failure __msg("calling kernel function bpf_init_inode_xattr is not allowed")
 int BPF_PROG(reject_wrong_hook, struct mnt_idmap *idmap, struct dentry *dentry,
 	     const char *name, const void *value, size_t size, int flags)
 {
 	struct bpf_dynptr val;
 
 	bpf_dynptr_from_mem(value_buf, sizeof(value_buf), 0, &val);
-	bpf_inode_init_xattr(NULL, &scratch_count, xattr_zone, &val);
+	bpf_init_inode_xattr(NULL, &scratch_count, xattr_zone, &val);
 	return 0;
 }

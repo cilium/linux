@@ -41,7 +41,7 @@ int BPF_PROG(claim_value, struct inode *inode, struct inode *dir,
 		return 0;
 	}
 	bpf_dynptr_from_mem(value_src, len, dynptr_flags, &value);
-	claim_err = bpf_inode_init_xattr(xattrs, xattr_count, xattr_value,
+	claim_err = bpf_init_inode_xattr(xattrs, xattr_count, xattr_value,
 					 &value);
 	return hook_retval;
 }
