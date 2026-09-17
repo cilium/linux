@@ -191,6 +191,57 @@ __bpf_kfunc int bpf_get_file_xattr(struct file *file, const char *name__str,
 	return bpf_get_dentry_xattr(dentry, name__str, value_p);
 }
 
+/**
+ * bpf_get_inode_xattr - get xattr of an inode
+ * @inode: inode to get xattr from
+ * @dentry__nullable: a dentry of *inode*, or NULL to have one looked up
+ * @name__str: name of the xattr
+ * @value_p: output buffer of the xattr value
+ *
+ * Get xattr *name__str* of *inode* and store the output in *value_p*. This
+ * is bpf_get_dentry_xattr() for the hooks that hand out an inode: pass the
+ * dentry where the hook has one, as on d_instantiate, where it is not yet
+ * attached to the inode, or NULL to have an alias of the inode looked up,
+ * as for the parent on inode_mkdir or inode_create.
+ *
+ * For security reasons, only *name__str* with prefixes "user." or
+ * "security.bpf." are allowed.
+ *
+ * Return: length of the xattr value on success, a negative value on error.
+ */
+__bpf_kfunc int bpf_get_inode_xattr(struct inode *inode,
+				    struct dentry *dentry__nullable,
+				    const char *name__str,
+				    struct bpf_dynptr *value_p)
+{
+	struct bpf_dynptr_kern *value_ptr = (struct bpf_dynptr_kern *)value_p;
+	struct dentry *dentry = dentry__nullable;
+	u32 value_len;
+	void *value;
+	int ret;
+
+	if (dentry && d_inode(dentry) && d_inode(dentry) != inode)
+		return -EINVAL;
+
+	value_len = __bpf_dynptr_size(value_ptr);
+	value = __bpf_dynptr_data_rw(value_ptr, value_len);
+	if (!value)
+		return -EINVAL;
+
+	ret = bpf_xattr_read_permission(name__str, inode);
+	if (ret)
+		return ret;
+	if (dentry)
+		return __vfs_getxattr(dentry, inode, name__str, value, value_len);
+
+	dentry = d_find_alias(inode);
+	if (!dentry)
+		return -ENOENT;
+	ret = __vfs_getxattr(dentry, inode, name__str, value, value_len);
+	dput(dentry);
+	return ret;
+}
+
 __bpf_kfunc_end_defs();
 
 static int bpf_xattr_write_permission(const char *name, struct inode *inode)
@@ -653,6 +704,7 @@ BTF_ID_FLAGS(func, bpf_get_vma_file, KF_ACQUIRE | KF_RET_NULL)
 BTF_ID_FLAGS(func, bpf_path_d_path)
 BTF_ID_FLAGS(func, bpf_get_dentry_xattr, KF_SLEEPABLE)
 BTF_ID_FLAGS(func, bpf_get_file_xattr, KF_SLEEPABLE)
+BTF_ID_FLAGS(func, bpf_get_inode_xattr, KF_SLEEPABLE)
 BTF_ID_FLAGS(func, bpf_set_file_xattr, KF_SLEEPABLE)
 BTF_ID_FLAGS(func, bpf_set_dentry_xattr, KF_SLEEPABLE)
 BTF_ID_FLAGS(func, bpf_remove_dentry_xattr, KF_SLEEPABLE)
