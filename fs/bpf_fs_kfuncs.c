@@ -679,15 +679,19 @@ BTF_ID(func, bpf_remove_dentry_xattr)
 BTF_ID(func, bpf_set_file_xattr)
 BTF_SET_END(bpf_fs_kfunc_xattr_writer_ids)
 
-/* Hooks that see both locked and unlocked dentries: link's old_dentry and
- * rename's old_dentry and new_dentry are unlocked while the parents in the
- * struct path arguments are, so neither variant of the writers is right
- * for every dentry a program can reach, and they are refused.
+/* Hooks that see both locked and unlocked dentries: link's old_dentry,
+ * rename's old_dentry and new_dentry, and the victim of unlink and rmdir,
+ * which vfs_unlink() and vfs_rmdir() lock only afterwards, are unlocked
+ * while the parents in the struct path arguments are, so neither variant
+ * of the writers is right for every dentry a program can reach, and they
+ * are refused.
  */
 BTF_SET_START(d_inode_mixed_hooks)
 #ifdef CONFIG_SECURITY_PATH
 BTF_ID(func, bpf_lsm_path_link)
 BTF_ID(func, bpf_lsm_path_rename)
+BTF_ID(func, bpf_lsm_path_rmdir)
+BTF_ID(func, bpf_lsm_path_unlink)
 #endif /* CONFIG_SECURITY_PATH */
 BTF_SET_END(d_inode_mixed_hooks)
 
@@ -759,8 +763,8 @@ static int bpf_fs_kfuncs_filter(const struct bpf_prog *prog, u32 kfunc_id)
  * pick the locked variant when the attach hook already holds i_rwsem.
  *
  * The path hooks reach the parent through dir->dentry, which the caller
- * holds locked for a create or remove, and path_chmod and path_chown are
- * called with the path's inode locked.
+ * holds locked for a create, and path_chmod and path_chown are called
+ * with the path's inode locked.
  */
 BTF_SET_START(d_inode_locked_hooks)
 BTF_ID(func, bpf_lsm_inode_post_removexattr)
@@ -776,9 +780,7 @@ BTF_ID(func, bpf_lsm_path_chmod)
 BTF_ID(func, bpf_lsm_path_chown)
 BTF_ID(func, bpf_lsm_path_mkdir)
 BTF_ID(func, bpf_lsm_path_mknod)
-BTF_ID(func, bpf_lsm_path_rmdir)
 BTF_ID(func, bpf_lsm_path_symlink)
-BTF_ID(func, bpf_lsm_path_unlink)
 #endif /* CONFIG_SECURITY_PATH */
 BTF_SET_END(d_inode_locked_hooks)
 
