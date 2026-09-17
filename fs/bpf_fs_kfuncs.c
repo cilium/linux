@@ -672,6 +672,25 @@ BTF_ID(func, bpf_set_file_xattr)
 BTF_ID(func, bpf_remove_dentry_xattr)
 BTF_SET_END(bpf_fs_kfunc_lsm_only_ids)
 
+/* Kfuncs that take dentry->d_inode's lock, or expect it held. */
+BTF_SET_START(bpf_fs_kfunc_xattr_writer_ids)
+BTF_ID(func, bpf_set_dentry_xattr)
+BTF_ID(func, bpf_remove_dentry_xattr)
+BTF_ID(func, bpf_set_file_xattr)
+BTF_SET_END(bpf_fs_kfunc_xattr_writer_ids)
+
+/* Hooks that see both locked and unlocked dentries: link's old_dentry and
+ * rename's old_dentry and new_dentry are unlocked while the parents in the
+ * struct path arguments are, so neither variant of the writers is right
+ * for every dentry a program can reach, and they are refused.
+ */
+BTF_SET_START(d_inode_mixed_hooks)
+#ifdef CONFIG_SECURITY_PATH
+BTF_ID(func, bpf_lsm_path_link)
+BTF_ID(func, bpf_lsm_path_rename)
+#endif /* CONFIG_SECURITY_PATH */
+BTF_SET_END(d_inode_mixed_hooks)
+
 BTF_ID_LIST_SINGLE(bpf_init_inode_xattr_ids, func, bpf_init_inode_xattr)
 
 BTF_SET_START(bpf_init_inode_xattr_hooks)
@@ -707,8 +726,13 @@ static int bpf_fs_kfuncs_filter(const struct bpf_prog *prog, u32 kfunc_id)
 			return -EACCES;
 		return 0;
 	}
-	if (prog->type == BPF_PROG_TYPE_LSM)
+	if (prog->type == BPF_PROG_TYPE_LSM) {
+		if (btf_id_set_contains(&bpf_fs_kfunc_xattr_writer_ids, kfunc_id) &&
+		    btf_id_set_contains(&d_inode_mixed_hooks,
+					prog->aux->attach_btf_id))
+			return -EACCES;
 		return 0;
+	}
 	if (prog->type != BPF_PROG_TYPE_STRUCT_OPS)
 		return -EACCES;
 	/* ->st_ops is unset during the cfg pass; enforced once it is set. */
@@ -733,6 +757,10 @@ static int bpf_fs_kfuncs_filter(const struct bpf_prog *prog, u32 kfunc_id)
  * bpf_set_file_xattr is routed the same way: a struct file can be
  * acquired in any LSM program (bpf_get_task_exe_file), so it too has to
  * pick the locked variant when the attach hook already holds i_rwsem.
+ *
+ * The path hooks reach the parent through dir->dentry, which the caller
+ * holds locked for a create or remove, and path_chmod and path_chown are
+ * called with the path's inode locked.
  */
 BTF_SET_START(d_inode_locked_hooks)
 BTF_ID(func, bpf_lsm_inode_post_removexattr)
@@ -744,8 +772,13 @@ BTF_ID(func, bpf_lsm_inode_setattr)
 BTF_ID(func, bpf_lsm_inode_setxattr)
 BTF_ID(func, bpf_lsm_inode_unlink)
 #ifdef CONFIG_SECURITY_PATH
-BTF_ID(func, bpf_lsm_path_unlink)
+BTF_ID(func, bpf_lsm_path_chmod)
+BTF_ID(func, bpf_lsm_path_chown)
+BTF_ID(func, bpf_lsm_path_mkdir)
+BTF_ID(func, bpf_lsm_path_mknod)
 BTF_ID(func, bpf_lsm_path_rmdir)
+BTF_ID(func, bpf_lsm_path_symlink)
+BTF_ID(func, bpf_lsm_path_unlink)
 #endif /* CONFIG_SECURITY_PATH */
 BTF_SET_END(d_inode_locked_hooks)
 
