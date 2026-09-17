@@ -91,6 +91,16 @@ extern int bpf_set_dentry_xattr(struct dentry *dentry, const char *name__str,
 				const struct bpf_dynptr *value_p, int flags) __ksym __weak;
 extern int bpf_remove_dentry_xattr(struct dentry *dentry, const char *name__str) __ksym __weak;
 
+/* Description
+ *  Returns xattr of an inode, through *dentry* if the hook has one for it,
+ *  or an alias of the inode if *dentry* is NULL
+ * Returns
+ *  Length of the xattr value on success, or a negative error
+ */
+extern int bpf_get_inode_xattr(struct inode *inode, struct dentry *dentry,
+			       const char *name__str,
+			       struct bpf_dynptr *value_p) __ksym __weak;
+
 /*
  * Description
  *  Attach a xattr to an inode that is being created, from a program on the
@@ -103,4 +113,35 @@ struct xattr;
 extern int bpf_init_inode_xattr(struct xattr *xattrs, int *xattr_count,
 				const char *name__str,
 				const struct bpf_dynptr *value_p) __ksym __weak;
+
+/*
+ * Description
+ *  Read a xattr of a kernfs node, and attach one to a kernfs node that is
+ *  being created. Both are callable from a program on the
+ *  kernfs_init_security LSM hook, on the nodes the hook was handed.
+ * Returns
+ *  Length of the value read, 0 on a successful claim, a negative value on
+ *  error
+ */
+struct kernfs_node;
+extern int bpf_get_kernfs_xattr(struct kernfs_node *kn, const char *name__str,
+				struct bpf_dynptr *value_p) __ksym __weak;
+extern int bpf_set_kernfs_xattr(struct kernfs_node *kn, const char *name__str,
+				const struct bpf_dynptr *value_p) __ksym __weak;
+
+/*
+ * Description
+ *  Set a xattr of a file, the write side of bpf_get_file_xattr.
+ * Returns
+ *  0 on success, a negative value on error
+ */
+extern int bpf_set_file_xattr(struct file *file, const char *name__str,
+			      const struct bpf_dynptr *value_p, int flags) __ksym __weak;
+
+/* Description
+ *  Remove a xattr of a file, the remove side of bpf_set_file_xattr.
+ * Returns
+ *  0 on success, a negative value on error
+ */
+extern int bpf_remove_file_xattr(struct file *file, const char *name__str) __ksym __weak;
 #endif
