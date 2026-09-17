@@ -50,6 +50,28 @@ int BPF_PROG(reject_mixed_write, const struct path *old_dir,
 	return 0;
 }
 
+/* So do unlink and rmdir: the parent is locked, the victim is not yet. */
+SEC("lsm.s/path_unlink")
+__failure __msg("calling kernel function bpf_set_dentry_xattr is not allowed")
+int BPF_PROG(reject_unlink_write, const struct path *dir,
+	     struct dentry *dentry)
+{
+	struct bpf_dynptr value;
+
+	bpf_dynptr_from_mem(value_buf, sizeof(value_buf), 0, &value);
+	bpf_set_dentry_xattr(dentry, xattr_label, &value, 0);
+	return 0;
+}
+
+SEC("lsm.s/path_rmdir")
+__failure __msg("calling kernel function bpf_remove_dentry_xattr is not allowed")
+int BPF_PROG(reject_rmdir_remove, const struct path *dir,
+	     struct dentry *dentry)
+{
+	bpf_remove_dentry_xattr(dentry, xattr_label);
+	return 0;
+}
+
 /* Walking up from a dentry is not covered: d_parent stays untrusted. */
 SEC("lsm.s/path_mkdir")
 __failure __msg("must be referenced or trusted")
