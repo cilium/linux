@@ -112,6 +112,34 @@ static void validate_bar_removed(struct test_set_remove_xattr *skel)
 	ASSERT_LT(err, 0, "getxattr size bar should fail");
 }
 
+static void open_testfile(void)
+{
+	int fd = open(testfile, O_RDONLY);
+
+	if (ASSERT_GE(fd, 0, "open testfile"))
+		close(fd);
+}
+
+static void validate_baz_match(struct test_set_remove_xattr *skel)
+{
+	char value_out[32];
+	int err;
+
+	err = getxattr(testfile, skel->rodata->xattr_baz, value_out, sizeof(value_out));
+	ASSERT_EQ(err, sizeof(skel->data->value_bar), "getxattr size baz");
+	ASSERT_EQ(strncmp(value_out, skel->data->value_bar, sizeof(skel->data->value_bar)), 0,
+		  "strncmp value_baz");
+}
+
+static void validate_baz_removed(struct test_set_remove_xattr *skel)
+{
+	char value_out[32];
+	int err;
+
+	err = getxattr(testfile, skel->rodata->xattr_baz, value_out, sizeof(value_out));
+	ASSERT_LT(err, 0, "getxattr size baz");
+}
+
 static void test_set_remove_xattr(void)
 {
 	struct test_set_remove_xattr *skel = NULL;
@@ -187,6 +215,29 @@ static void test_set_remove_xattr(void)
 		    "locked_set_security_selinux_fail");
 	ASSERT_TRUE(skel->bss->locked_remove_security_selinux_fail,
 		    "locked_remove_security_selinux_fail");
+
+	/* Third, test the file variants of the kfuncs, with open */
+
+	/* Open the file and trigger test_file_open. This bpf program will
+	 * set security.bpf.baz to "world".
+	 */
+	open_testfile();
+	validate_baz_match(skel);
+
+	/* Open the file and trigger test_file_open again. This will remove
+	 * xattr security.bpf.baz.
+	 */
+	open_testfile();
+	validate_baz_removed(skel);
+
+	ASSERT_TRUE(skel->bss->file_set_security_bpf_baz_success,
+		    "file_set_security_bpf_baz_success");
+	ASSERT_TRUE(skel->bss->file_remove_security_bpf_baz_success,
+		    "file_remove_security_bpf_baz_success");
+	ASSERT_TRUE(skel->bss->file_set_security_selinux_fail,
+		    "file_set_security_selinux_fail");
+	ASSERT_TRUE(skel->bss->file_remove_security_selinux_fail,
+		    "file_remove_security_selinux_fail");
 
 out:
 	close(fd);
