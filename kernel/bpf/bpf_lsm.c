@@ -357,6 +357,7 @@ BTF_ID(func, bpf_lsm_kernfs_init_security)
 #ifdef CONFIG_SECURITY_PATH
 BTF_ID(func, bpf_lsm_path_unlink)
 BTF_ID(func, bpf_lsm_path_mkdir)
+BTF_ID(func, bpf_lsm_path_mknod)
 BTF_ID(func, bpf_lsm_path_rmdir)
 BTF_ID(func, bpf_lsm_path_truncate)
 BTF_ID(func, bpf_lsm_path_symlink)
