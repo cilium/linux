@@ -100,7 +100,7 @@ extern int bpf_remove_dentry_xattr(struct dentry *dentry, const char *name__str)
  *  0 on success, a negative value on error
  */
 struct xattr;
-extern int bpf_inode_init_xattr(struct xattr *xattrs, int *xattr_count,
+extern int bpf_init_inode_xattr(struct xattr *xattrs, int *xattr_count,
 				const char *name__str,
 				const struct bpf_dynptr *value_p) __ksym __weak;
 #endif

@@ -78,21 +78,21 @@ int BPF_PROG(init_label, struct inode *inode, struct inode *dir,
 
 	bpf_dynptr_from_mem(zone_scratch, len, 0, &value);
 	/* Refused before a slot is claimed, so the budget below is intact. */
-	toolong_err = bpf_inode_init_xattr(xattrs, xattr_count, xattr_toolong,
+	toolong_err = bpf_init_inode_xattr(xattrs, xattr_count, xattr_toolong,
 					   &value);
-	zone_err = bpf_inode_init_xattr(xattrs, xattr_count, xattr_zone,
+	zone_err = bpf_init_inode_xattr(xattrs, xattr_count, xattr_zone,
 					&value);
 
 	bpf_dynptr_from_mem(origin_value, sizeof(origin_value), 0, &value);
-	origin_err = bpf_inode_init_xattr(xattrs, xattr_count, xattr_origin,
+	origin_err = bpf_init_inode_xattr(xattrs, xattr_count, xattr_origin,
 					  &value);
 
-	overflow_err = bpf_inode_init_xattr(xattrs, xattr_count,
+	overflow_err = bpf_init_inode_xattr(xattrs, xattr_count,
 					    xattr_overflow, &value);
 
-	selinux_err = bpf_inode_init_xattr(xattrs, xattr_count, xattr_selinux,
+	selinux_err = bpf_init_inode_xattr(xattrs, xattr_count, xattr_selinux,
 					   &value);
-	user_err = bpf_inode_init_xattr(xattrs, xattr_count, xattr_user,
+	user_err = bpf_init_inode_xattr(xattrs, xattr_count, xattr_user,
 					&value);
 	return 0;
 }
