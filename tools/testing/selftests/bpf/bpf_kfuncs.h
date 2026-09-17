@@ -137,4 +137,11 @@ extern int bpf_set_kernfs_xattr(struct kernfs_node *kn, const char *name__str,
  */
 extern int bpf_set_file_xattr(struct file *file, const char *name__str,
 			      const struct bpf_dynptr *value_p, int flags) __ksym __weak;
+
+/* Description
+ *  Remove a xattr of a file, the remove side of bpf_set_file_xattr.
+ * Returns
+ *  0 on success, a negative value on error
+ */
+extern int bpf_remove_file_xattr(struct file *file, const char *name__str) __ksym __weak;
 #endif
