@@ -491,6 +491,45 @@ int sock_read_xattr(struct socket *sock, const char *name, void *value, size_t s
 	return simple_xattr_get(&sockfs_xa_cache, &si->xattrs, name, value, size);
 }
 
+/**
+ * sock_set_bpf_xattr - label a socket's sockfs inode
+ * @sock: socket to label
+ * @name: full xattr name, e.g. "security.bpf.zone"
+ * @value: the label
+ * @size: length of @value in bytes
+ * @flags: XATTR_CREATE, XATTR_REPLACE, or 0
+ *
+ * The label shares the one xattr store the inode already has, and its one
+ * budget: a socket is labelled as the kernel creates it, when the store is
+ * necessarily empty, so the application cannot fill it first and starve the
+ * label out, and the few bytes of a label cannot meaningfully starve the
+ * application either. Anything that comes to label a socket later has to
+ * think about that again.
+ *
+ * Nothing else writes the name: setxattr(2) of any security.* name on a
+ * socket stops at sockfs_security_xattr_set(), so the application that owns
+ * the socket cannot forge a label.
+ *
+ * Sleeps: the store allocates.
+ *
+ * Return: 0 on success, a negative errno on error.
+ */
+int sock_set_bpf_xattr(struct socket *sock, const char *name, const void *value,
+		       size_t size, int flags)
+{
+	struct sockfs_inode *si;
+
+	if (!test_bit(SOCK_SOCKFS, &sock->flags))
+		return -EOPNOTSUPP;
+	if (!size)
+		return -EINVAL;
+
+	si = SOCKFS_I(SOCK_INODE(sock));
+	return simple_xattr_set_limited(&sockfs_xa_cache, &si->xattrs,
+					&si->xattr_limits, name, value, size,
+					flags);
+}
+
 static const struct xattr_handler * const sockfs_xattr_handlers[] = {
 	&sockfs_xattr_handler,
 	&sockfs_security_xattr_handler,
