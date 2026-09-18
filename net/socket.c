@@ -427,12 +427,35 @@ static int sockfs_security_xattr_set(const struct xattr_handler *handler,
 				     const char *suffix, const void *value,
 				     size_t size, int flags)
 {
-	/* Handled by LSM. */
+	/* Handled by LSM. A security.bpf. label is not writable from here
+	 * either: it is put on by sock_set_bpf_xattr() as the kernel creates
+	 * the socket, and the application that owns the socket afterwards
+	 * must not be able to forge one.
+	 */
 	return -EAGAIN;
+}
+
+/* Readable, though: a label the kernel set is worth being able to look at
+ * with getfattr(1), and it is the socket's own. Anything else in the
+ * security.* namespace belongs to the LSM that owns it, which vfs_getxattr()
+ * has already asked -- returning -EOPNOTSUPP is what sends it back there.
+ */
+static int sockfs_security_xattr_get(const struct xattr_handler *handler,
+				     struct dentry *dentry, struct inode *inode,
+				     const char *suffix, void *value, size_t size)
+{
+	const char *name = xattr_full_name(handler, suffix);
+	struct sockfs_inode *si = SOCKFS_I(inode);
+
+	if (strncmp(name, XATTR_NAME_BPF_LSM, XATTR_NAME_BPF_LSM_LEN))
+		return -EOPNOTSUPP;
+
+	return simple_xattr_get(&sockfs_xa_cache, &si->xattrs, name, value, size);
 }
 
 static const struct xattr_handler sockfs_security_xattr_handler = {
 	.prefix = XATTR_SECURITY_PREFIX,
+	.get = sockfs_security_xattr_get,
 	.set = sockfs_security_xattr_set,
 };
 
