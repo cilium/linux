@@ -714,6 +714,48 @@ __bpf_kfunc int bpf_get_sock_xattr(struct socket *sock, const char *name__str,
 
 	return sock_read_xattr(sock, name__str, value, value_len);
 }
+
+#ifdef CONFIG_SECURITY_NETWORK
+/**
+ * bpf_set_sock_xattr - label a socket as the kernel creates it
+ * @sock: socket to label
+ * @name__str: name of the xattr
+ * @value_p: the label
+ *
+ * Attach *name__str* to *sock*'s sockfs inode, where bpf_get_sock_xattr()
+ * reads it back from any later hook, socket_connect and socket_sendmsg
+ * among them, without a filesystem read and without sleeping.
+ *
+ * For security reasons, only *name__str* with prefix "security.bpf." is
+ * allowed, and this is the only writer of one: sockfs refuses a setxattr(2)
+ * of any security.* name, so the application whose socket this is can read
+ * its label but never forge one.
+ *
+ * Only the hooks that are handed a socket the kernel has just allocated
+ * admit this kfunc: socket_post_create, socket_socketpair and
+ * socket_accept. A socket is therefore labelled before it can carry
+ * anything, and no hook further down the syscall can relabel one.
+ *
+ * Return: 0 on success, a negative value on error.
+ */
+__bpf_kfunc int bpf_set_sock_xattr(struct socket *sock, const char *name__str,
+				   const struct bpf_dynptr *value_p)
+{
+	const struct bpf_dynptr_kern *value_ptr = (const struct bpf_dynptr_kern *)value_p;
+	const void *value;
+	u32 value_len;
+
+	if (!match_security_bpf_prefix(name__str))
+		return -EPERM;
+
+	value_len = __bpf_dynptr_size(value_ptr);
+	value = __bpf_dynptr_data(value_ptr, value_len);
+	if (!value)
+		return -EINVAL;
+
+	return sock_set_bpf_xattr(sock, name__str, value, value_len, 0);
+}
+#endif /* CONFIG_SECURITY_NETWORK */
 #endif /* CONFIG_NET */
 
 /**
@@ -756,6 +798,9 @@ BTF_ID_FLAGS(func, bpf_get_kernfs_xattr)
 BTF_ID_FLAGS(func, bpf_set_kernfs_xattr, KF_SLEEPABLE)
 #ifdef CONFIG_NET
 BTF_ID_FLAGS(func, bpf_get_sock_xattr, KF_RCU)
+#ifdef CONFIG_SECURITY_NETWORK
+BTF_ID_FLAGS(func, bpf_set_sock_xattr, KF_SLEEPABLE)
+#endif
 #endif
 BTF_KFUNCS_END(bpf_fs_kfunc_set_ids)
 
@@ -808,6 +853,20 @@ BTF_SET_START(bpf_kernfs_xattr_hooks)
 BTF_ID(func, bpf_lsm_kernfs_init_security)
 BTF_SET_END(bpf_kernfs_xattr_hooks)
 
+#if defined(CONFIG_NET) && defined(CONFIG_SECURITY_NETWORK)
+BTF_ID_LIST_SINGLE(bpf_set_sock_xattr_ids, func, bpf_set_sock_xattr)
+
+/* The hooks that see a socket straight out of sock_alloc(): __sock_create()
+ * for the first two, do_accept() for the third. Nothing has been sent or
+ * received over such a socket yet, and no later hook can relabel it.
+ */
+BTF_SET_START(bpf_set_sock_xattr_hooks)
+BTF_ID(func, bpf_lsm_socket_accept)
+BTF_ID(func, bpf_lsm_socket_post_create)
+BTF_ID(func, bpf_lsm_socket_socketpair)
+BTF_SET_END(bpf_set_sock_xattr_hooks)
+#endif /* CONFIG_NET && CONFIG_SECURITY_NETWORK */
+
 static int bpf_fs_kfuncs_filter(const struct bpf_prog *prog, u32 kfunc_id)
 {
 	if (!btf_id_set8_contains(&bpf_fs_kfunc_set_ids, kfunc_id))
@@ -828,6 +887,16 @@ static int bpf_fs_kfuncs_filter(const struct bpf_prog *prog, u32 kfunc_id)
 			return -EACCES;
 		return 0;
 	}
+#if defined(CONFIG_NET) && defined(CONFIG_SECURITY_NETWORK)
+	if (kfunc_id == bpf_set_sock_xattr_ids[0]) {
+		if (prog->type != BPF_PROG_TYPE_LSM ||
+		    prog->expected_attach_type != BPF_LSM_MAC ||
+		    !btf_id_set_contains(&bpf_set_sock_xattr_hooks,
+					 prog->aux->attach_btf_id))
+			return -EACCES;
+		return 0;
+	}
+#endif /* CONFIG_NET && CONFIG_SECURITY_NETWORK */
 	if (prog->type == BPF_PROG_TYPE_LSM) {
 		if (btf_id_set_contains(&bpf_fs_kfunc_xattr_writer_ids, kfunc_id) &&
 		    btf_id_set_contains(&d_inode_mixed_hooks,
