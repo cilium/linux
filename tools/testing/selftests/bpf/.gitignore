@@ -34,6 +34,7 @@ test_cpp
 /veristat
 /sign-file
 /uprobe_multi
+/sock_zone_helper
 *.ko
 *.tmp
 xskxceiver

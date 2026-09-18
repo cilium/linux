@@ -367,6 +367,9 @@ extern int bpf_cgroup_read_xattr(struct cgroup *cgroup, const char *name__str,
 extern int bpf_get_sock_xattr(struct socket *sock, const char *name__str,
 			      struct bpf_dynptr *value_p) __weak __ksym;
 
+extern int bpf_set_sock_xattr(struct socket *sock, const char *name__str,
+			      const struct bpf_dynptr *value_p) __weak __ksym;
+
 #define PREEMPT_BITS	8
 #define SOFTIRQ_BITS	8
 #define HARDIRQ_DISABLE_BITS	8
