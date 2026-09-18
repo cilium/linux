@@ -692,7 +692,16 @@ __bpf_kfunc int bpf_cgroup_read_xattr(struct cgroup *cgroup, const char *name__s
  *
  * Get xattr *name__str* of *sock* and store the output in *value_p*.
  *
- * For security reasons, only *name__str* with prefix "user." is allowed.
+ * Two namespaces, and they are not worth the same. A "user." xattr is one
+ * the application set on its own socket with fsetxattr(2), so it says what
+ * the application wants said and carries no authority at all; a policy that
+ * enforces on one is enforcing on its subject's own words. A "security.bpf."
+ * xattr is the label bpf_set_sock_xattr() put on the socket when the kernel
+ * created it, which setxattr(2) cannot forge, and is what a policy should be
+ * reading.
+ *
+ * Neither read takes a lock, so both serve the hooks that run in atomic
+ * context.
  *
  * Return: length of the xattr value on success, a negative value on error.
  */
@@ -703,14 +712,15 @@ __bpf_kfunc int bpf_get_sock_xattr(struct socket *sock, const char *name__str,
 	u32 value_len;
 	void *value;
 
-	/* Only allow reading "user.*" xattrs */
-	if (strncmp(name__str, XATTR_USER_PREFIX, XATTR_USER_PREFIX_LEN))
-		return -EPERM;
-
 	value_len = __bpf_dynptr_size(value_ptr);
 	value = __bpf_dynptr_data_rw(value_ptr, value_len);
 	if (!value)
 		return -EINVAL;
+
+	/* Allow reading xattr with user. and security.bpf. prefix */
+	if (strncmp(name__str, XATTR_USER_PREFIX, XATTR_USER_PREFIX_LEN) &&
+	    !match_security_bpf_prefix(name__str))
+		return -EPERM;
 
 	return sock_read_xattr(sock, name__str, value, value_len);
 }
