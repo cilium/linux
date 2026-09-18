@@ -86,6 +86,12 @@ enum socket_flags {
 	SOCK_NOSPACE,
 	SOCK_SUPPORT_ZC,
 	SOCK_CUSTOM_SOCKOPT,
+	/* Set by sock_alloc() and never cleared: this socket is the one
+	 * embedded in a sockfs inode, so SOCK_INODE() may be dereferenced.
+	 * A socket living anywhere else, tun's and tap's among them, never
+	 * carries it.
+	 */
+	SOCK_SOCKFS,
 };
 
 #ifndef ARCH_HAS_SOCKET_TYPES

@@ -466,24 +466,25 @@ static const struct xattr_handler sockfs_user_xattr_handler = {
 };
 
 /**
- * sock_read_xattr - read a user.* xattr from a socket's sockfs inode
+ * sock_read_xattr - read an xattr from a socket's sockfs inode
  * @sock: socket whose inode holds the xattr
  * @name: full xattr name, e.g. "user.bpf_test"
  * @value: output buffer
  * @size: size of @value in bytes
  *
- * SOCK_INODE() is valid only for sockfs sockets; sock_from_file() rejects
- * anything else (e.g. tun, tap).
+ * SOCK_INODE() is valid only for sockfs sockets, which SOCK_SOCKFS says
+ * @sock is; anything else (e.g. tun, tap) is refused. The flag is set in
+ * sock_alloc(), so this also serves a socket that has no file yet, and one
+ * that never gets one.
  * Lockless: simple_xattr_get() looks up the value under RCU, no inode lock.
  *
  * Return: length of the value on success, a negative errno on error.
  */
 int sock_read_xattr(struct socket *sock, const char *name, void *value, size_t size)
 {
-	struct file *file = sock->file;
 	struct sockfs_inode *si;
 
-	if (!file || sock_from_file(file) != sock)
+	if (!test_bit(SOCK_SOCKFS, &sock->flags))
 		return -EOPNOTSUPP;
 
 	si = SOCKFS_I(SOCK_INODE(sock));
@@ -718,6 +719,8 @@ struct socket *sock_alloc(void)
 	inode->i_uid = current_fsuid();
 	inode->i_gid = current_fsgid();
 	inode->i_op = &sockfs_inode_ops;
+	/* The inode behind this socket is real, and stays real. */
+	set_bit(SOCK_SOCKFS, &sock->flags);
 
 	return sock;
 }
