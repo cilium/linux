@@ -6002,6 +6002,24 @@ BTF_TYPE_SAFE_TRUSTED_OR_NULL(struct dentry) {
 	struct inode *d_inode;
 };
 
+/* An inode pins its superblock for as long as the inode itself is held:
+ * i_sb is set when the inode is allocated and never changes, and the
+ * superblock outlives every inode on it.
+ */
+BTF_TYPE_SAFE_TRUSTED(struct inode) {
+	struct super_block *i_sb;
+};
+
+/* A mounted superblock pins its root dentry. It has none before the tree is
+ * grown and none once it has been shut down, which is why this is the
+ * nullable form -- vfs_get_tree() has run by the time sb_kern_mount and
+ * sb_set_mnt_opts are called, but the sb_* hooks either side of them see it
+ * unset.
+ */
+BTF_TYPE_SAFE_TRUSTED_OR_NULL(struct super_block) {
+	struct dentry *s_root;
+};
+
 BTF_TYPE_SAFE_TRUSTED_OR_NULL(struct linux_binprm) {
 	struct mm_struct *mm;
 };
@@ -6047,6 +6065,7 @@ static bool type_is_trusted(struct bpf_verifier_env *env,
 	BTF_TYPE_EMIT(BTF_TYPE_SAFE_TRUSTED(struct linux_binprm));
 	BTF_TYPE_EMIT(BTF_TYPE_SAFE_TRUSTED(struct file));
 	BTF_TYPE_EMIT(BTF_TYPE_SAFE_TRUSTED(struct path));
+	BTF_TYPE_EMIT(BTF_TYPE_SAFE_TRUSTED(struct inode));
 	BTF_TYPE_EMIT(BTF_TYPE_SAFE_TRUSTED(struct scx_init_task_args));
 	BTF_TYPE_EMIT(BTF_TYPE_SAFE_TRUSTED(struct scx_cpu_release_args));
 	BTF_TYPE_EMIT(BTF_TYPE_SAFE_TRUSTED(struct scx_sub_attach_args));
@@ -6061,6 +6080,7 @@ static bool type_is_trusted_or_null(struct bpf_verifier_env *env,
 {
 	BTF_TYPE_EMIT(BTF_TYPE_SAFE_TRUSTED_OR_NULL(struct socket));
 	BTF_TYPE_EMIT(BTF_TYPE_SAFE_TRUSTED_OR_NULL(struct dentry));
+	BTF_TYPE_EMIT(BTF_TYPE_SAFE_TRUSTED_OR_NULL(struct super_block));
 	BTF_TYPE_EMIT(BTF_TYPE_SAFE_TRUSTED_OR_NULL(struct linux_binprm));
 	BTF_TYPE_EMIT(BTF_TYPE_SAFE_TRUSTED_OR_NULL(struct vm_area_struct));
 
