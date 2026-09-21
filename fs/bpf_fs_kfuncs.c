@@ -588,6 +588,11 @@ __bpf_kfunc int bpf_init_inode_xattr(struct xattr *xattrs,
  * "user." is allowed, so that a policy cannot read the label another LSM
  * put on the node.
  *
+ * The read neither sleeps nor takes a lock, so it is admitted on any LSM
+ * hook. *kn* is RCU-protected: kernfs_root() drops its own RCU section
+ * before returning the root that the lookup then uses, so it is the
+ * caller's section that keeps both alive.
+ *
  * Return: length of the xattr value on success, a negative value on error.
  */
 __bpf_kfunc int bpf_get_kernfs_xattr(struct kernfs_node *kn,
@@ -804,7 +809,7 @@ BTF_ID_FLAGS(func, bpf_remove_dentry_xattr, KF_SLEEPABLE)
 BTF_ID_FLAGS(func, bpf_remove_file_xattr, KF_SLEEPABLE)
 BTF_ID_FLAGS(func, bpf_real_data_inode, KF_SLEEPABLE | KF_RET_NULL)
 BTF_ID_FLAGS(func, bpf_init_inode_xattr)
-BTF_ID_FLAGS(func, bpf_get_kernfs_xattr)
+BTF_ID_FLAGS(func, bpf_get_kernfs_xattr, KF_RCU)
 BTF_ID_FLAGS(func, bpf_set_kernfs_xattr, KF_SLEEPABLE)
 #ifdef CONFIG_NET
 BTF_ID_FLAGS(func, bpf_get_sock_xattr, KF_RCU)
@@ -854,11 +859,12 @@ BTF_SET_START(bpf_init_inode_xattr_hooks)
 BTF_ID(func, bpf_lsm_inode_init_security)
 BTF_SET_END(bpf_init_inode_xattr_hooks)
 
-BTF_SET_START(bpf_kernfs_xattr_ids)
-BTF_ID(func, bpf_get_kernfs_xattr)
-BTF_ID(func, bpf_set_kernfs_xattr)
-BTF_SET_END(bpf_kernfs_xattr_ids)
+BTF_ID_LIST_SINGLE(bpf_set_kernfs_xattr_ids, func, bpf_set_kernfs_xattr)
 
+/* The hook that is handed a kernfs node before it is published. Writing a
+ * label sleeps and mutates, so it belongs here and nowhere else; reading one
+ * does neither, and is admitted anywhere.
+ */
 BTF_SET_START(bpf_kernfs_xattr_hooks)
 BTF_ID(func, bpf_lsm_kernfs_init_security)
 BTF_SET_END(bpf_kernfs_xattr_hooks)
@@ -889,7 +895,7 @@ static int bpf_fs_kfuncs_filter(const struct bpf_prog *prog, u32 kfunc_id)
 			return -EACCES;
 		return 0;
 	}
-	if (btf_id_set_contains(&bpf_kernfs_xattr_ids, kfunc_id)) {
+	if (kfunc_id == bpf_set_kernfs_xattr_ids[0]) {
 		if (prog->type != BPF_PROG_TYPE_LSM ||
 		    prog->expected_attach_type != BPF_LSM_MAC ||
 		    !btf_id_set_contains(&bpf_kernfs_xattr_hooks,
