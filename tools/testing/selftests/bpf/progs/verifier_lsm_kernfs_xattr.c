@@ -8,6 +8,9 @@
 
 char _license[] SEC("license") = "GPL";
 
+extern struct cgroup *bpf_cgroup_from_id(__u64 cgid) __ksym;
+extern void bpf_cgroup_release(struct cgroup *cgrp) __ksym;
+
 const char xattr_zone[] = "security.bpf.zone";
 char value_buf[8] = "z";
 
@@ -40,8 +43,12 @@ int BPF_PROG(reject_ancestor_write, struct kernfs_node *kn_dir,
 	return 0;
 }
 
+/* The getter takes an RCU pointer, and kernfs_node->__parent is not one:
+ * it is not in BTF_TYPE_SAFE_RCU, so it reads back untrusted and an
+ * ancestor's label stays out of reach.
+ */
 SEC("lsm.s/kernfs_init_security")
-__failure __msg("must be referenced or trusted")
+__failure __msg("must be a rcu pointer")
 int BPF_PROG(reject_ancestor_read, struct kernfs_node *kn_dir,
 	     struct kernfs_node *kn)
 {
@@ -94,14 +101,36 @@ int BPF_PROG(reject_lsm_cgroup, struct kernfs_node *kn_dir,
 	return 0;
 }
 
+/* Writing a label is still confined to the hook that creates the node, on
+ * a hook that has no kernfs node of its own as much as anywhere else.
+ */
 SEC("lsm/inode_init_security")
-__failure __msg("calling kernel function bpf_get_kernfs_xattr is not allowed")
-int BPF_PROG(reject_wrong_hook, struct inode *inode, struct inode *dir,
+__failure __msg("calling kernel function bpf_set_kernfs_xattr is not allowed")
+int BPF_PROG(reject_write_wrong_hook, struct inode *inode, struct inode *dir,
 	     const struct qstr *qstr, struct xattr *xattrs, int *xattr_count)
 {
 	struct bpf_dynptr value;
 
 	bpf_dynptr_from_mem(value_buf, sizeof(value_buf), 0, &value);
-	bpf_get_kernfs_xattr(NULL, xattr_zone, &value);
+	bpf_set_kernfs_xattr(NULL, xattr_zone, &value);
+	return 0;
+}
+
+/* Reading one is not: the node behind a cgroup is an RCU pointer, and a
+ * non-sleepable hook is already inside an RCU section.
+ */
+SEC("lsm/socket_connect")
+__success
+int BPF_PROG(allow_read_off_hook, struct socket *sock)
+{
+	struct bpf_dynptr value;
+	struct cgroup *cgrp;
+
+	cgrp = bpf_cgroup_from_id(bpf_get_current_cgroup_id());
+	if (!cgrp)
+		return 0;
+	bpf_dynptr_from_mem(value_buf, sizeof(value_buf), 0, &value);
+	bpf_get_kernfs_xattr(cgrp->kn, xattr_zone, &value);
+	bpf_cgroup_release(cgrp);
 	return 0;
 }
