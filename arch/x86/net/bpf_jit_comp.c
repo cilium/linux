@@ -1847,6 +1847,275 @@ static void emit_shiftx(u8 **pprog, u32 dst_reg, u8 src_reg, bool is64, u8 op)
 	*pprog = prog;
 }
 
+struct bpf_div_magic {
+	u64 m;		/* multiplier, sign extended for signed division */
+	int s;		/* shift of the high half of the product */
+	bool add;	/* multiplier has bits + 1 bits, use the add sequence */
+};
+
+/*
+ * Multiplier and shift for an unsigned division by the constant d, with
+ * 2 <= d < 2^bits: n / d == (mulhu(n, m) >> s), or with the add sequence
+ * when m needs bits + 1 bits, ((n - t) >> 1) + t) >> (s - 1) with t =
+ * mulhu(n, m). Hacker's Delight, 2nd ed., figure 10-2, generalized to
+ * 32 and 64 bit.
+ */
+static void bpf_magic_udiv(u64 d, int bits, struct bpf_div_magic *mag)
+{
+	u64 mask = bits == 64 ? ~0ULL : (1ULL << bits) - 1;
+	u64 two_wm1 = 1ULL << (bits - 1);
+	u64 nc, delta, q1, r1, q2, r2;
+	int p;
+
+	mag->add = false;
+	/* Largest value with nc mod d == d - 1 */
+	nc = mask - (mask % d + 1) % d;
+	p = bits - 1;
+	q1 = two_wm1 / nc;			/* 2^p / nc */
+	r1 = two_wm1 - q1 * nc;			/* 2^p mod nc */
+	q2 = (two_wm1 - 1) / d;			/* (2^p - 1) / d */
+	r2 = (two_wm1 - 1) - q2 * d;		/* (2^p - 1) mod d */
+	do {
+		p++;
+		if (r1 >= nc - r1) {
+			q1 = (2 * q1 + 1) & mask;
+			r1 = 2 * r1 - nc;
+		} else {
+			q1 = (2 * q1) & mask;
+			r1 = 2 * r1;
+		}
+		if (r2 + 1 >= d - r2) {
+			if (q2 >= two_wm1 - 1)
+				mag->add = true;
+			q2 = (2 * q2 + 1) & mask;
+			r2 = 2 * r2 + 1 - d;
+		} else {
+			if (q2 >= two_wm1)
+				mag->add = true;
+			q2 = (2 * q2) & mask;
+			r2 = 2 * r2 + 1;
+		}
+		delta = d - 1 - r2;
+	} while (p < 2 * bits && (q1 < delta || (q1 == delta && r1 == 0)));
+
+	mag->m = (q2 + 1) & mask;
+	mag->s = p - bits;
+}
+
+/*
+ * Multiplier and shift for a signed division by the constant d, with
+ * 2 <= |d| < 2^(bits - 1): q = mulhs(n, m), q += n if d > 0 and m < 0,
+ * q -= n if d < 0 and m > 0, q >>= s (arithmetic), n / d == q + (q >>>
+ * (bits - 1)). Hacker's Delight, 2nd ed., figure 10-1, generalized to
+ * 32 and 64 bit.
+ */
+static void bpf_magic_sdiv(s64 d, int bits, struct bpf_div_magic *mag)
+{
+	u64 two_wm1 = 1ULL << (bits - 1);
+	u64 ad = d < 0 ? -(u64)d : (u64)d;
+	u64 t, anc, delta, q1, r1, q2, r2;
+	int p;
+
+	t = two_wm1 + (d < 0);
+	anc = t - 1 - t % ad;			/* |nc| */
+	p = bits - 1;
+	q1 = two_wm1 / anc;			/* 2^p / |nc| */
+	r1 = two_wm1 - q1 * anc;		/* 2^p mod |nc| */
+	q2 = two_wm1 / ad;			/* 2^p / |d| */
+	r2 = two_wm1 - q2 * ad;			/* 2^p mod |d| */
+	do {
+		p++;
+		q1 = 2 * q1;
+		r1 = 2 * r1;
+		if (r1 >= anc) {
+			q1++;
+			r1 -= anc;
+		}
+		q2 = 2 * q2;
+		r2 = 2 * r2;
+		if (r2 >= ad) {
+			q2++;
+			r2 -= ad;
+		}
+		delta = ad - r2;
+	} while (q1 < delta || (q1 == delta && r1 == 0));
+
+	mag->m = q2 + 1;
+	if (d < 0)
+		mag->m = -mag->m;
+	mag->m = sign_extend64(mag->m, bits - 1);
+	mag->s = p - bits;
+	mag->add = false;
+}
+
+/* shl/shr/sar reg, imm */
+static void emit_shift_imm(u8 **pprog, u32 op, u32 reg, bool is64, u8 imm)
+{
+	u8 *prog = *pprog;
+
+	maybe_emit_1mod(&prog, reg, is64);
+	if (imm == 1)
+		EMIT2(0xD1, add_1reg(simple_alu_opcodes[op], reg));
+	else
+		EMIT3(0xC1, add_1reg(simple_alu_opcodes[op], reg), imm);
+
+	*pprog = prog;
+}
+
+/*
+ * Divide dst_reg by the constant in insn->imm through a multiplication
+ * with the magic number from bpf_magic_udiv() or bpf_magic_sdiv(). The
+ * dividend goes through rax and the multiplier through r11, the caller
+ * saves rax and rdx unless they are dst_reg, and r10 is scratch. Returns
+ * false for the divisors left to div/idiv.
+ */
+static bool emit_div_const(u8 **pprog, const struct bpf_insn *insn, u32 dst_reg)
+{
+	bool is64 = BPF_CLASS(insn->code) == BPF_ALU64;
+	bool is_mod = BPF_OP(insn->code) == BPF_MOD;
+	bool is_signed = insn->off == 1;
+	u32 n_reg = dst_reg, q_reg;
+	s32 imm32 = insn->imm;
+	struct bpf_div_magic mag;
+	u8 *prog = *pprog;
+	int corr = 0, s;
+
+	if (is_signed) {
+		/* |d| >= 2, the verifier already rewrote d == -1 */
+		if (imm32 >= -1 && imm32 <= 1)
+			return false;
+		bpf_magic_sdiv(imm32, is64 ? 64 : 32, &mag);
+		/* q += n for d > 0 and m < 0, q -= n for d < 0 and m > 0 */
+		if (imm32 > 0 && (s64)mag.m < 0)
+			corr = 1;
+		else if (imm32 < 0 && (s64)mag.m > 0)
+			corr = -1;
+	} else {
+		/* d >= 2, a negative imm32 in ALU64 is a divisor above 2^63 */
+		if (is64 ? imm32 < 2 : (u32)imm32 < 2)
+			return false;
+		bpf_magic_udiv((u32)imm32, is64 ? 64 : 32, &mag);
+	}
+	s = mag.s;
+	/*
+	 * The shift is at most bits - 1, or bits with the add sequence which
+	 * shifts by s - 1 and needs s >= 1. Never hit for d >= 2, kept as a
+	 * guard against an unencodable count.
+	 */
+	if (s > (is64 ? 64 : 32) - !mag.add || (mag.add && !s))
+		return false;
+
+	/* Keep the dividend when the multiplication clobbers it */
+	if ((is_mod || mag.add || corr) &&
+	    (dst_reg == BPF_REG_0 || dst_reg == BPF_REG_3)) {
+		emit_mov_reg(&prog, true, BPF_REG_AX, dst_reg);
+		n_reg = BPF_REG_AX;
+	}
+
+	if (is64 && !is_signed) {
+		/* mov rax, dst_reg; mov r11, m; mul r11 */
+		if (dst_reg != BPF_REG_0)
+			emit_mov_reg(&prog, true, BPF_REG_0, dst_reg);
+		emit_mov_imm64(&prog, AUX_REG, mag.m >> 32, (u32)mag.m);
+		EMIT3(0x49, 0xF7, 0xE3);
+		if (!mag.add) {
+			/* shr rdx, s */
+			if (s)
+				emit_shift_imm(&prog, BPF_RSH, BPF_REG_3, true, s);
+			q_reg = BPF_REG_3;
+		} else {
+			/* mov rax, n_reg; sub rax, rdx; shr rax, 1 */
+			emit_mov_reg(&prog, true, BPF_REG_0, n_reg);
+			EMIT3(0x48, 0x29, 0xD0);
+			EMIT3(0x48, 0xD1, 0xE8);
+			/* add rax, rdx; shr rax, s - 1 */
+			EMIT3(0x48, 0x01, 0xD0);
+			if (s > 1)
+				emit_shift_imm(&prog, BPF_RSH, BPF_REG_0, true, s - 1);
+			q_reg = BPF_REG_0;
+		}
+	} else if (!is_signed) {
+		/* mov eax, dst_reg32; mov r11d, m; imul rax, r11 */
+		emit_mov_reg(&prog, false, BPF_REG_0, dst_reg);
+		emit_mov_imm32(&prog, false, AUX_REG, (u32)mag.m);
+		EMIT4(0x49, 0x0F, 0xAF, 0xC3);
+		if (!mag.add) {
+			/* shr rax, 32 + s */
+			EMIT4(0x48, 0xC1, 0xE8, 32 + s);
+			q_reg = BPF_REG_0;
+		} else {
+			/* shr rax, 32; mov edx, n_reg32; sub edx, eax; shr edx, 1 */
+			EMIT4(0x48, 0xC1, 0xE8, 32);
+			emit_mov_reg(&prog, false, BPF_REG_3, n_reg);
+			EMIT2(0x29, 0xC2);
+			EMIT2(0xD1, 0xEA);
+			/* add edx, eax; shr edx, s - 1 */
+			EMIT2(0x01, 0xC2);
+			if (s > 1)
+				emit_shift_imm(&prog, BPF_RSH, BPF_REG_3, false, s - 1);
+			q_reg = BPF_REG_3;
+		}
+	} else if (is64) {
+		/* mov rax, dst_reg; mov r11, m; imul r11 */
+		if (dst_reg != BPF_REG_0)
+			emit_mov_reg(&prog, true, BPF_REG_0, dst_reg);
+		emit_mov_imm64(&prog, AUX_REG, mag.m >> 32, (u32)mag.m);
+		EMIT3(0x49, 0xF7, 0xEB);
+		/* add rdx, n_reg or sub rdx, n_reg */
+		if (corr) {
+			maybe_emit_mod(&prog, BPF_REG_3, n_reg, true);
+			EMIT2(corr > 0 ? 0x01 : 0x29,
+			      add_2reg(0xC0, BPF_REG_3, n_reg));
+		}
+		/* sar rdx, s */
+		if (s)
+			emit_shift_imm(&prog, BPF_ARSH, BPF_REG_3, true, s);
+		/* mov rax, rdx; shr rax, 63; add rdx, rax */
+		EMIT3(0x48, 0x89, 0xD0);
+		EMIT4(0x48, 0xC1, 0xE8, 63);
+		EMIT3(0x48, 0x01, 0xC2);
+		q_reg = BPF_REG_3;
+	} else {
+		/* movsxd rax, dst_reg32; mov r11, m; imul rax, r11; sar rax, 32 */
+		emit_movsx_reg(&prog, 32, true, BPF_REG_0, dst_reg);
+		emit_mov_imm32(&prog, true, AUX_REG, (u32)mag.m);
+		EMIT4(0x49, 0x0F, 0xAF, 0xC3);
+		EMIT4(0x48, 0xC1, 0xF8, 32);
+		/* add eax, n_reg32 or sub eax, n_reg32 */
+		if (corr) {
+			maybe_emit_mod(&prog, BPF_REG_0, n_reg, false);
+			EMIT2(corr > 0 ? 0x01 : 0x29,
+			      add_2reg(0xC0, BPF_REG_0, n_reg));
+		}
+		/* sar eax, s */
+		if (s)
+			emit_shift_imm(&prog, BPF_ARSH, BPF_REG_0, false, s);
+		/* mov edx, eax; shr edx, 31; add eax, edx */
+		EMIT2(0x89, 0xC2);
+		EMIT3(0xC1, 0xEA, 31);
+		EMIT2(0x01, 0xD0);
+		q_reg = BPF_REG_0;
+	}
+
+	if (is_mod) {
+		/* imul q_reg, q_reg, imm32 */
+		maybe_emit_mod(&prog, q_reg, q_reg, is64);
+		if (is_imm8(imm32))
+			EMIT3(0x6B, add_2reg(0xC0, q_reg, q_reg), imm32);
+		else
+			EMIT2_off32(0x69, add_2reg(0xC0, q_reg, q_reg), imm32);
+		/* sub n_reg, q_reg */
+		maybe_emit_mod(&prog, n_reg, q_reg, is64);
+		EMIT2(0x29, add_2reg(0xC0, n_reg, q_reg));
+		q_reg = n_reg;
+	}
+	if (q_reg != dst_reg)
+		emit_mov_reg(&prog, is64, dst_reg, q_reg);
+
+	*pprog = prog;
+	return true;
+}
+
 static void emit_priv_frame_ptr(u8 **pprog, void __percpu *priv_frame_ptr)
 {
 	u8 *prog = *pprog;
@@ -2355,6 +2624,10 @@ static int do_jit(struct bpf_verifier_env *env, struct bpf_prog *bpf_prog, int *
 			if (dst_reg != BPF_REG_3)
 				EMIT1(0x52); /* push rdx */
 
+			if (BPF_SRC(insn->code) == BPF_K &&
+			    emit_div_const(&prog, insn, dst_reg))
+				goto div_done;
+
 			if (BPF_SRC(insn->code) == BPF_X) {
 				if (src_reg == BPF_REG_0 ||
 				    src_reg == BPF_REG_3) {
@@ -2401,7 +2674,7 @@ static int do_jit(struct bpf_verifier_env *env, struct bpf_prog *bpf_prog, int *
 				 dst_reg != BPF_REG_0)
 				/* mov dst_reg, rax */
 				emit_mov_reg(&prog, is64, dst_reg, BPF_REG_0);
-
+div_done:
 			if (dst_reg != BPF_REG_3)
 				EMIT1(0x5A); /* pop rdx */
 			if (dst_reg != BPF_REG_0)
