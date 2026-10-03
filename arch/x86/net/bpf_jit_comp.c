@@ -1159,17 +1159,22 @@ static void emit_insn_suffix(u8 **pprog, u32 ptr_reg, u32 val_reg, int off)
 	*pprog = prog;
 }
 
-static void emit_insn_suffix_SIB(u8 **pprog, u32 ptr_reg, u32 val_reg, u32 index_reg, int off)
+/*
+ * Emit the suffix for addressing *(ptr_reg + (index_reg << scale) + off)
+ * and val_reg, with a SIB byte
+ */
+static void emit_insn_suffix_SIB(u8 **pprog, u32 ptr_reg, u32 val_reg, u32 index_reg, int off,
+				 u8 scale)
 {
+	u8 sib = (scale << 6) | add_2reg(0, ptr_reg, index_reg);
 	u8 *prog = *pprog;
 
 	if (!off && !base_needs_disp(ptr_reg)) {
-		EMIT2(add_2reg(0x04, BPF_REG_0, val_reg),
-		      add_2reg(0, ptr_reg, index_reg) /* SIB */);
+		EMIT2(add_2reg(0x04, BPF_REG_0, val_reg), sib);
 	} else if (is_imm8(off)) {
-		EMIT3(add_2reg(0x44, BPF_REG_0, val_reg), add_2reg(0, ptr_reg, index_reg) /* SIB */, off);
+		EMIT3(add_2reg(0x44, BPF_REG_0, val_reg), sib, off);
 	} else {
-		EMIT2_off32(add_2reg(0x84, BPF_REG_0, val_reg), add_2reg(0, ptr_reg, index_reg) /* SIB */, off);
+		EMIT2_off32(add_2reg(0x84, BPF_REG_0, val_reg), sib, off);
 	}
 	*pprog = prog;
 }
@@ -1368,7 +1373,7 @@ static void emit_ldx_index(u8 **pprog, u32 size, u32 dst_reg, u32 src_reg, u32 i
 		EMIT2(add_3mod(0x48, src_reg, dst_reg, index_reg), 0x8B);
 		break;
 	}
-	emit_insn_suffix_SIB(&prog, src_reg, dst_reg, index_reg, off);
+	emit_insn_suffix_SIB(&prog, src_reg, dst_reg, index_reg, off, 0);
 	*pprog = prog;
 }
 
@@ -1390,7 +1395,7 @@ static void emit_ldsx_index(u8 **pprog, u32 size, u32 dst_reg, u32 src_reg, u32 
 		EMIT2(add_3mod(0x48, src_reg, dst_reg, index_reg), 0x63);
 		break;
 	}
-	emit_insn_suffix_SIB(&prog, src_reg, dst_reg, index_reg, off);
+	emit_insn_suffix_SIB(&prog, src_reg, dst_reg, index_reg, off, 0);
 	*pprog = prog;
 }
 
@@ -1461,7 +1466,7 @@ static void emit_stx_index(u8 **pprog, u32 size, u32 dst_reg, u32 src_reg, u32 i
 		EMIT2(add_3mod(0x48, dst_reg, src_reg, index_reg), 0x89);
 		break;
 	}
-	emit_insn_suffix_SIB(&prog, dst_reg, src_reg, index_reg, off);
+	emit_insn_suffix_SIB(&prog, dst_reg, src_reg, index_reg, off, 0);
 	*pprog = prog;
 }
 
@@ -1493,7 +1498,7 @@ static void emit_st_index(u8 **pprog, u32 size, u32 dst_reg, u32 index_reg, int 
 		EMIT2(add_3mod(0x48, dst_reg, 0, index_reg), 0xC7);
 		break;
 	}
-	emit_insn_suffix_SIB(&prog, dst_reg, 0, index_reg, off);
+	emit_insn_suffix_SIB(&prog, dst_reg, 0, index_reg, off, 0);
 	EMIT(imm, bpf_size_to_x86_bytes(size));
 	*pprog = prog;
 }
@@ -1637,7 +1642,7 @@ static int emit_atomic_rmw_index(u8 **pprog, u32 atomic_op, u32 size,
 		pr_err("bpf_jit: unknown atomic opcode %02x\n", atomic_op);
 		return -EFAULT;
 	}
-	emit_insn_suffix_SIB(&prog, dst_reg, src_reg, index_reg, off);
+	emit_insn_suffix_SIB(&prog, dst_reg, src_reg, index_reg, off, 0);
 	*pprog = prog;
 	return 0;
 }
@@ -2684,6 +2689,29 @@ div_done:
 
 		case BPF_ALU | BPF_MUL | BPF_K:
 		case BPF_ALU64 | BPF_MUL | BPF_K:
+			if (imm32 > 1 && is_power_of_2(imm32)) {
+				/* shl dst_reg, ilog2(imm32) */
+				maybe_emit_1mod(&prog, dst_reg,
+						BPF_CLASS(insn->code) == BPF_ALU64);
+				if (imm32 == 2)
+					EMIT2(0xD1, add_1reg(0xE0, dst_reg));
+				else
+					EMIT3(0xC1, add_1reg(0xE0, dst_reg),
+					      ilog2(imm32));
+				break;
+			}
+			if (imm32 == 3 || imm32 == 5 || imm32 == 9) {
+				/* lea dst_reg, [dst_reg + dst_reg * (imm32 - 1)] */
+				if (BPF_CLASS(insn->code) == BPF_ALU64)
+					EMIT1(add_3mod(0x48, dst_reg, dst_reg, dst_reg));
+				else if (is_ereg(dst_reg))
+					EMIT1(add_3mod(0x40, dst_reg, dst_reg, dst_reg));
+				EMIT1(0x8D);
+				emit_insn_suffix_SIB(&prog, dst_reg, dst_reg, dst_reg, 0,
+						     ilog2(imm32 - 1));
+				break;
+			}
+
 			maybe_emit_mod(&prog, dst_reg, dst_reg,
 				       BPF_CLASS(insn->code) == BPF_ALU64);
 
