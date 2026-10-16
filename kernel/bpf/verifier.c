@@ -18494,6 +18494,44 @@ static void sync_linked_regs(struct bpf_verifier_env *env, struct bpf_verifier_s
 	}
 }
 
+static bool linked_regs_bounds_violation(struct bpf_verifier_state *vstate,
+					 struct linked_regs *linked_regs,
+					 const struct bpf_reg_state *orig_reg,
+					 const struct bpf_reg_state *known_reg)
+{
+	struct bpf_reg_state *reg, tmp;
+	int i;
+
+	if (known_reg->type != SCALAR_VALUE || !known_reg->id)
+		return false;
+	for (i = 0; i < linked_regs->cnt; ++i) {
+		reg = linked_reg_state(vstate, &linked_regs->entries[i]);
+		if (reg == orig_reg)
+			continue;
+		tmp = *reg;
+		if (sync_linked_reg(&tmp, known_reg) && range_bounds_violation(&tmp))
+			return true;
+	}
+	return false;
+}
+
+static int linked_regs_branch_taken(struct bpf_verifier_env *env,
+				    struct bpf_verifier_state *vstate,
+				    struct linked_regs *linked_regs,
+				    const struct bpf_reg_state *dst_reg,
+				    const struct bpf_reg_state *src_reg)
+{
+	/* False branch is dead, only true branch will be taken */
+	if (linked_regs_bounds_violation(vstate, linked_regs, dst_reg, &env->false_reg1) ||
+	    linked_regs_bounds_violation(vstate, linked_regs, src_reg, &env->false_reg2))
+		return 1;
+	/* True branch is dead, only false branch will be taken */
+	if (linked_regs_bounds_violation(vstate, linked_regs, dst_reg, &env->true_reg1) ||
+	    linked_regs_bounds_violation(vstate, linked_regs, src_reg, &env->true_reg2))
+		return 0;
+	return -1;
+}
+
 static int check_cond_jmp_op(struct bpf_verifier_env *env,
 			     struct bpf_insn *insn, int *insn_idx)
 {
@@ -18589,6 +18627,9 @@ static int check_cond_jmp_op(struct bpf_verifier_env *env,
 	env->true_reg1 = *dst_reg;
 	env->true_reg2 = *src_reg;
 	pred = is_branch_taken(env, dst_reg, src_reg, opcode, is_jmp32);
+	if (pred < 0 && linked_regs.cnt > 1)
+		pred = linked_regs_branch_taken(env, this_branch, &linked_regs,
+						dst_reg, src_reg);
 	if (pred >= 0) {
 		/* If we get here with a dst_reg pointer type it is because
 		 * above is_branch_taken() special cased the 0 comparison.
