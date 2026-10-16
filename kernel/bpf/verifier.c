@@ -2330,7 +2330,7 @@ static void __update_bounds_from_step(struct bpf_reg_state *reg)
 	deduce_bounds_32_from_64(reg);
 }
 
-static bool range_bounds_violation(struct bpf_reg_state *reg);
+static bool range_bounds_violation(const struct bpf_reg_state *reg);
 
 static void reg_bounds_sync(struct bpf_reg_state *reg)
 {
@@ -2360,7 +2360,7 @@ static void reg_bounds_sync(struct bpf_reg_state *reg)
 	__update_bounds_from_step(reg);
 }
 
-static bool const_tnum_range_mismatch(struct bpf_reg_state *reg)
+static bool const_tnum_range_mismatch(const struct bpf_reg_state *reg)
 {
 	if (!tnum_is_const(reg->var_off))
 		return false;
@@ -2368,7 +2368,7 @@ static bool const_tnum_range_mismatch(struct bpf_reg_state *reg)
 	return !cnum64_is_const(reg->r64) || reg->r64.base != reg->var_off.value;
 }
 
-static bool const_tnum_range_mismatch_32(struct bpf_reg_state *reg)
+static bool const_tnum_range_mismatch_32(const struct bpf_reg_state *reg)
 {
 	if (!tnum_subreg_is_const(reg->var_off))
 		return false;
@@ -2376,38 +2376,28 @@ static bool const_tnum_range_mismatch_32(struct bpf_reg_state *reg)
 	return !cnum32_is_const(reg->r32) || reg->r32.base != tnum_subreg(reg->var_off).value;
 }
 
-static bool range_bounds_violation(struct bpf_reg_state *reg)
+static bool range_bounds_violation(const struct bpf_reg_state *reg)
 {
 	return cnum32_is_empty(reg->r32) || cnum64_is_empty(reg->r64);
 }
 
-static int reg_bounds_sanity_check(struct bpf_verifier_env *env,
-				   struct bpf_reg_state *reg, const char *ctx)
+static bool reg_invariants_violated(struct bpf_verifier_env *env,
+				    const struct bpf_reg_state *reg,
+				    const char *ctx)
 {
 	const char *msg;
 
-	if (range_bounds_violation(reg)) {
+	if (range_bounds_violation(reg))
 		msg = "range bounds violation";
-		goto out;
-	}
-
-	if (const_tnum_range_mismatch(reg)) {
+	else if (const_tnum_range_mismatch(reg))
 		msg = "const tnum out of sync with range bounds";
-		goto out;
-	}
-
-	if (const_tnum_range_mismatch_32(reg)) {
+	else if (const_tnum_range_mismatch_32(reg))
 		msg = "const subreg tnum out of sync with range bounds";
-		goto out;
-	}
-
-	if (reg->step == 0 || reg->base >= reg->step) {
+	else if (reg->step == 0 || reg->base >= reg->step)
 		msg = "invalid base/step";
-		goto out;
-	}
+	else
+		return false;
 
-	return 0;
-out:
 	verifier_bug(env, "REG INVARIANTS VIOLATION (%s): %s r64={.base=%#llx, .size=%#llx} "
 		     "r32={.base=%#x, .size=%#x} var_off=(%#llx, %#llx) step=%u+%u",
 		     ctx, msg,
@@ -2415,6 +2405,14 @@ out:
 		     reg->r32.base, reg->r32.size,
 		     reg->var_off.value, reg->var_off.mask,
 		     reg->base, reg->step);
+	return true;
+}
+
+static int reg_bounds_sanity_check(struct bpf_verifier_env *env,
+				   struct bpf_reg_state *reg, const char *ctx)
+{
+	if (!reg_invariants_violated(env, reg, ctx))
+		return 0;
 	if (env->test_reg_invariants)
 		return -EFAULT;
 	__mark_reg_unbounded(reg);
@@ -15961,8 +15959,7 @@ static int adjust_ptr_min_max_vals(struct bpf_verifier_env *env, struct bpf_insn
 	struct bpf_func_state *state = vstate->frame[vstate->curframe];
 	struct bpf_reg_state *regs = state->regs, *dst_reg;
 	bool known = tnum_is_const(off_reg->var_off);
-	s64 smin_val = reg_smin(off_reg), smax_val = reg_smax(off_reg);
-	u64 umin_val = reg_umin(off_reg), umax_val = reg_umax(off_reg);
+	s64 smin_val = reg_smin(off_reg);
 	struct bpf_sanitize_info info = {};
 	u8 opcode = BPF_OP(insn->code);
 	u32 dst = insn->dst_reg;
@@ -15976,15 +15973,12 @@ static int adjust_ptr_min_max_vals(struct bpf_verifier_env *env, struct bpf_insn
 	 * which is fine when the program may see values of pointers anyway.
 	 */
 	to_scalar = opcode != BPF_ADD && opcode != BPF_SUB && env->allow_ptr_leaks;
-
-	if ((known && (smin_val != smax_val || umin_val != umax_val)) ||
-	    smin_val > smax_val || umin_val > umax_val) {
-		/* Taint dst register if offset had invalid bounds derived from
-		 * e.g. dead branches.
-		 */
-		__mark_reg_unknown(env, dst_reg);
-		return 0;
-	}
+	/*
+	 * An offset which violates the register invariants has been mistracked
+	 * before, so there is no sound way to continue.
+	 */
+	if (reg_invariants_violated(env, off_reg, "ptr_alu"))
+		return -EFAULT;
 
 	if (BPF_CLASS(insn->code) != BPF_ALU64 && !to_scalar) {
 		/* 32-bit ALU ops on pointers produce (meaningless) scalars */
