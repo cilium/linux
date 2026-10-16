@@ -710,4 +710,58 @@ l_exit_%=:							\
 	: __clobber_all);
 }
 
+/*
+ * Test that a branch is detected as dead when a register linked to the
+ * compared one ends up with ill-formed bounds there. The loop gives r6
+ * base/step 3+6, which says nothing about bit 0 in its tnum, while r7 =
+ * r6 + 1 gets base/step 4+6 and thus bit 0 cleared. Refining w6 == 2 is
+ * fine for r6, but leaves r7 with an empty 32-bit range.
+ */
+SEC("socket")
+__success
+__naked void scalars_linked_dead_branch(void)
+{
+	asm volatile ("						\
+	r0 = 0;							\
+	r6 = 0xfffffffefffffffb ll;	/* r6 is odd */		\
+	r1 = 0x3fffffff9 ll;					\
+l_loop_%=:							\
+	r7 = r6;						\
+	r7 += 1;		/* r7 linked to r6, delta 1 */	\
+	if w6 == 2 goto l_dead_%=;				\
+	r6 += 6;						\
+	if r6 s< r1 goto l_loop_%=;				\
+	exit;							\
+l_dead_%=:							\
+	r1 = r10;						\
+	r1 += r7;						\
+	r0 /= 0;		/* unreachable */		\
+	exit;							\
+"	::: __clobber_all);
+}
+
+/* Same as above, but w6 == 3 is possible, e.g. for r6 == 3. */
+SEC("socket")
+__failure __msg("div by zero")
+__naked void scalars_linked_live_branch(void)
+{
+	asm volatile ("						\
+	r0 = 0;							\
+	r6 = 0xfffffffefffffffb ll;				\
+	r1 = 0x3fffffff9 ll;					\
+l_loop_%=:							\
+	r7 = r6;						\
+	r7 += 1;						\
+	if w6 == 3 goto l_live_%=;				\
+	r6 += 6;						\
+	if r6 s< r1 goto l_loop_%=;				\
+	exit;							\
+l_live_%=:							\
+	r1 = r10;						\
+	r1 += r7;						\
+	r0 /= 0;		/* div by zero */		\
+	exit;							\
+"	::: __clobber_all);
+}
+
 char _license[] SEC("license") = "GPL";
