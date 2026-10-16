@@ -18415,58 +18415,78 @@ static void collect_linked_regs(struct bpf_verifier_env *env,
 	}
 }
 
-/* For all R in linked_regs, copy known_reg range into R
+static struct bpf_reg_state *linked_reg_state(struct bpf_verifier_state *vstate,
+					      struct linked_reg *e)
+{
+	return e->is_reg ?
+		&vstate->frame[e->frameno]->regs[e->regno] :
+		&bpf_stack_slot(vstate->frame[e->frameno], e->spi)->spilled_ptr;
+}
+
+static bool sync_linked_reg(struct bpf_reg_state *reg,
+			    const struct bpf_reg_state *known_reg)
+{
+	struct bpf_reg_state fake_reg;
+	s32 saved_off;
+	u32 saved_id;
+
+	if (reg->type != SCALAR_VALUE)
+		return false;
+	if ((reg->id & ~BPF_ADD_CONST) != (known_reg->id & ~BPF_ADD_CONST))
+		return false;
+	/*
+	 * Skip mixed 32/64-bit links: the delta relationship doesn't
+	 * hold across different ALU widths.
+	 */
+	if (((reg->id ^ known_reg->id) & BPF_ADD_CONST) == BPF_ADD_CONST)
+		return false;
+	if ((!(reg->id & BPF_ADD_CONST) && !(known_reg->id & BPF_ADD_CONST)) ||
+	    reg->delta == known_reg->delta) {
+		*reg = *known_reg;
+		return true;
+	}
+
+	saved_off = reg->delta;
+	saved_id = reg->id;
+
+	fake_reg.type = SCALAR_VALUE;
+	__mark_reg_known(&fake_reg, (s64)reg->delta - (s64)known_reg->delta);
+
+	/* reg = known_reg; reg += delta */
+	*reg = *known_reg;
+	/*
+	 * Must preserve off and id, otherwise another sync_linked_regs()
+	 * will be incorrect.
+	 */
+	reg->delta = saved_off;
+	reg->id = saved_id;
+
+	scalar_step_add(reg, reg, &fake_reg);
+	scalar32_min_max_add(reg, &fake_reg);
+	scalar_min_max_add(reg, &fake_reg);
+	reg->var_off = tnum_add(reg->var_off, fake_reg.var_off);
+	if ((reg->id | known_reg->id) & BPF_ADD_CONST32)
+		zext_32_to_64(reg);
+	reg_bounds_sync(reg);
+	return true;
+}
+
+/*
+ * For all R in linked_regs, copy known_reg range into R
  * if R->id == known_reg->id.
  */
 static void sync_linked_regs(struct bpf_verifier_env *env, struct bpf_verifier_state *vstate,
 			     struct bpf_reg_state *known_reg, struct linked_regs *linked_regs)
 {
-	struct bpf_reg_state fake_reg;
 	struct bpf_reg_state *reg;
 	struct linked_reg *e;
 	int i;
 
 	for (i = 0; i < linked_regs->cnt; ++i) {
 		e = &linked_regs->entries[i];
-		reg = e->is_reg ? &vstate->frame[e->frameno]->regs[e->regno]
-				: &bpf_stack_slot(vstate->frame[e->frameno], e->spi)->spilled_ptr;
-		if (reg->type != SCALAR_VALUE || reg == known_reg)
+		reg = linked_reg_state(vstate, e);
+		if (reg == known_reg || !sync_linked_reg(reg, known_reg))
 			continue;
-		if ((reg->id & ~BPF_ADD_CONST) != (known_reg->id & ~BPF_ADD_CONST))
-			continue;
-		/*
-		 * Skip mixed 32/64-bit links: the delta relationship doesn't
-		 * hold across different ALU widths.
-		 */
-		if (((reg->id ^ known_reg->id) & BPF_ADD_CONST) == BPF_ADD_CONST)
-			continue;
-		if ((!(reg->id & BPF_ADD_CONST) && !(known_reg->id & BPF_ADD_CONST)) ||
-		    reg->delta == known_reg->delta) {
-			*reg = *known_reg;
-		} else {
-			s32 saved_off = reg->delta;
-			u32 saved_id = reg->id;
-
-			fake_reg.type = SCALAR_VALUE;
-			__mark_reg_known(&fake_reg, (s64)reg->delta - (s64)known_reg->delta);
-
-			/* reg = known_reg; reg += delta */
-			*reg = *known_reg;
-			/*
-			 * Must preserve off and id, otherwise another sync_linked_regs()
-			 * will be incorrect.
-			 */
-			reg->delta = saved_off;
-			reg->id = saved_id;
-
-			scalar_step_add(reg, reg, &fake_reg);
-			scalar32_min_max_add(reg, &fake_reg);
-			scalar_min_max_add(reg, &fake_reg);
-			reg->var_off = tnum_add(reg->var_off, fake_reg.var_off);
-			if ((reg->id | known_reg->id) & BPF_ADD_CONST32)
-				zext_32_to_64(reg);
-			reg_bounds_sync(reg);
-		}
 		if (e->is_reg)
 			mark_reg_scratched(env, e->regno);
 		else
