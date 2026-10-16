@@ -2895,10 +2895,8 @@ static const __u64 kept[] = {
 
 static void test_calls(void)
 {
-	LIBBPF_OPTS(bpf_test_run_opts, opts);
 	__u64 expected = 1 + 2 + 3 + 4 + 5;
 	struct bpf_insn insns[64];
-	struct pat_ctx ctx;
 	char desc[64];
 	int nested, mask, n, call, r, fd, leaf;
 
@@ -2906,8 +2904,6 @@ static void test_calls(void)
 	leaf = (is_large_stack_supported() ? 2048 : 512) - 2 * 32;
 	for (r = 0; r < 4; r++)
 		expected += kept[r];
-	opts.ctx_in = &ctx;
-	opts.ctx_size_in = sizeof(ctx);
 	for (nested = 0; nested < 2; nested++) {
 		for (mask = 0; mask < 16; mask++) {
 			n = 0;
@@ -2953,9 +2949,7 @@ static void test_calls(void)
 			fd = load_prog(insns, n, desc);
 			if (fd < 0)
 				return;
-			memset(&ctx, 0, sizeof(ctx));
-			if (ASSERT_OK(bpf_prog_test_run_opts(fd, &opts), desc))
-				ASSERT_EQ(ctx.res, expected, desc);
+			prog_run(fd, 0, 0, expected, desc);
 			close(fd);
 		}
 	}
