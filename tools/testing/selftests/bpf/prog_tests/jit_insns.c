@@ -1123,7 +1123,8 @@ static void test_ld_imm64(void)
 	static const __u64 imms[] = {
 		0, 1, 0x7fffffff, 0x80000000, 0xffffffff, 0x100000000ULL,
 		0xffffffffffffffffULL, 0xffffffff80000000ULL, 0xffffffff7fffffffULL,
-		0x0123456789abcdefULL,
+		0x0123456789abcdefULL, 0xcccccccccccccccdULL, 0x5a5a12345a5a5a5aULL,
+		0x5a5a00005a5affffULL, 0x00ff00ff00ff00ffULL, 0x1234567812345678ULL,
 	};
 	int block = 64, bit, adj, sign, p, pattern, index, rd, i;
 	struct batch b;
@@ -1519,7 +1520,7 @@ static const __u64 inputs[] = {
 };
 
 struct prog {
-	struct bpf_insn insns[16];
+	struct bpf_insn insns[32];
 	int cnt;
 };
 
@@ -1572,7 +1573,7 @@ static void test_ldst_zero_off(void)
 	static const int aops[] = {
 		BPF_ADD, BPF_ADD | BPF_FETCH, BPF_OR, BPF_XCHG, BPF_CMPXCHG,
 	};
-	static const __s32 imms[] = { 0x5a, -1 };
+	static const __s32 imms[] = { 0x5a, -1, 0 };
 	struct prog p;
 	char desc[64];
 	int b, k, s, j, fd;
@@ -1649,12 +1650,13 @@ static void test_ldst_zero_off(void)
 				close(fd);
 			}
 
-			/* Store an immediate with a zero offset into a zeroed stack slot */
+			/* Store an immediate with a zero offset over in0 in a stack slot */
 			for (k = 0; k < ARRAY_SIZE(imms); k++) {
 				int rd = pair_reg(b, 1);
 
 				prog_start(&p);
-				EMIT(&p, BPF_ST_MEM(BPF_DW, BPF_REG_10, -8, 0));
+				EMIT(&p, BPF_LDX_MEM(BPF_DW, rd, BPF_REG_6, IN0));
+				EMIT(&p, BPF_STX_MEM(BPF_DW, BPF_REG_10, rd, -8));
 				EMIT(&p, BPF_MOV64_REG(rb, BPF_REG_10));
 				EMIT(&p, BPF_ALU64_IMM(BPF_ADD, rb, -8));
 				EMIT(&p, BPF_ST_MEM(size, rb, 0, imms[k]));
@@ -1665,8 +1667,10 @@ static void test_ldst_zero_off(void)
 				fd = prog_load(&p, desc);
 				if (fd < 0)
 					return;
-				prog_run(fd, 0, 0,
-					 head_merge(0, (__u64)(__s64)imms[k], size), desc);
+				for (j = 0; j < ARRAY_SIZE(inputs); j++)
+					prog_run(fd, inputs[j], 0,
+						 head_merge(inputs[j], (__u64)(__s64)imms[k], size),
+						 desc);
 				close(fd);
 			}
 
@@ -2156,6 +2160,8 @@ static void test_cmp_imm(void)
 {
 	static const __s32 imms[] = {
 		1, -1, 0x7f, 0x80, -0x80, -0x81, 0x1000, 0x7fffffff,
+		0xfff, 0x1001, 0xffff, 0x10000, 0x10001, -0x1000, -0x1001,
+		-0x7fffffff - 1, 0x7ffffffe,
 	};
 	static const int ops[] = {
 		BPF_JEQ, BPF_JNE, BPF_JGT, BPF_JGE, BPF_JLT, BPF_JLE,
@@ -2185,6 +2191,16 @@ static void test_cmp_imm(void)
 						__u64 taken = cmp_taken(ops[o], is64, v, c);
 
 						prog_run(fd, inputs[j], 0, taken, desc);
+					}
+					/* The operands at the immediate and right next to it */
+					for (j = -1; j <= 1; j++) {
+						__s64 near = (__s64)imms[m] + j;
+						__u64 v = is64 ? (__u64)near : (__u32)near;
+						__u64 c = is64 ? (__u64)(__s64)imms[m] :
+							  (__u32)imms[m];
+						__u64 taken = cmp_taken(ops[o], is64, v, c);
+
+						prog_run(fd, v, 0, taken, desc);
 					}
 					close(fd);
 					if (m)
@@ -2234,12 +2250,14 @@ static void test_alu_consts(void)
 		{ BPF_ADD, 1 }, { BPF_ADD, -1 }, { BPF_SUB, 1 }, { BPF_SUB, -1 },
 		{ BPF_ADD, 128 }, { BPF_SUB, 128 }, { BPF_ADD, -128 },
 		{ BPF_AND, 0xff }, { BPF_AND, 0xffff }, { BPF_AND, 0x7f },
-		{ BPF_AND, 0x3ff }, { BPF_AND, 0x7fffffff },
-		{ BPF_OR, 0xff }, { BPF_XOR, -1 }, { BPF_XOR, 0x80 },
+		{ BPF_AND, 0x3ff }, { BPF_AND, 0x7fffffff }, { BPF_AND, -1 },
+		{ BPF_OR, 0xff }, { BPF_OR, -1 }, { BPF_XOR, -1 }, { BPF_XOR, 0x80 },
 		{ BPF_MUL, 2 }, { BPF_MUL, 3 }, { BPF_MUL, 4 }, { BPF_MUL, 5 },
 		{ BPF_MUL, 7 }, { BPF_MUL, 8 }, { BPF_MUL, 9 }, { BPF_MUL, 16 },
+		{ BPF_MUL, 17 }, { BPF_MUL, 33 }, { BPF_MUL, 0x40000001 },
 		{ BPF_MUL, 0x40000000 }, { BPF_MUL, -3 }, { BPF_MUL, -0x7fffffff - 1 },
 		{ BPF_MUL, 0 }, { BPF_MUL, 1 }, { BPF_MUL, -1 },
+		{ BPF_ADD, 0x10000 }, { BPF_ADD, 0x10001 }, { BPF_SUB, 0x10001 },
 	};
 	struct prog p;
 	char desc[64];
@@ -2481,6 +2499,125 @@ static void test_acq_rel(void)
 				}
 				close(fd);
 			}
+		}
+	}
+}
+
+/* The n-th register after pat_regs[b] that is neither it nor r0 */
+static int ptr_operand_reg(int b, int n)
+{
+	int i = b;
+
+	while (n--) {
+		do {
+			i = (i + 1) % ARRAY_SIZE(pat_regs);
+		} while (pat_regs[i] == BPF_REG_0);
+	}
+	return pat_regs[i];
+}
+
+/* rr |= bit unless ra == rb, compared in the width of size */
+static void check_eq(struct prog *p, int size, int ra, int rb, int rr, int bit)
+{
+	if (size == BPF_W)
+		EMIT(p, BPF_JMP32_REG(BPF_JEQ, ra, rb, 1));
+	else
+		EMIT(p, BPF_JMP_REG(BPF_JEQ, ra, rb, 1));
+	EMIT(p, BPF_ALU64_IMM(BPF_OR, rr, bit));
+}
+
+/*
+ * Atomics with the pointer itself as the operand, which a privileged
+ * program may do: the ones without a fetch with src == dst, and the
+ * cmpxchg with the pointer as the new value. The verifier rejects the
+ * fetching ones with src == dst, as it marks the source unknown before
+ * it checks the access. The slot holds in0, the bytes the atomic
+ * operates on are checked against the operation done on a copy of the
+ * pointer, made a number by two negations, and the pointer register
+ * against the copy.
+ */
+static void test_atomic_ptr_operand(void)
+{
+	static const int sizes[] = { BPF_DW, BPF_W };
+	static const int ops[] = { BPF_ADD, BPF_AND, BPF_OR, BPF_XOR };
+	struct prog p;
+	char desc[64];
+	int b, k, s, j, fd;
+
+	for (b = 0; b < ARRAY_SIZE(pat_regs); b++) {
+		/* The pointer, a copy of it, the expected value, the memory and the result */
+		int rb = pat_regs[b], rp = ptr_operand_reg(b, 1), rv = ptr_operand_reg(b, 2);
+		int rm = ptr_operand_reg(b, 3), rr = ptr_operand_reg(b, 4);
+
+		for (s = 0; s < ARRAY_SIZE(sizes); s++) {
+			int size = sizes[s];
+			bool w = size == BPF_W;
+
+			for (k = 0; k < ARRAY_SIZE(ops); k++) {
+				int op = ops[k];
+
+				prog_start(&p);
+				EMIT(&p, BPF_MOV64_IMM(rr, 0));
+				EMIT(&p, BPF_LDX_MEM(BPF_DW, rv, BPF_REG_6, IN0));
+				EMIT(&p, BPF_STX_MEM(BPF_DW, BPF_REG_10, rv, -8));
+				EMIT(&p, BPF_MOV64_REG(rb, BPF_REG_10));
+				EMIT(&p, BPF_ALU64_IMM(BPF_ADD, rb, -8));
+				EMIT(&p, BPF_MOV64_REG(rp, rb));
+				EMIT(&p, BPF_ALU64_IMM(BPF_NEG, rp, 0));
+				EMIT(&p, BPF_ALU64_IMM(BPF_NEG, rp, 0));
+				/* The bytes the atomic operates on, whichever the byte order */
+				EMIT(&p, BPF_LDX_MEM(size, rv, rb, 0));
+				EMIT(&p, BPF_ATOMIC_OP(size, op, rb, rb, 0));
+				/* The memory holds in0 <op> pointer, the register the pointer */
+				if (w)
+					EMIT(&p, BPF_ALU32_REG(op, rv, rp));
+				else
+					EMIT(&p, BPF_ALU64_REG(op, rv, rp));
+				/* Read back through fp, a clobbered pointer must not fault */
+				EMIT(&p, BPF_LDX_MEM(size, rm, BPF_REG_10, -8));
+				check_eq(&p, BPF_DW, rm, rv, rr, 1);
+				check_eq(&p, BPF_DW, rb, rp, rr, 2);
+				prog_end(&p, rr);
+				snprintf(desc, sizeof(desc), "atomic%d_%s ptr=r%d",
+					 w ? 32 : 64, alu_name(op), rb);
+				fd = prog_load(&p, desc);
+				if (fd < 0)
+					return;
+				for (j = 0; j < ARRAY_SIZE(inputs); j++)
+					prog_run(fd, inputs[j], 0, 0, desc);
+				close(fd);
+			}
+
+			/* The pointer as the new value, r0 holds in0 and matches */
+			if (rb == BPF_REG_0)
+				continue;
+			prog_start(&p);
+			EMIT(&p, BPF_MOV64_IMM(rr, 0));
+			EMIT(&p, BPF_LDX_MEM(BPF_DW, rv, BPF_REG_6, IN0));
+			EMIT(&p, BPF_STX_MEM(BPF_DW, BPF_REG_10, rv, -8));
+			EMIT(&p, BPF_MOV64_REG(rb, BPF_REG_10));
+			EMIT(&p, BPF_ALU64_IMM(BPF_ADD, rb, -8));
+			EMIT(&p, BPF_MOV64_REG(rp, rb));
+			EMIT(&p, BPF_ALU64_IMM(BPF_NEG, rp, 0));
+			EMIT(&p, BPF_ALU64_IMM(BPF_NEG, rp, 0));
+			/* r0 holds the bytes the atomic compares with and matches */
+			EMIT(&p, BPF_LDX_MEM(size, BPF_REG_0, rb, 0));
+			EMIT(&p, BPF_MOV64_REG(rv, BPF_REG_0));
+			EMIT(&p, BPF_ATOMIC_OP(size, BPF_CMPXCHG, rb, rb, 0));
+			/* The memory holds the pointer in the width, r0 the old value */
+			EMIT(&p, BPF_LDX_MEM(size, rm, BPF_REG_10, -8));
+			check_eq(&p, size, rm, rp, rr, 1);
+			check_eq(&p, BPF_DW, BPF_REG_0, rv, rr, 2);
+			check_eq(&p, BPF_DW, rb, rp, rr, 4);
+			prog_end(&p, rr);
+			snprintf(desc, sizeof(desc), "atomic%d_cmpxchg ptr=r%d new=r%d",
+				 w ? 32 : 64, rb, rb);
+			fd = prog_load(&p, desc);
+			if (fd < 0)
+				return;
+			for (j = 0; j < ARRAY_SIZE(inputs); j++)
+				prog_run(fd, inputs[j], 0, 0, desc);
+			close(fd);
 		}
 	}
 }
@@ -3097,6 +3234,8 @@ void test_jit_insns(void)
 		test_ldst_offsets();
 	if (test__start_subtest("acq_rel"))
 		test_acq_rel();
+	if (test__start_subtest("atomic_ptr_operand"))
+		test_atomic_ptr_operand();
 	if (test__start_subtest("movsx"))
 		test_movsx();
 	if (test__start_subtest("jset_imm"))
