@@ -891,13 +891,17 @@ static int emit_bpf_tail_call(struct jit_ctx *ctx)
 	__le32 *branch2 = NULL;
 	__le32 *branch3 = NULL;
 
+	/* The struct offsets fit the immediate forms, the count fits cmp */
+	BUILD_BUG_ON(!is_lsi_offset(offsetof(struct bpf_array, map.max_entries), 2));
+	BUILD_BUG_ON(!is_addsub_imm(offsetof(struct bpf_array, ptrs)));
+	BUILD_BUG_ON(!is_lsi_offset(offsetof(struct bpf_prog, bpf_func), 3));
+	BUILD_BUG_ON(!is_addsub_imm(MAX_TAIL_CALL_CNT));
+
 	/* if (index >= array->map.max_entries)
 	 *     goto out;
 	 */
 	off = offsetof(struct bpf_array, map.max_entries);
-	emit_a64_mov_i64(tmp, off, ctx);
-	emit(A64_LDR32(tmp, r2, tmp), ctx);
-	emit(A64_MOV(0, r3, r3), ctx);
+	emit(A64_LDR32I(tmp, r2, off), ctx);
 	emit(A64_CMP(0, r3, tmp), ctx);
 	branch1 = ctx->image + ctx->idx;
 	emit(A64_NOP, ctx);
@@ -906,9 +910,8 @@ static int emit_bpf_tail_call(struct jit_ctx *ctx)
 	 * if ((*tail_call_cnt_ptr) >= MAX_TAIL_CALL_CNT)
 	 *     goto out;
 	 */
-	emit_a64_mov_i64(tmp, MAX_TAIL_CALL_CNT, ctx);
 	emit(A64_LDR64I(tcc, ptr, 0), ctx);
-	emit(A64_CMP(1, tcc, tmp), ctx);
+	emit(A64_CMP_I(1, tcc, MAX_TAIL_CALL_CNT), ctx);
 	branch2 = ctx->image + ctx->idx;
 	emit(A64_NOP, ctx);
 
@@ -920,9 +923,8 @@ static int emit_bpf_tail_call(struct jit_ctx *ctx)
 	 *     goto out;
 	 */
 	off = offsetof(struct bpf_array, ptrs);
-	emit_a64_mov_i64(tmp, off, ctx);
-	emit(A64_ADD(1, tmp, r2, tmp), ctx);
-	emit(A64_LSL(1, prg, r3, 3), ctx);
+	emit(A64_ADD_I(1, tmp, r2, off), ctx);
+	emit(A64_UBFIZ(1, prg, r3, 3, 32), ctx);
 	emit(A64_LDR64(prg, tmp, prg), ctx);
 	branch3 = ctx->image + ctx->idx;
 	emit(A64_NOP, ctx);
@@ -941,8 +943,7 @@ static int emit_bpf_tail_call(struct jit_ctx *ctx)
 
 	/* goto *(prog->bpf_func + prologue_offset); */
 	off = offsetof(struct bpf_prog, bpf_func);
-	emit_a64_mov_i64(tmp, off, ctx);
-	emit(A64_LDR64(tmp, prg, tmp), ctx);
+	emit(A64_LDR64I(tmp, prg, off), ctx);
 	emit(A64_ADD_I(1, tmp, tmp, sizeof(u32) * PROLOGUE_OFFSET), ctx);
 	emit(A64_BR(tmp), ctx);
 
