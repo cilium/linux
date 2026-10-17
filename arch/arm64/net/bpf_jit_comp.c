@@ -1829,8 +1829,15 @@ emit_bswap_uxt:
 		break;
 	case BPF_ALU | BPF_MUL | BPF_K:
 	case BPF_ALU64 | BPF_MUL | BPF_K:
-		emit_a64_mov_i(is64, tmp, imm, ctx);
-		emit(A64_MUL(is64, dst, dst, tmp), ctx);
+		/* By 2^n a shift, by 2^n + 1 an add of the shifted register */
+		if (imm > 1 && is_power_of_2(imm)) {
+			emit(A64_LSL(is64, dst, dst, ilog2(imm)), ctx);
+		} else if (imm > 2 && is_power_of_2(imm - 1)) {
+			emit(A64_ADD_LSL(is64, dst, dst, dst, ilog2(imm - 1)), ctx);
+		} else {
+			emit_a64_mov_i(is64, tmp, imm, ctx);
+			emit(A64_MUL(is64, dst, dst, tmp), ctx);
+		}
 		break;
 	case BPF_ALU | BPF_DIV | BPF_K:
 	case BPF_ALU64 | BPF_DIV | BPF_K:
