@@ -457,6 +457,44 @@ u32 aarch64_insn_gen_load_store_imm(enum aarch64_insn_register reg,
 	return aarch64_insn_encode_immediate(AARCH64_INSN_IMM_12, insn, imm);
 }
 
+u32 aarch64_insn_gen_load_store_unscaled(enum aarch64_insn_register reg,
+					 enum aarch64_insn_register base,
+					 int imm,
+					 enum aarch64_insn_size_type size,
+					 enum aarch64_insn_ldst_type type)
+{
+	u32 insn;
+
+	if (imm < -SZ_256 || imm >= SZ_256) {
+		pr_err("%s: invalid imm: %d\n", __func__, imm);
+		return AARCH64_BREAK_FAULT;
+	}
+
+	switch (type) {
+	case AARCH64_INSN_LDST_LOAD_UNSCALED_IMM_OFFSET:
+		insn = aarch64_insn_get_ldur_value();
+		break;
+	case AARCH64_INSN_LDST_SIGNED_LOAD_UNSCALED_IMM_OFFSET:
+		insn = aarch64_insn_get_signed_ldur_value();
+		break;
+	case AARCH64_INSN_LDST_STORE_UNSCALED_IMM_OFFSET:
+		insn = aarch64_insn_get_stur_value();
+		break;
+	default:
+		pr_err("%s: unknown load/store encoding %d\n", __func__, type);
+		return AARCH64_BREAK_FAULT;
+	}
+
+	insn = aarch64_insn_encode_ldst_size(size, insn);
+
+	insn = aarch64_insn_encode_register(AARCH64_INSN_REGTYPE_RT, insn, reg);
+
+	insn = aarch64_insn_encode_register(AARCH64_INSN_REGTYPE_RN, insn,
+					    base);
+
+	return aarch64_insn_encode_immediate(AARCH64_INSN_IMM_9, insn, imm);
+}
+
 u32 aarch64_insn_gen_load_literal(unsigned long pc, unsigned long addr,
 				  enum aarch64_insn_register reg,
 				  bool is64bit)
@@ -1155,8 +1193,23 @@ u32 aarch64_insn_gen_data3(enum aarch64_insn_register dst,
 	case AARCH64_INSN_DATA3_MSUB:
 		insn = aarch64_insn_get_msub_value();
 		break;
+	case AARCH64_INSN_DATA3_UMULH:
+		insn = aarch64_insn_get_umulh_value();
+		break;
+	case AARCH64_INSN_DATA3_SMULH:
+		insn = aarch64_insn_get_smulh_value();
+		break;
 	default:
 		pr_err("%s: unknown data3 encoding %d\n", __func__, type);
+		return AARCH64_BREAK_FAULT;
+	}
+
+	if ((type == AARCH64_INSN_DATA3_UMULH ||
+	     type == AARCH64_INSN_DATA3_SMULH) &&
+	    (variant != AARCH64_INSN_VARIANT_64BIT ||
+	     src != AARCH64_INSN_REG_ZR)) {
+		pr_err("%s: invalid variant or Ra for multiply high\n",
+		       __func__);
 		return AARCH64_BREAK_FAULT;
 	}
 
