@@ -18873,6 +18873,7 @@ static int check_cond_jmp_op(struct bpf_verifier_env *env,
 	struct linked_regs linked_regs = {};
 	u8 opcode = BPF_OP(insn->code);
 	int insn_flags = 0;
+	u32 src_id = 0;
 	bool is_jmp32;
 	int pred = -1;
 	int err;
@@ -18961,11 +18962,16 @@ static int check_cond_jmp_op(struct bpf_verifier_env *env,
 	/*
 	 * Collect the linked registers before env->{true,false}_reg{1,2} setup,
 	 * otherwise ids dropped by collect_linked_regs() would be resurrected
-	 * when env->{true,false}_reg{1,2} are copied back.
+	 * when env->{true,false}_reg{1,2} are copied back. Compared registers
+	 * from the same group are collected once: a second pass over the same
+	 * id would push every member again and unlink those which no longer fit.
 	 */
-	if (BPF_SRC(insn->code) == BPF_X && src_reg->type == SCALAR_VALUE && src_reg->id)
+	if (BPF_SRC(insn->code) == BPF_X && src_reg->type == SCALAR_VALUE && src_reg->id) {
+		src_id = src_reg->id & ~BPF_ADD_CONST;
 		collect_linked_regs(env, this_branch, src_reg->id, &linked_regs);
-	if (dst_reg->type == SCALAR_VALUE && dst_reg->id)
+	}
+	if (dst_reg->type == SCALAR_VALUE && dst_reg->id &&
+	    (dst_reg->id & ~BPF_ADD_CONST) != src_id)
 		collect_linked_regs(env, this_branch, dst_reg->id, &linked_regs);
 
 	is_jmp32 = BPF_CLASS(insn->code) == BPF_JMP32;
