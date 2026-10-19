@@ -2236,6 +2236,12 @@ static void reset_reg32_and_tnum(struct bpf_reg_state *reg)
 	reg->var_off = tnum_unknown;
 }
 
+static void reset_reg_and_tnum(struct bpf_reg_state *reg)
+{
+	__mark_reg_unbounded(reg);
+	reg->var_off = tnum_unknown;
+}
+
 static struct cnum32 cnum32_from_tnum(struct tnum tnum)
 {
 	tnum = tnum_subreg(tnum);
@@ -2437,7 +2443,7 @@ out:
 		     reg->base, reg->step);
 	if (env->test_reg_invariants)
 		return -EFAULT;
-	__mark_reg_unbounded(reg);
+	reset_reg_and_tnum(reg);
 	reg_step_reset(reg);
 	return 0;
 }
@@ -2447,8 +2453,7 @@ void bpf_mark_reg_unknown_imprecise(struct bpf_reg_state *reg)
 {
 	memset(reg, 0, sizeof(*reg));
 	reg->type = SCALAR_VALUE;
-	reg->var_off = tnum_unknown;
-	__mark_reg_unbounded(reg);
+	reset_reg_and_tnum(reg);
 	reg_step_reset(reg);
 }
 
