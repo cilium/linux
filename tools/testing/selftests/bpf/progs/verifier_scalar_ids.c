@@ -422,6 +422,35 @@ __naked void linked_regs_too_many_regs(void)
 	: __clobber_all);
 }
 
+/* Registers r{6,7,8} share same ID when 'if r6 < r7' is processed,
+ * check that the group is collected once. A second collection for the
+ * same ID would overflow the record and unlink r8, so the bounds learned
+ * for r6 afterwards would not reach it.
+ */
+SEC("socket")
+__success
+__naked void linked_regs_compared_same_id(void)
+{
+	asm volatile (
+	"call %[bpf_ktime_get_ns];"
+	/* tie r{6,7,8} IDs */
+	"r6 = r0;"
+	"r7 = r6;"
+	"r8 = r6;"
+	"r7 += 1;"
+	/* both compared registers are in the group */
+	"if r6 < r7 goto +0;"
+	"if r6 > 7 goto +2;"
+	/* r8 is in [0, 7] only if still linked to r6 */
+	"r1 = r10;"
+	"r1 += r8;"
+	"r0 = 0;"
+	"exit;"
+	:
+	: __imm(bpf_ktime_get_ns)
+	: __clobber_all);
+}
+
 SEC("socket")
 __failure __log_level(2)
 __flag(BPF_F_TEST_STATE_FREQ)
