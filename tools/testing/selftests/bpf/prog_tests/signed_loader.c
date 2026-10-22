@@ -424,6 +424,108 @@ static void signed_core_relo_rejected(void)
 		close(fd);
 }
 
+/*
+ * The signed bytes carry no map sizes, so a signed load binds at most one
+ * fd_array entry: with two, the metadata could be cut differently across the
+ * maps, or one map fill both slots. The limit counts entries, not maps, so the
+ * same map in both slots is rejected as well. That happens before the
+ * signature is examined, so junk serves as one.
+ */
+static void signed_fd_array_cnt_rejected(void)
+{
+	static const __u8 junk[64] = { 0x30, 0x42, 0x13, 0x37, };
+	struct bpf_insn insns[] = {
+		BPF_MOV64_IMM(BPF_REG_0, 0),
+		BPF_EXIT_INSN(),
+	};
+	char log_buf[1024] = {};
+	union bpf_attr attr;
+	int fds[2], map_fd, fd;
+
+	map_fd = bpf_map_create(BPF_MAP_TYPE_ARRAY, "meta", 4, 8, 1, NULL);
+	if (!ASSERT_OK_FD(map_fd, "map_create"))
+		return;
+	fds[0] = map_fd;
+	fds[1] = map_fd;
+
+	memset(&attr, 0, sizeof(attr));
+	attr.prog_type = BPF_PROG_TYPE_SYSCALL;
+	attr.insns = ptr_to_u64(insns);
+	attr.insn_cnt = ARRAY_SIZE(insns);
+	attr.license = ptr_to_u64("Dual BSD/GPL");
+	attr.prog_flags = BPF_F_SLEEPABLE;
+	attr.signature = ptr_to_u64(junk);
+	attr.signature_size = sizeof(junk);
+	attr.keyring_id = KEY_SPEC_SESSION_KEYRING;
+	attr.fd_array = ptr_to_u64(fds);
+	attr.fd_array_cnt = ARRAY_SIZE(fds);
+	attr.log_level = 1;
+	attr.log_buf = ptr_to_u64(log_buf);
+	attr.log_size = sizeof(log_buf);
+	fd = syscall(__NR_bpf, BPF_PROG_LOAD, &attr, offsetofend(union bpf_attr, keyring_id));
+	fd = fd < 0 ? -errno : fd;
+	ASSERT_EQ(fd, -EACCES, "signed load with two fd_array entries rejected");
+	ASSERT_HAS_SUBSTR(log_buf, "signed program cannot bind more than one fd_array entry",
+			  "log");
+	if (fd >= 0)
+		close(fd);
+	close(map_fd);
+}
+
+/*
+ * The signed bytes carry no insn count either, and func_info could declare an
+ * exception callback that makes the head of the metadata reachable as insns.
+ * A signed load that carries func_info or line_info is rejected before the
+ * signature is examined, so junk serves as one, and as the records.
+ */
+static void signed_btf_info_rejected(void)
+{
+	static const __u8 junk[64] = { 0x30, 0x42, 0x13, 0x37, };
+	struct bpf_insn insns[] = {
+		BPF_MOV64_IMM(BPF_REG_0, 0),
+		BPF_EXIT_INSN(),
+	};
+	struct bpf_func_info finfo = { .insn_off = 0, .type_id = 1 };
+	struct bpf_line_info linfo = { .insn_off = 0, .line_off = 1 };
+	char log_buf[1024];
+	union bpf_attr attr;
+	int i, fd;
+
+	for (i = 0; i < 2; i++) {
+		memset(&attr, 0, sizeof(attr));
+		attr.prog_type = BPF_PROG_TYPE_SYSCALL;
+		attr.insns = ptr_to_u64(insns);
+		attr.insn_cnt = ARRAY_SIZE(insns);
+		attr.license = ptr_to_u64("Dual BSD/GPL");
+		attr.prog_flags = BPF_F_SLEEPABLE;
+		attr.signature = ptr_to_u64(junk);
+		attr.signature_size = sizeof(junk);
+		attr.keyring_id = KEY_SPEC_SESSION_KEYRING;
+		if (i == 0) {
+			attr.func_info = ptr_to_u64(&finfo);
+			attr.func_info_cnt = 1;
+			attr.func_info_rec_size = sizeof(finfo);
+		} else {
+			attr.line_info = ptr_to_u64(&linfo);
+			attr.line_info_cnt = 1;
+			attr.line_info_rec_size = sizeof(linfo);
+		}
+		memset(log_buf, 0, sizeof(log_buf));
+		attr.log_level = 1;
+		attr.log_buf = ptr_to_u64(log_buf);
+		attr.log_size = sizeof(log_buf);
+		fd = syscall(__NR_bpf, BPF_PROG_LOAD, &attr,
+			     offsetofend(union bpf_attr, keyring_id));
+		fd = fd < 0 ? -errno : fd;
+		ASSERT_EQ(fd, -EACCES, i ? "signed load with line_info rejected" :
+					   "signed load with func_info rejected");
+		ASSERT_HAS_SUBSTR(log_buf, "signed program cannot carry func_info or line_info",
+				  "log");
+		if (fd >= 0)
+			close(fd);
+	}
+}
+
 static void signed_nonexcl_fd_array_rejected(void)
 {
 	static const __u8 junk[64] = { 0x30, 0x42, 0x13, 0x37, };
@@ -2233,6 +2335,8 @@ static const struct {
 	{ "signed_nonarray_fd_array_rejected", signed_nonarray_fd_array_rejected, BOOT_SEALED },
 	{ "signed_btf_fd_array_rejected", signed_btf_fd_array_rejected, BOOT_ANY },
 	{ "signed_core_relo_rejected", signed_core_relo_rejected, BOOT_ANY },
+	{ "signed_fd_array_cnt_rejected", signed_fd_array_cnt_rejected, BOOT_ANY },
+	{ "signed_btf_info_rejected", signed_btf_info_rejected, BOOT_ANY },
 	{ "signed_module_kfunc_rejected", signed_module_kfunc_rejected, BOOT_SEALED },
 	{ "signature_failure_logs", signature_failure_logs, BOOT_SEALED },
 	{ "signature_too_large", signature_too_large, BOOT_ANY },
