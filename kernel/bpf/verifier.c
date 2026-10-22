@@ -23622,6 +23622,17 @@ static int bpf_prog_verify_signature(struct bpf_verifier_env *env,
 		verbose(env, "signed program cannot bind more than one fd_array entry\n");
 		return -EACCES;
 	}
+	/*
+	 * Nor do they carry the insn count. Rejecting unreachable insns keeps
+	 * the end of the insns in place, but func_info can declare an
+	 * exception callback that makes the head of the map reachable as
+	 * insns, see bpf_find_exception_callback_insn_off(). line_info goes
+	 * with it, so a signed program carries no BTF of its own.
+	 */
+	if (attr->func_info_cnt || attr->line_info_cnt) {
+		verbose(env, "signed program cannot carry func_info or line_info\n");
+		return -EACCES;
+	}
 	if (!attr->signature_size ||
 	    attr->signature_size > BPF_PROG_MAX_SIGNATURE_SIZE)
 		return -EINVAL;
