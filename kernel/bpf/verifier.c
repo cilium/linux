@@ -23585,8 +23585,8 @@ static enum bpf_sig_keyring bpf_classify_keyring(s32 keyring_id)
  * the exact maps folded into the signature are the ones the program binds.
  *
  * The signature covers the instructions followed by the frozen contents of
- * each map, in @maps order: insns || map_0 || map_1 || [...]. On success the
- * verdict and keyring info are recorded on prog->aux.
+ * the one map a signed program may bind, if any: insns || map. On success
+ * the verdict and keyring info are recorded on prog->aux.
  */
 static int bpf_prog_verify_signature(struct bpf_verifier_env *env,
 				     union bpf_attr *attr, bool is_kernel)
@@ -23609,6 +23609,17 @@ static int bpf_prog_verify_signature(struct bpf_verifier_env *env,
 	 */
 	if (attr->core_relo_cnt) {
 		verbose(env, "signed program cannot carry CO-RE relocations\n");
+		return -EACCES;
+	}
+	/*
+	 * The signed bytes carry no map sizes. With more than one fd_array
+	 * entry the same metadata could be cut differently across the maps,
+	 * or one map could fill two slots the loader expects to be distinct,
+	 * and the signature would still pass while the loader reads other
+	 * data.
+	 */
+	if (attr->fd_array_cnt > 1) {
+		verbose(env, "signed program cannot bind more than one fd_array entry\n");
 		return -EACCES;
 	}
 	if (!attr->signature_size ||
