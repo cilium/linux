@@ -133,19 +133,19 @@ reuses the existing ``fd_array``:
    set, the metadata map referenced through ``fd_array``, and ``fd_array_cnt``
    set so the kernel knows the array's length.
 #. Signature verification runs inside the verifier (``bpf_check()``), once it
-   has resolved the ``fd_array`` entries into the program's ``used_maps``. The
-   maps folded into the signature are therefore the very objects the program
+   has resolved the ``fd_array`` entry into the program's ``used_maps``. The
+   map folded into the signature is therefore the very object the program
    binds - a single resolution of ``fd_array``, not a separate read, so the
    verified bytes cannot be swapped for a different map after the check (no
-   time-of-check/time-of-use window). Each folded map must be exclusive (carry
+   time-of-check/time-of-use window). The folded map must be exclusive (carry
    ``excl_prog_sha``) and a plain array map (``BPF_MAP_TYPE_ARRAY``); only an
    array map exposes its value buffer through ``map_direct_value_addr()`` as a
    kernel address spanning ``value_size`` bytes. A map that is not exclusive, not
    frozen, or not a plain array is rejected, with a verifier log message naming
-   the offending map. The kernel appends each map's frozen
+   the offending map. The kernel appends the map's frozen
    contents to the instruction buffer and verifies the PKCS#7 signature over the
-   concatenation ``insns || metadata_0 || metadata_1 || ...`` in ``used_maps``
-   order, before it rewrites the (signed) instructions.
+   concatenation ``insns || metadata``, before it rewrites the (signed)
+   instructions.
 
 A signed program therefore takes one of exactly two shapes, both fully
 supported:
@@ -155,12 +155,25 @@ supported:
   yields ``BPF_SIG_VERIFIED`` and the program loads. This is the ordinary case
   for a directly-loaded signed program with no separate payload; it is *not*
   rejected for "missing" metadata, because it has none to cover.
-- **Exclusive bound maps** (``fd_array_cnt > 0``): every entry is exclusive and
-  folded, so the signature covers ``insns || metadata``.
+- **One exclusive bound map** (``fd_array_cnt == 1``): the entry is exclusive
+  and folded, so the signature covers ``insns || metadata``.
 
 There is no third shape: a non-exclusive map in a signed program's ``fd_array``
 is rejected rather than silently left out of the signature, so a signed loader
 never binds a map its signature does not cover.
+
+The signed bytes carry no lengths, so nothing a signed load carries may move
+where the instructions end and the metadata begins. The kernel refuses, with
+``-EACCES`` and before the signature is examined:
+
+- more than one ``fd_array`` entry, as the same metadata could otherwise be cut
+  differently across several maps, or one map be placed in two slots the loader
+  expects to be distinct;
+- ``func_info`` and ``line_info``, so that a signed program carries no BTF of
+  its own, as ``func_info`` could otherwise declare an exception callback that
+  makes the head of the metadata reachable as instructions;
+- CO-RE relocations, which the kernel would apply to the signed instructions
+  after the check.
 
 The digest binding (``excl_prog_sha == prog->digest``) is enforced by the
 verifier as usual; because that check runs while ``fd_array`` is resolved -
@@ -675,9 +688,12 @@ UAPI reference
 ``fd_array``, ``fd_array_cnt``
     Array of map (and module BTF) file descriptors bound to the program.
     ``fd_array_cnt`` must be set for the kernel to scan the array. When a
-    signature is present, a BTF entry is rejected outright, and every map must
-    be exclusive; its frozen contents are folded into the verified buffer, and
-    a non-exclusive entry is rejected.
+    signature is present, at most one entry is accepted, a BTF entry is
+    rejected outright, and the map must be exclusive; its frozen contents are
+    folded into the verified buffer, and a non-exclusive entry is rejected.
+
+``func_info_cnt``, ``line_info_cnt``, ``core_relo_cnt``
+    Must be zero when a signature is present.
 
 ``BPF_MAP_CREATE`` (``union bpf_attr``):
 
@@ -700,7 +716,7 @@ Notes and limitations
 - The instructions plus folded metadata are verified as one ``bpf_dynptr``,
   which bounds the combined size (currently ~16 MiB); very large objects can
   exceed it.
-- The metadata container is a single-element array map, accessed through
+- The metadata container is one single-element array map, accessed through
   ``map_direct_value_addr``.
 - The bpf keyring needs ``CONFIG_KEYS``; without it there is no bpf keyring
   and ``KEY_SPEC_BPF_KEYRING`` never resolves.
