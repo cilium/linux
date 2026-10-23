@@ -125,6 +125,70 @@ out:
 		munmap((void *)addr, page_size);
 }
 
+static void test_copy_to_readonly_mapping(struct user_mem *skel)
+{
+	static const char expected[] = "fault-enabled BPF write";
+	long page_size = sysconf(_SC_PAGESIZE);
+	unsigned long addr = ~0UL;
+
+	if (!alloc_user_mem(skel, page_size, PROT_READ, &addr))
+		return;
+
+	skel->bss->user_addr = addr;
+	skel->bss->copy_size = sizeof(expected);
+	skel->bss->copy_flags = 0;
+	skel->bss->action = USER_PAGE_COPY;
+	user_mem_trigger();
+	if (!ASSERT_OK(skel->bss->ret, "readonly_copy"))
+		goto out;
+
+	ASSERT_EQ(memcmp((void *)addr, expected, sizeof(expected)), 0,
+		  "readonly_copy_data");
+
+out:
+	if (addr != ~0UL)
+		munmap((void *)addr, page_size);
+}
+
+static void test_partial_copy_fault(struct user_mem *skel)
+{
+	long page_size = sysconf(_SC_PAGESIZE);
+	unsigned long addr = ~0UL;
+	bool second_page_unmapped = false;
+
+	if (!alloc_user_mem(skel, page_size * 2, PROT_READ | PROT_WRITE, &addr))
+		return;
+
+	if (!unmap_user_mem(skel, addr + page_size, page_size))
+		goto out;
+	second_page_unmapped = true;
+
+	skel->bss->user_addr = addr + page_size - 1;
+	skel->bss->copy_size = sizeof("fault-enabled BPF write");
+	skel->bss->copy_flags = 0;
+	skel->bss->action = USER_PAGE_COPY;
+	user_mem_trigger();
+	ASSERT_EQ(skel->bss->ret, -EFAULT, "partial_copy");
+
+out:
+	if (addr != ~0UL)
+		munmap((void *)addr, second_page_unmapped ? page_size : page_size * 2);
+}
+
+static void test_zero_length_copy(struct user_mem *skel)
+{
+	skel->bss->user_addr = 1;
+	skel->bss->copy_size = 0;
+	skel->bss->copy_flags = 0;
+	skel->bss->action = USER_PAGE_COPY;
+	user_mem_trigger();
+	ASSERT_EQ(skel->bss->ret, 0, "zero_length_copy");
+
+	skel->bss->copy_flags = 1;
+	user_mem_trigger();
+	ASSERT_EQ(skel->bss->ret, -EINVAL, "zero_length_copy_bad_flags");
+}
+
 static void test_allocations(struct user_mem *skel)
 {
 	void *pages[2] = { MAP_FAILED, MAP_FAILED };
@@ -177,6 +241,24 @@ out:
 		munmap((void *)addr, page_size);
 }
 
+static void test_failed_unmap(struct user_mem *skel)
+{
+	long page_size = sysconf(_SC_PAGESIZE);
+	unsigned long addr = ~0UL;
+
+	if (!alloc_user_mem(skel, page_size, PROT_READ | PROT_WRITE, &addr))
+		return;
+
+	skel->bss->user_addr = addr;
+	skel->bss->map_len = 0;
+	skel->bss->action = USER_PAGE_UNMAP;
+	user_mem_trigger();
+	if (ASSERT_EQ(skel->bss->ret, -EINVAL, "zero_length_unmap"))
+		check_user_mem_vma((void *)addr, page_size, "rw-p");
+
+	munmap((void *)addr, page_size);
+}
+
 static void test_mapping_protections(struct user_mem *skel)
 {
 	long page_size = sysconf(_SC_PAGESIZE);
@@ -217,6 +299,20 @@ static void test_zero_length_mapping(struct user_mem *skel)
 	user_mem_trigger();
 	ASSERT_EQ(skel->bss->user_addr, (unsigned long)-EINVAL,
 		  "zero_length_mapping");
+}
+
+static void test_invalid_copy(struct user_mem *skel)
+{
+	skel->bss->copy_size = sizeof("fault-enabled BPF write");
+	skel->bss->copy_flags = 0;
+	skel->bss->user_addr = 1;
+	skel->bss->action = USER_PAGE_COPY;
+	user_mem_trigger();
+	ASSERT_EQ(skel->bss->ret, -EFAULT, "bad_copy");
+
+	skel->bss->copy_flags = 1;
+	user_mem_trigger();
+	ASSERT_EQ(skel->bss->ret, -EINVAL, "bad_copy_flags");
 }
 
 static void test_execute_user_page(struct user_mem *skel)
@@ -286,6 +382,8 @@ void test_user_mem(void)
 {
 	struct user_mem *skel;
 
+	RUN_TESTS(user_mem);
+
 	skel = user_mem__open_and_load();
 	if (!ASSERT_OK_PTR(skel, "open_and_load"))
 		return;
@@ -308,6 +406,16 @@ void test_user_mem(void)
 		test_partial_exec(skel);
 	if (test__start_subtest("faultable_write"))
 		test_faultable_write(skel);
+	if (test__start_subtest("failed_unmap"))
+		test_failed_unmap(skel);
+	if (test__start_subtest("invalid_copy"))
+		test_invalid_copy(skel);
+	if (test__start_subtest("zero_length_copy"))
+		test_zero_length_copy(skel);
+	if (test__start_subtest("partial_copy_fault"))
+		test_partial_copy_fault(skel);
+	if (test__start_subtest("copy_to_readonly_mapping"))
+		test_copy_to_readonly_mapping(skel);
 
 out:
 	user_mem__destroy(skel);
