@@ -10,10 +10,14 @@ char _license[] SEC("license") = "GPL";
 
 extern unsigned long bpf_user_mmap(unsigned long len, unsigned long prot) __ksym;
 extern int bpf_user_munmap(unsigned long addr, unsigned long len) __ksym;
+extern int bpf_copy_to_user_task(void *unsafe_ptr__ign, const void *src__srcptr,
+				 u32 src__sz, struct task_struct *tsk,
+				 u64 flags) __ksym;
 
 enum {
 	USER_PAGE_MMAP = 1,
 	USER_PAGE_UNMAP,
+	USER_PAGE_COPY_INSNS,
 };
 
 int monitored_pid;
@@ -22,6 +26,10 @@ unsigned long user_addr;
 unsigned long map_len;
 unsigned long map_prot;
 int ret;
+static const unsigned char insns[] = {
+	0xf3, 0x0f, 0x1e, 0xfa, /* endbr64 */
+	0xb8, 42, 0, 0, 0, 0xc3, /* mov $42, %eax; ret */
+};
 
 SEC("uprobe.s//proc/self/exe:user_mem_trigger")
 int user_mem_test(struct pt_regs *ctx)
@@ -35,6 +43,11 @@ int user_mem_test(struct pt_regs *ctx)
 		break;
 	case USER_PAGE_UNMAP:
 		ret = bpf_user_munmap(user_addr, map_len);
+		break;
+	case USER_PAGE_COPY_INSNS:
+		ret = bpf_copy_to_user_task((void *)user_addr, insns,
+					       sizeof(insns),
+					       bpf_get_current_task_btf(), 0);
 		break;
 	}
 

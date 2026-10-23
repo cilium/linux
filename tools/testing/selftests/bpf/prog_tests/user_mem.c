@@ -10,6 +10,7 @@
 enum {
 	USER_PAGE_MMAP = 1,
 	USER_PAGE_UNMAP,
+	USER_PAGE_COPY_INSNS,
 };
 
 static noinline void user_mem_trigger(void)
@@ -88,6 +89,14 @@ static bool unmap_user_mem(struct user_mem *skel, unsigned long addr,
 	skel->bss->action = USER_PAGE_UNMAP;
 	user_mem_trigger();
 	return ASSERT_OK(skel->bss->ret, "user_munmap");
+}
+
+static bool write_user_mem(struct user_mem *skel, unsigned long addr)
+{
+	skel->bss->user_addr = addr;
+	skel->bss->action = USER_PAGE_COPY_INSNS;
+	user_mem_trigger();
+	return ASSERT_OK(skel->bss->ret, "user_write");
 }
 
 static void test_allocations(struct user_mem *skel)
@@ -184,6 +193,69 @@ static void test_zero_length_mapping(struct user_mem *skel)
 		  "zero_length_mapping");
 }
 
+static void test_execute_user_page(struct user_mem *skel)
+{
+	long page_size = sysconf(_SC_PAGESIZE);
+	unsigned long addr = ~0UL;
+
+#ifndef __x86_64__
+	test__skip();
+	return;
+#endif
+
+	if (!alloc_user_mem(skel, page_size, PROT_READ | PROT_EXEC, &addr))
+		return;
+	if (!check_user_mem_vma((void *)addr, page_size, "r-xp") ||
+	    !write_user_mem(skel, addr))
+		goto out;
+
+	ASSERT_EQ(((int (*)(void))addr)(), 42, "execute_user_page");
+
+out:
+	if (addr != ~0UL)
+		munmap((void *)addr, page_size);
+}
+
+static void test_partial_exec(struct user_mem *skel)
+{
+	long page_size = sysconf(_SC_PAGESIZE);
+	unsigned long addr = ~0UL;
+
+#ifndef __x86_64__
+	test__skip();
+	return;
+#endif
+
+	if (!alloc_user_mem(skel, page_size * 3, PROT_READ | PROT_WRITE, &addr))
+		return;
+	if (!write_user_mem(skel, addr + page_size) ||
+	    !write_user_mem(skel, addr + 2 * page_size))
+		goto out;
+
+	if (!ASSERT_OK(mprotect((void *)(addr + page_size), page_size,
+				PROT_READ | PROT_EXEC), "middle_page_mprotect") ||
+	    !check_user_mem_vma((void *)addr, page_size, "rw-p") ||
+	    !check_user_mem_vma((void *)(addr + page_size), page_size, "r-xp") ||
+	    !check_user_mem_vma((void *)(addr + 2 * page_size), page_size, "rw-p"))
+		goto out;
+
+	if (!ASSERT_EQ(((int (*)(void))(addr + page_size))(), 42,
+		       "execute_middle_page"))
+		goto out;
+
+	if (!ASSERT_OK(mprotect((void *)(addr + 2 * page_size), page_size,
+				PROT_READ | PROT_EXEC), "last_page_mprotect") ||
+	    !check_user_mem_vma((void *)(addr + 2 * page_size), page_size, "r-xp"))
+		goto out;
+
+	ASSERT_EQ(((int (*)(void))(addr + 2 * page_size))(), 42,
+		  "execute_last_page");
+
+out:
+	if (addr != ~0UL)
+		munmap((void *)addr, page_size * 3);
+}
+
 void test_user_mem(void)
 {
 	struct user_mem *skel;
@@ -204,6 +276,10 @@ void test_user_mem(void)
 		test_mapping_protections(skel);
 	if (test__start_subtest("zero_length_mapping"))
 		test_zero_length_mapping(skel);
+	if (test__start_subtest("execute_user_page"))
+		test_execute_user_page(skel);
+	if (test__start_subtest("partial_exec"))
+		test_partial_exec(skel);
 
 out:
 	user_mem__destroy(skel);
