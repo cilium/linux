@@ -82,6 +82,17 @@ static const char *ftrace_call_replace(unsigned long ip, unsigned long addr)
 	}
 }
 
+/*
+ * The callbacks are C functions, and a function optimized for size is not
+ * aligned unless the compiler has -fmin-function-alignment, see
+ * CONFIG_CC_HAS_SANE_FUNCTION_ALIGNMENT. Bit 0 of its address is not the jmp
+ * flag of a direct trampoline that ftrace_call_replace() tests.
+ */
+static const char *ftrace_func_call_replace(unsigned long ip, ftrace_func_t func)
+{
+	return text_gen_insn(CALL_INSN_OPCODE, (void *)ip, (void *)func);
+}
+
 static int ftrace_verify_code(unsigned long ip, const char *old_code)
 {
 	char cur_code[MCOUNT_INSN_SIZE];
@@ -190,11 +201,11 @@ int ftrace_update_ftrace_func(ftrace_func_t func)
 	const char *new;
 
 	ip = (unsigned long)(&ftrace_call);
-	new = ftrace_call_replace(ip, (unsigned long)func);
+	new = ftrace_func_call_replace(ip, func);
 	smp_text_poke_single((void *)ip, new, MCOUNT_INSN_SIZE, NULL);
 
 	ip = (unsigned long)(&ftrace_regs_call);
-	new = ftrace_call_replace(ip, (unsigned long)func);
+	new = ftrace_func_call_replace(ip, func);
 	smp_text_poke_single((void *)ip, new, MCOUNT_INSN_SIZE, NULL);
 
 	return 0;
@@ -503,7 +514,7 @@ void arch_ftrace_update_trampoline(struct ftrace_ops *ops)
 
 	mutex_lock(&text_mutex);
 	/* Do a safe modify in case the trampoline is executing */
-	new = ftrace_call_replace(ip, (unsigned long)func);
+	new = ftrace_func_call_replace(ip, func);
 	smp_text_poke_single((void *)ip, new, MCOUNT_INSN_SIZE, NULL);
 	mutex_unlock(&text_mutex);
 }
