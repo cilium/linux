@@ -18,6 +18,7 @@ enum {
 	USER_PAGE_MMAP = 1,
 	USER_PAGE_UNMAP,
 	USER_PAGE_COPY_INSNS,
+	USER_PAGE_COPY,
 };
 
 int monitored_pid;
@@ -25,11 +26,14 @@ int action;
 unsigned long user_addr;
 unsigned long map_len;
 unsigned long map_prot;
+u64 copy_flags;
+u32 copy_size;
 int ret;
 static const unsigned char insns[] = {
 	0xf3, 0x0f, 0x1e, 0xfa, /* endbr64 */
 	0xb8, 42, 0, 0, 0, 0xc3, /* mov $42, %eax; ret */
 };
+static const char data[] = "fault-enabled BPF write";
 
 SEC("uprobe.s//proc/self/exe:user_mem_trigger")
 int user_mem_test(struct pt_regs *ctx)
@@ -48,6 +52,15 @@ int user_mem_test(struct pt_regs *ctx)
 		ret = bpf_copy_to_user_task((void *)user_addr, insns,
 					       sizeof(insns),
 					       bpf_get_current_task_btf(), 0);
+		break;
+	case USER_PAGE_COPY:
+		if (copy_size > sizeof(data)) {
+			ret = -22; /* -EINVAL */
+			break;
+		}
+		ret = bpf_copy_to_user_task((void *)user_addr, data,
+					       copy_size,
+					       bpf_get_current_task_btf(), copy_flags);
 		break;
 	}
 

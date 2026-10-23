@@ -11,6 +11,7 @@ enum {
 	USER_PAGE_MMAP = 1,
 	USER_PAGE_UNMAP,
 	USER_PAGE_COPY_INSNS,
+	USER_PAGE_COPY,
 };
 
 static noinline void user_mem_trigger(void)
@@ -97,6 +98,31 @@ static bool write_user_mem(struct user_mem *skel, unsigned long addr)
 	skel->bss->action = USER_PAGE_COPY_INSNS;
 	user_mem_trigger();
 	return ASSERT_OK(skel->bss->ret, "user_write");
+}
+
+static void test_faultable_write(struct user_mem *skel)
+{
+	static const char expected[] = "fault-enabled BPF write";
+	long page_size = sysconf(_SC_PAGESIZE);
+	unsigned long addr = ~0UL;
+
+	if (!alloc_user_mem(skel, page_size, PROT_READ | PROT_WRITE, &addr))
+		return;
+
+	skel->bss->user_addr = addr;
+	skel->bss->copy_size = sizeof(expected);
+	skel->bss->copy_flags = 0;
+	skel->bss->action = USER_PAGE_COPY;
+	user_mem_trigger();
+	if (!ASSERT_OK(skel->bss->ret, "user_write_data"))
+		goto out;
+
+	ASSERT_EQ(memcmp((void *)addr, expected, sizeof(expected)), 0,
+		  "written_data");
+
+out:
+	if (addr != ~0UL)
+		munmap((void *)addr, page_size);
 }
 
 static void test_allocations(struct user_mem *skel)
@@ -280,6 +306,8 @@ void test_user_mem(void)
 		test_execute_user_page(skel);
 	if (test__start_subtest("partial_exec"))
 		test_partial_exec(skel);
+	if (test__start_subtest("faultable_write"))
+		test_faultable_write(skel);
 
 out:
 	user_mem__destroy(skel);
