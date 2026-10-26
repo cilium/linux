@@ -3,6 +3,7 @@
 #include <vmlinux.h>
 #include <bpf/bpf_helpers.h>
 #include <bpf/bpf_tracing.h>
+#include "bpf_experimental.h"
 
 #include "bpf_misc.h"
 
@@ -19,6 +20,7 @@ enum {
 	USER_PAGE_UNMAP,
 	USER_PAGE_COPY_INSNS,
 	USER_PAGE_COPY,
+	USER_PAGE_WQ,
 };
 
 int monitored_pid;
@@ -83,6 +85,56 @@ __failure
 __msg("program must be sleepable to call sleepable kfunc bpf_user_mmap")
 __msg("cannot be used in non-sleepable program")
 int user_mem_nonsleepable(struct pt_regs *ctx)
+{
+	bpf_user_mmap(4096, 1);
+	return 0;
+}
+
+struct wq_elem {
+	struct bpf_wq wq;
+};
+
+struct {
+	__uint(type, BPF_MAP_TYPE_ARRAY);
+	__uint(max_entries, 1);
+	__type(key, int);
+	__type(value, struct wq_elem);
+} wq_map SEC(".maps");
+
+unsigned long wq_mmap_ret;
+int wq_munmap_ret;
+int wq_done;
+
+/* Runs on a kworker, which has no user mm. */
+static int wq_callback(void *map, int *key, void *value)
+{
+	wq_mmap_ret = bpf_user_mmap(4096, 3 /* PROT_READ | PROT_WRITE */);
+	wq_munmap_ret = bpf_user_munmap(4096, 4096);
+	wq_done = 1;
+	return 0;
+}
+
+SEC("uprobe//proc/self/exe:user_mem_trigger")
+int user_mem_wq(struct pt_regs *ctx)
+{
+	struct wq_elem *val;
+	int key = 0;
+
+	if ((bpf_get_current_pid_tgid() >> 32) != monitored_pid || action != USER_PAGE_WQ)
+		return 0;
+
+	val = bpf_map_lookup_elem(&wq_map, &key);
+	if (!val || bpf_wq_init(&val->wq, &wq_map, 0) ||
+	    bpf_wq_set_callback(&val->wq, wq_callback, 0))
+		return 0;
+	bpf_wq_start(&val->wq, 0);
+	return 0;
+}
+
+SEC("?uprobe.s//proc/self/exe:user_mem_trigger")
+__failure_unpriv __caps_unpriv(CAP_BPF | CAP_PERFMON)
+__msg_unpriv("calling kernel function bpf_user_mmap is not allowed")
+int user_mem_no_sysadmin(struct pt_regs *ctx)
 {
 	bpf_user_mmap(4096, 1);
 	return 0;

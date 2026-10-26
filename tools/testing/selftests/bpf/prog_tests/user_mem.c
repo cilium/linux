@@ -12,6 +12,7 @@ enum {
 	USER_PAGE_UNMAP,
 	USER_PAGE_COPY_INSNS,
 	USER_PAGE_COPY,
+	USER_PAGE_WQ,
 };
 
 static noinline void user_mem_trigger(void)
@@ -317,6 +318,22 @@ static void test_invalid_copy(struct user_mem *skel)
 	ASSERT_EQ(skel->bss->ret, -EINVAL, "bad_copy_flags");
 }
 
+/* The wq callback runs on a kworker, which has no user mm. */
+static void test_wq_callback(struct user_mem *skel)
+{
+	int i;
+
+	skel->bss->wq_done = 0;
+	skel->bss->action = USER_PAGE_WQ;
+	user_mem_trigger();
+	for (i = 0; i < 1000 && !skel->bss->wq_done; i++)
+		usleep(1000);
+	if (!ASSERT_TRUE(skel->bss->wq_done, "wq_done"))
+		return;
+	ASSERT_EQ(skel->bss->wq_mmap_ret, (unsigned long)-EPERM, "wq_mmap");
+	ASSERT_EQ(skel->bss->wq_munmap_ret, -EPERM, "wq_munmap");
+}
+
 static void test_execute_user_page(struct user_mem *skel)
 {
 	long page_size = sysconf(_SC_PAGESIZE);
@@ -418,6 +435,8 @@ void test_user_mem(void)
 		test_partial_copy_fault(skel);
 	if (test__start_subtest("copy_to_readonly_mapping"))
 		test_copy_to_readonly_mapping(skel);
+	if (test__start_subtest("wq_callback"))
+		test_wq_callback(skel);
 
 out:
 	user_mem__destroy(skel);
