@@ -29,10 +29,21 @@ unsigned long map_prot;
 u64 copy_flags;
 u32 copy_size;
 int ret;
+#if defined(__TARGET_ARCH_x86)
 static const unsigned char insns[] = {
 	0xf3, 0x0f, 0x1e, 0xfa, /* endbr64 */
 	0xb8, 42, 0, 0, 0, 0xc3, /* mov $42, %eax; ret */
 };
+#elif defined(__TARGET_ARCH_arm64)
+static const unsigned char insns[] = {
+	0x5f, 0x24, 0x03, 0xd5, /* bti c */
+	0x40, 0x05, 0x80, 0x52, /* mov w0, #42 */
+	0xc0, 0x03, 0x5f, 0xd6, /* ret */
+};
+#else
+/* The execute tests are skipped on other architectures. */
+static const unsigned char insns[] = { 0 };
+#endif
 static const char data[] = "fault-enabled BPF write";
 
 SEC("uprobe.s//proc/self/exe:user_mem_trigger")

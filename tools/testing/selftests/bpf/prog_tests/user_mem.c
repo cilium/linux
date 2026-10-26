@@ -322,7 +322,7 @@ static void test_execute_user_page(struct user_mem *skel)
 	long page_size = sysconf(_SC_PAGESIZE);
 	unsigned long addr = ~0UL;
 
-#ifndef __x86_64__
+#if !defined(__x86_64__) && !defined(__aarch64__)
 	test__skip();
 	return;
 #endif
@@ -345,7 +345,7 @@ static void test_partial_exec(struct user_mem *skel)
 	long page_size = sysconf(_SC_PAGESIZE);
 	unsigned long addr = ~0UL;
 
-#ifndef __x86_64__
+#if !defined(__x86_64__) && !defined(__aarch64__)
 	test__skip();
 	return;
 #endif
