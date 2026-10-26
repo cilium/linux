@@ -6,6 +6,7 @@
 #include "../test_kmods/bpf_testmod_kfunc.h"
 
 static const char srcptr_rodata[] = "read-only source";
+static const struct prog_test_pass1 srcptr_struct_rodata = { .x0 = 1 };
 
 static struct bpf_spin_lock kfunc_call_lock SEC(".data.A");
 
@@ -217,6 +218,7 @@ int kfunc_call_test_srcptr(struct __sk_buff *skb)
 
 	bpf_kfunc_call_test_srcptr(srcptr_rodata, sizeof(srcptr_rodata));
 	bpf_kfunc_call_test_srcptr(stack_data, sizeof(stack_data));
+	bpf_kfunc_call_test_srcptr_struct(&srcptr_struct_rodata);
 	return 0;
 }
 
