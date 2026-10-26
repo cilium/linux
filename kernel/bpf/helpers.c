@@ -5219,6 +5219,8 @@ static int user_mem_kfunc_filter(const struct bpf_prog *prog, u32 kfunc_id)
 {
 	if (!btf_id_set8_contains(&user_mem_btf_ids, kfunc_id))
 		return 0;
+	if (!bpf_token_capable(prog->aux->token, CAP_SYS_ADMIN))
+		return -EPERM;
 	return security_locked_down(LOCKDOWN_BPF_WRITE_USER);
 }
 
