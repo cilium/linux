@@ -21,7 +21,6 @@
 #include <linux/sched/task.h>
 #include <linux/security.h>
 #include <linux/btf_ids.h>
-#include <linux/capability.h>
 #include <linux/bpf_mem_alloc.h>
 #include <linux/kasan.h>
 #include <linux/bpf_verifier.h>
@@ -32,9 +31,6 @@
 #include <linux/buildid.h>
 #include <linux/mm.h>
 #include <linux/mman.h>
-#include <linux/personality.h>
-#include <asm/cacheflush.h>
-#include <asm/tlb.h>
 
 #include "../../lib/kstrtox.h"
 
