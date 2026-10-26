@@ -3743,13 +3743,14 @@ __bpf_kfunc int bpf_copy_from_user_mm(void *dst, u32 dst__sz,
 /**
  * bpf_copy_to_user_task() - Copy data to a task's address space
  * @unsafe_ptr__ign: Destination address in the task's address space
- * @src:             Source address, in kernel space
+ * @src__srcptr:     Source address, in kernel space
  * @src__sz:         Number of bytes to copy
  * @tsk:             The task whose address space will be used
  * @flags:           Reserved for future use; must be zero
  *
  * Faults in the destination and writes the way ptrace(PTRACE_POKETEXT) does:
- * a private mapping doesn't have to be writable.
+ * a private mapping doesn't have to be writable. A partial copy is not undone,
+ * the bytes before the fault stay written.
  *
  * Return: 0 on success, -EINVAL if @flags is non-zero, or -EFAULT if the copy
  * fails or is partial.
