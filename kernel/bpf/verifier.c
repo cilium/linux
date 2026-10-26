@@ -13211,6 +13211,14 @@ static bool is_kfunc_arg_srcptr(const struct btf *btf,
 	return btf_param_match_suffix(btf, arg, "__srcptr");
 }
 
+static int mem_prot(const struct btf *btf, const struct btf_param *arg)
+{
+	if (is_kfunc_arg_srcptr(btf, arg))
+		return MEM_RDONLY;
+	else
+		return MEM_WRITE;
+}
+
 static bool is_kfunc_arg_const_mem_size(const struct btf *btf,
 					const struct btf_param *arg)
 {
@@ -13591,7 +13599,7 @@ static int resolve_func_arg_type(struct bpf_verifier_env *env,
 			PTR_ERR(resolve_ret));
 		return -EINVAL;
 	}
-	*arg_type = ARG_PTR_TO_MEM | MEM_FIXED_SIZE | MEM_WRITE |
+	*arg_type = ARG_PTR_TO_MEM | MEM_FIXED_SIZE | mem_prot(meta->btf, &args[arg]) |
 		    (*arg_type & (PTR_MAYBE_NULL | MEM_UNINIT));
 
 	return 0;
@@ -13970,14 +13978,6 @@ static u32 __btf_func_arg_align(const struct btf *btf, const struct btf_type *t,
 u32 btf_func_arg_align(const struct btf *btf, const struct btf_type *t)
 {
 	return __btf_func_arg_align(btf, t, 0);
-}
-
-static int mem_prot(const struct btf *btf, const struct btf_param *arg)
-{
-	if (is_kfunc_arg_srcptr(btf, arg))
-		return MEM_RDONLY;
-	else
-		return MEM_WRITE;
 }
 
 static int

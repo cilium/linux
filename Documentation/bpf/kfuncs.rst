@@ -352,13 +352,14 @@ can pass the hook's own ``xattr_count`` argument through to the kfunc,
 which claims xattr slots by writing through it.
 
 2.3.10 __srcptr Annotation
--------------------------
+--------------------------
 
 This annotation marks a pointer argument as a source buffer that the kfunc
 reads without writing. The verifier requires read access, so the source may
 point to read-only or read/write memory. Pair variable-size buffers with a
-following ``__sz`` or ``__szk`` argument. For a scalar pointer, the verifier
-uses the pointee's BTF size; a ``void *`` requires an explicit size.
+following ``__sz`` or ``__szk`` argument. For a pointer to a scalar or to a
+struct of scalars, the verifier uses the pointee's BTF size; a ``void *``
+requires an explicit size.
 
 For example, the first kfunc takes a variable-size buffer, while the second
 takes a scalar source::
