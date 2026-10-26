@@ -3771,16 +3771,25 @@ __bpf_kfunc int bpf_copy_to_user_task(void __user *unsafe_ptr__ign, const void *
 	return ret == src__sz ? 0 : -EFAULT;
 }
 
+/* bpf_wq and bpf_task_work callbacks can run without a usable mm. */
+static bool bpf_user_mm_ok(void)
+{
+	return current->mm && !(current->flags & (PF_KTHREAD | PF_EXITING));
+}
+
 /**
  * bpf_user_mmap() - Map private anonymous memory into the current process
  * @len:  Length of the mapping
  * @prot: PROT_* flags of mmap(2), including PROT_EXEC
  *
- * Return: The address of the mapping on success, or an unsigned-long encoded
- * negative error code, as returned by vm_mmap().
+ * Return: The address of the mapping on success, -EPERM if the caller has no
+ * user mm, or an unsigned-long encoded negative error code, as returned by
+ * vm_mmap().
  */
 __bpf_kfunc unsigned long bpf_user_mmap(unsigned long len, unsigned long prot)
 {
+	if (!bpf_user_mm_ok())
+		return -EPERM;
 	return vm_mmap(NULL, 0, len, prot, MAP_PRIVATE | MAP_ANONYMOUS, 0);
 }
 
@@ -3789,10 +3798,13 @@ __bpf_kfunc unsigned long bpf_user_mmap(unsigned long len, unsigned long prot)
  * @addr: Start of the range
  * @len:  Length of the range
  *
- * Return: 0 on success, or a negative error code.
+ * Return: 0 on success, -EPERM if the caller has no user mm, or a negative
+ * error code.
  */
 __bpf_kfunc int bpf_user_munmap(unsigned long addr, unsigned long len)
 {
+	if (!bpf_user_mm_ok())
+		return -EPERM;
 	return vm_munmap(addr, len);
 }
 
