@@ -169,6 +169,8 @@ static void test_partial_copy_fault(struct user_mem *skel)
 	skel->bss->action = USER_PAGE_COPY;
 	user_mem_trigger();
 	ASSERT_EQ(skel->bss->ret, -EFAULT, "partial_copy");
+	/* The byte before the fault stays written. */
+	ASSERT_EQ(((char *)addr)[page_size - 1], 'f', "partial_copy_data");
 
 out:
 	if (addr != ~0UL)
