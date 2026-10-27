@@ -34,21 +34,11 @@ struct {
 
 /*
  * The load-acquire and store-release, which clang has syntax for only with
- * __BPF_FEATURE_LOAD_ACQ_STORE_REL, as the 64-bit word of their fields for
- * .8byte, in the byte order of the target: the two register nibbles share a
- * byte, which the first bitfield of struct bpf_insn takes from the low end
- * on little endian and from the high end on big endian.
+ * __BPF_FEATURE_LOAD_ACQ_STORE_REL, for .8byte through __imm_insn().
  */
-#if __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
-#define INSN(CODE, DST, SRC, OFF, IMM)						\
-	((__u64)(__u8)(CODE) | ((__u64)(DST) << 8) | ((__u64)(SRC) << 12) |	\
-	 ((__u64)(__u16)(OFF) << 16) | ((__u64)(__u32)(IMM) << 32))
-#else
-#define INSN(CODE, DST, SRC, OFF, IMM)						\
-	(((__u64)(__u8)(CODE) << 56) | ((__u64)(DST) << 52) | ((__u64)(SRC) << 48) | \
-	 ((__u64)(__u16)(OFF) << 32) | (__u64)(__u32)(IMM))
-#endif
-#define ATOMIC(SIZE, OP, DST, SRC, OFF)	INSN(BPF_STX | BPF_ATOMIC | (SIZE), DST, SRC, OFF, OP)
+#define ATOMIC(SIZE, OP, DST, SRC, OFF) {				\
+	.code = BPF_STX | BPF_ATOMIC | (SIZE), .dst_reg = (DST),	\
+	.src_reg = (SRC), .off = (OFF), .imm = (OP) }
 
 /* The fields of those instructions, which vmlinux.h does not carry */
 #ifndef BPF_STX
@@ -430,6 +420,12 @@ __naked void arena_offsets_atomics(void)
 #endif /* ARENA_ATOMICS */
 
 #ifdef ARENA_ACQ_REL
+/* At file scope, the naked program below cannot hold them */
+static const struct bpf_insn store_rel8 = ATOMIC(BPF_DW, BPF_STORE_REL, 7, 1, 8);
+static const struct bpf_insn load_acq8 = ATOMIC(BPF_DW, BPF_LOAD_ACQ, 2, 7, 8);
+static const struct bpf_insn store_rel0 = ATOMIC(BPF_W, BPF_STORE_REL, 7, 1, 0);
+static const struct bpf_insn load_acq0 = ATOMIC(BPF_B, BPF_LOAD_ACQ, 2, 7, 0);
+
 /*
  * The load-acquire and the store-release at an offset and at zero, the
  * ones at the offset checked through r3, the address computed into a
@@ -478,10 +474,10 @@ __naked void arena_acq_rel(void)
 "	:
 	: __imm_addr(arena),
 	  __imm_const(b0, ACQ_B0),
-	  __imm_const(store_rel8, ATOMIC(BPF_DW, BPF_STORE_REL, 7, 1, 8)),
-	  __imm_const(load_acq8, ATOMIC(BPF_DW, BPF_LOAD_ACQ, 2, 7, 8)),
-	  __imm_const(store_rel0, ATOMIC(BPF_W, BPF_STORE_REL, 7, 1, 0)),
-	  __imm_const(load_acq0, ATOMIC(BPF_B, BPF_LOAD_ACQ, 2, 7, 0))
+	  __imm_insn(store_rel8, store_rel8),
+	  __imm_insn(load_acq8, load_acq8),
+	  __imm_insn(store_rel0, store_rel0),
+	  __imm_insn(load_acq0, load_acq0)
 	: __clobber_all);
 }
 #endif /* ARENA_ACQ_REL */
