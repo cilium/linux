@@ -2068,10 +2068,10 @@ static void emit_shiftx(u8 **pprog, u32 dst_reg, u8 src_reg, bool is64, u8 op)
 
 /*
  * Divide dst_reg by the constant in insn->imm of a 64-bit division through
- * a multiplication with the magic number from bpf_magic_udiv() or
- * bpf_magic_sdiv(). The dividend goes through rax and the multiplier
- * through r11, the caller saves rax and rdx unless they are dst_reg, and
- * r10 is scratch. Returns false for the divisors left to div/idiv.
+ * a multiplication with the magic number from bpf_jit_div_magic(). The
+ * dividend goes through rax and the multiplier through r11, the caller
+ * saves rax and rdx unless they are dst_reg, and r10 is scratch. Returns
+ * false for the divisors left to div/idiv.
  */
 static bool emit_div_const(u8 **pprog, const struct bpf_insn *insn, u32 dst_reg)
 {
@@ -2081,46 +2081,12 @@ static bool emit_div_const(u8 **pprog, const struct bpf_insn *insn, u32 dst_reg)
 	s32 imm32 = insn->imm;
 	struct bpf_div_magic mag;
 	u8 *prog = *pprog;
-	int corr = 0, pre = 0, s;
 
-	if (is_signed) {
-		/* |d| >= 2, the verifier already rewrote d == -1 */
-		if (imm32 >= -1 && imm32 <= 1)
-			return false;
-		bpf_magic_sdiv(imm32, &mag);
-		/* q += n for d > 0 and m < 0, q -= n for d < 0 and m > 0 */
-		if (imm32 > 0 && (s64)mag.m < 0)
-			corr = 1;
-		else if (imm32 < 0 && (s64)mag.m > 0)
-			corr = -1;
-	} else {
-		/* d >= 2, a negative imm32 is a divisor above 2^63 */
-		if (imm32 < 2)
-			return false;
-		bpf_magic_udiv(imm32, 0, &mag);
-		/*
-		 * Shift the dividend by the trailing zeros of an even divisor
-		 * first, the magic number of the odd part then fits without
-		 * the add sequence.
-		 */
-		if (mag.add && !(imm32 & 1)) {
-			pre = __ffs(imm32) & 31;
-			bpf_magic_udiv(imm32 >> pre, pre, &mag);
-			if (mag.add)
-				return false;
-		}
-	}
-	s = mag.s;
-	/*
-	 * The shift is at most 63, or 64 with the add sequence which shifts
-	 * by s - 1 and needs s >= 1. Never hit for d >= 2, kept as a guard
-	 * against an unencodable count.
-	 */
-	if (s > 64 - !mag.add || (mag.add && !s))
+	if (!bpf_jit_div_magic(imm32, is_signed, &mag))
 		return false;
 
 	/* Keep the dividend when the multiplication clobbers it */
-	if ((is_mod || mag.add || corr) &&
+	if ((is_mod || mag.add || mag.corr) &&
 	    (dst_reg == BPF_REG_0 || dst_reg == BPF_REG_3)) {
 		emit_mov_reg(&prog, true, BPF_REG_AX, dst_reg);
 		n_reg = BPF_REG_AX;
@@ -2129,18 +2095,18 @@ static bool emit_div_const(u8 **pprog, const struct bpf_insn *insn, u32 dst_reg)
 	/* mov rax, dst_reg; shr rax, pre; mov r11, m; mul r11 or imul r11 */
 	if (dst_reg != BPF_REG_0)
 		emit_mov_reg(&prog, true, BPF_REG_0, dst_reg);
-	if (pre)
-		emit_shift_imm(&prog, BPF_RSH, BPF_REG_0, pre, true);
+	if (mag.pre)
+		emit_shift_imm(&prog, BPF_RSH, BPF_REG_0, mag.pre, true);
 	emit_mov_imm64(&prog, AUX_REG, mag.m >> 32, (u32)mag.m);
 	EMIT3(0x49, 0xF7, is_signed ? 0xEB : 0xE3);
 	if (is_signed) {
 		/* add rdx, n_reg or sub rdx, n_reg */
-		if (corr)
-			emit_alu_reg(&prog, corr > 0 ? BPF_ADD : BPF_SUB,
+		if (mag.corr)
+			emit_alu_reg(&prog, mag.corr > 0 ? BPF_ADD : BPF_SUB,
 				     BPF_REG_3, n_reg, true);
 		/* sar rdx, s */
-		if (s)
-			emit_shift_imm(&prog, BPF_ARSH, BPF_REG_3, s, true);
+		if (mag.s)
+			emit_shift_imm(&prog, BPF_ARSH, BPF_REG_3, mag.s, true);
 		/* mov rax, rdx; shr rax, 63; add rdx, rax */
 		emit_mov_reg(&prog, true, BPF_REG_0, BPF_REG_3);
 		emit_shift_imm(&prog, BPF_RSH, BPF_REG_0, 63, true);
@@ -2148,8 +2114,8 @@ static bool emit_div_const(u8 **pprog, const struct bpf_insn *insn, u32 dst_reg)
 		q_reg = BPF_REG_3;
 	} else if (!mag.add) {
 		/* shr rdx, s */
-		if (s)
-			emit_shift_imm(&prog, BPF_RSH, BPF_REG_3, s, true);
+		if (mag.s)
+			emit_shift_imm(&prog, BPF_RSH, BPF_REG_3, mag.s, true);
 		q_reg = BPF_REG_3;
 	} else {
 		/* mov rax, n_reg; sub rax, rdx; shr rax, 1 */
@@ -2158,8 +2124,8 @@ static bool emit_div_const(u8 **pprog, const struct bpf_insn *insn, u32 dst_reg)
 		emit_shift_imm(&prog, BPF_RSH, BPF_REG_0, 1, true);
 		/* add rax, rdx; shr rax, s - 1 */
 		emit_alu_reg(&prog, BPF_ADD, BPF_REG_0, BPF_REG_3, true);
-		if (s > 1)
-			emit_shift_imm(&prog, BPF_RSH, BPF_REG_0, s - 1, true);
+		if (mag.s > 1)
+			emit_shift_imm(&prog, BPF_RSH, BPF_REG_0, mag.s - 1, true);
 		q_reg = BPF_REG_0;
 	}
 

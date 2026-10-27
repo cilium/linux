@@ -730,11 +730,11 @@ static bool emit_tb(bool nonzero, u8 reg, int bit, int i, s16 off, struct jit_ct
 
 /*
  * Divide dst by the immediate of a 64-bit division through a multiplication
- * with the magic number from bpf_magic_udiv() or bpf_magic_sdiv(): the high
- * half of the product from umulh or smulh, shifted, with the corrections per
- * Hacker's Delight. The quotient is built in tmp with tmp2 as scratch, the
- * dividend stays in dst until a modulo takes the quotient back with msub.
- * Returns false for the divisors left to udiv and sdiv.
+ * with the magic number from bpf_jit_div_magic(): the high half of the
+ * product from umulh or smulh, shifted, with the corrections per Hacker's
+ * Delight. The quotient is built in tmp with tmp2 as scratch, the dividend
+ * stays in dst until a modulo takes the quotient back with msub. Returns
+ * false for the divisors left to udiv and sdiv.
  */
 static bool emit_div_const(const struct bpf_insn *insn, struct jit_ctx *ctx)
 {
@@ -746,7 +746,6 @@ static bool emit_div_const(const struct bpf_insn *insn, struct jit_ctx *ctx)
 	const u8 q = is_mod ? tmp : dst;
 	const s32 imm = insn->imm;
 	struct bpf_div_magic mag;
-	int corr = 0, pre = 0, s;
 
 	if (is_signed) {
 		const u64 ad = imm < 0 ? -(u64)(s64)imm : imm;
@@ -781,12 +780,6 @@ static bool emit_div_const(const struct bpf_insn *insn, struct jit_ctx *ctx)
 			}
 			return true;
 		}
-		bpf_magic_sdiv(imm, &mag);
-		/* q += n for d > 0 and m < 0, q -= n for d < 0 and m > 0 */
-		if (imm > 0 && (s64)mag.m < 0)
-			corr = 1;
-		else if (imm < 0 && (s64)mag.m > 0)
-			corr = -1;
 	} else {
 		/* d >= 2, a negative imm is a divisor above 2^63 */
 		if (imm < 2)
@@ -798,32 +791,14 @@ static bool emit_div_const(const struct bpf_insn *insn, struct jit_ctx *ctx)
 				emit(A64_LSR(1, dst, dst, ilog2(imm)), ctx);
 			return true;
 		}
-		bpf_magic_udiv(imm, 0, &mag);
-		/*
-		 * Shift the dividend by the trailing zeros of an even divisor
-		 * first, the magic number of the odd part then fits without
-		 * the add sequence.
-		 */
-		if (mag.add && !(imm & 1)) {
-			pre = __ffs(imm) & 31;
-			bpf_magic_udiv(imm >> pre, pre, &mag);
-			if (mag.add)
-				return false;
-		}
 	}
-	s = mag.s;
-	/*
-	 * The shift is at most 63, or 64 with the add sequence which shifts
-	 * by s - 1 and needs s >= 1. Never hit for d >= 2, kept as a guard
-	 * against an unencodable count.
-	 */
-	if (s > 64 - !mag.add || (mag.add && !s))
+	if (!bpf_jit_div_magic(imm, is_signed, &mag))
 		return false;
 
 	/* tmp = mulh(n >> pre, m) */
 	emit_a64_mov_i64(tmp, mag.m, ctx);
-	if (pre) {
-		emit(A64_LSR(1, tmp2, dst, pre), ctx);
+	if (mag.pre) {
+		emit(A64_LSR(1, tmp2, dst, mag.pre), ctx);
 		emit(A64_UMULH(tmp, tmp2, tmp), ctx);
 	} else if (is_signed) {
 		emit(A64_SMULH(tmp, dst, tmp), ctx);
@@ -832,25 +807,25 @@ static bool emit_div_const(const struct bpf_insn *insn, struct jit_ctx *ctx)
 	}
 
 	if (is_signed) {
-		if (corr > 0)
+		if (mag.corr > 0)
 			emit(A64_ADD(1, tmp, tmp, dst), ctx);
-		else if (corr < 0)
+		else if (mag.corr < 0)
 			emit(A64_SUB(1, tmp, tmp, dst), ctx);
-		if (s)
-			emit(A64_ASR(1, tmp, tmp, s), ctx);
+		if (mag.s)
+			emit(A64_ASR(1, tmp, tmp, mag.s), ctx);
 		/* q += q >>> 63 */
 		emit(A64_ADD_LSR(1, q, tmp, tmp, 63), ctx);
 	} else if (!mag.add) {
-		if (s)
-			emit(A64_LSR(1, q, tmp, s), ctx);
+		if (mag.s)
+			emit(A64_LSR(1, q, tmp, mag.s), ctx);
 		else if (q != tmp)
 			emit(A64_MOV(1, q, tmp), ctx);
 	} else {
 		/* q = (((n - t) >> 1) + t) >> (s - 1) */
 		emit(A64_SUB(1, tmp2, dst, tmp), ctx);
 		emit(A64_ADD_LSR(1, tmp, tmp, tmp2, 1), ctx);
-		if (s > 1)
-			emit(A64_LSR(1, q, tmp, s - 1), ctx);
+		if (mag.s > 1)
+			emit(A64_LSR(1, q, tmp, mag.s - 1), ctx);
 		else if (q != tmp)
 			emit(A64_MOV(1, q, tmp), ctx);
 	}

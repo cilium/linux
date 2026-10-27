@@ -1320,7 +1320,7 @@ void __weak bpf_jit_free(struct bpf_prog *fp)
  * + t) >> (s - 1) with t = mulhu(n, m). Hacker's Delight, 2nd ed., figure
  * 10-2.
  */
-void bpf_magic_udiv(u64 d, int lz, struct bpf_div_magic *mag)
+static void bpf_magic_udiv(u64 d, int lz, struct bpf_div_magic *mag)
 {
 	u64 mask = ~0ULL >> (lz & 63);
 	u64 nc, delta, q1, r1, q2, r2;
@@ -1367,7 +1367,7 @@ void bpf_magic_udiv(u64 d, int lz, struct bpf_div_magic *mag)
  * if d < 0 and m > 0, q >>= s (arithmetic), n / d == q + (q >>> 63).
  * Hacker's Delight, 2nd ed., figure 10-1.
  */
-void bpf_magic_sdiv(s64 d, struct bpf_div_magic *mag)
+static void bpf_magic_sdiv(s64 d, struct bpf_div_magic *mag)
 {
 	u64 ad = d < 0 ? -(u64)d : (u64)d;
 	u64 t, anc, delta, q1, r1, q2, r2;
@@ -1402,6 +1402,52 @@ void bpf_magic_sdiv(s64 d, struct bpf_div_magic *mag)
 		mag->m = -mag->m;
 	mag->s = p - 64;
 	mag->add = false;
+}
+
+/*
+ * Magic number for the 64-bit division by the immediate of a BPF_DIV or
+ * BPF_MOD with BPF_K, signed for off 1, with the shift of the dividend for
+ * an even unsigned divisor and the add or sub of the dividend after the
+ * signed multiplication. Returns false for the divisors left to the divide
+ * instruction.
+ */
+bool bpf_jit_div_magic(s32 imm, bool is_signed, struct bpf_div_magic *mag)
+{
+	mag->pre = 0;
+	mag->corr = 0;
+	if (is_signed) {
+		/* |d| >= 2, the verifier already rewrote d == -1 */
+		if (imm >= -1 && imm <= 1)
+			return false;
+		bpf_magic_sdiv(imm, mag);
+		/* q += n for d > 0 and m < 0, q -= n for d < 0 and m > 0 */
+		if (imm > 0 && (s64)mag->m < 0)
+			mag->corr = 1;
+		else if (imm < 0 && (s64)mag->m > 0)
+			mag->corr = -1;
+	} else {
+		/* d >= 2, a negative imm is a divisor above 2^63 */
+		if (imm < 2)
+			return false;
+		bpf_magic_udiv(imm, 0, mag);
+		/*
+		 * Shift the dividend by the trailing zeros of an even divisor
+		 * first, the magic number of the odd part then fits without
+		 * the add sequence.
+		 */
+		if (mag->add && !(imm & 1)) {
+			mag->pre = __ffs(imm) & 31;
+			bpf_magic_udiv(imm >> mag->pre, mag->pre, mag);
+			if (mag->add)
+				return false;
+		}
+	}
+	/*
+	 * The shift is at most 63, or 64 with the add sequence which shifts
+	 * by s - 1 and needs s >= 1. Never hit for d >= 2, kept as a guard
+	 * against an unencodable count.
+	 */
+	return mag->s <= 64 - !mag->add && !(mag->add && !mag->s);
 }
 #endif /* CONFIG_64BIT */
 
