@@ -2048,6 +2048,9 @@ struct bpf_link {
 	enum bpf_link_type type;
 	const struct bpf_link_ops *ops;
 	struct bpf_prog *prog;
+#ifdef CONFIG_SECURITY
+	void *security;
+#endif
 
 	u32 flags;
 	enum bpf_attach_type attach_type;
@@ -2064,6 +2067,10 @@ struct bpf_link {
 	 * link's semantics is determined by target attach hook
 	 */
 	bool sleepable;
+	/* whether the link went through bpf_link_prime(), i.e. was exposed
+	 * to user space and the LSM; kernel-internal links never are
+	 */
+	bool primed;
 };
 
 struct bpf_link_ops {

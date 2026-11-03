@@ -445,12 +445,20 @@ LSM_HOOK(void, LSM_RET_VOID, audit_rule_free, void *lsmrule)
 LSM_HOOK(int, 0, bpf, int cmd, union bpf_attr *attr, unsigned int size, bool kernel)
 LSM_HOOK(int, 0, bpf_map, struct bpf_map *map, fmode_t fmode)
 LSM_HOOK(int, 0, bpf_prog, struct bpf_prog *prog)
+LSM_HOOK(int, 0, bpf_link, struct bpf_link *link)
 LSM_HOOK(int, 0, bpf_map_create, struct bpf_map *map, union bpf_attr *attr,
 	 struct bpf_token *token, bool kernel)
 LSM_HOOK(void, LSM_RET_VOID, bpf_map_free, struct bpf_map *map)
 LSM_HOOK(int, 0, bpf_prog_load, struct bpf_prog *prog, union bpf_attr *attr,
 	 struct bpf_token *token, bool kernel)
 LSM_HOOK(void, LSM_RET_VOID, bpf_prog_free, struct bpf_prog *prog)
+LSM_HOOK(int, 0, bpf_link_create, struct bpf_link *link, bool kernel)
+LSM_HOOK(int, 0, bpf_link_update, struct bpf_link *link, struct bpf_prog *new_prog,
+	 struct bpf_prog *old_prog)
+LSM_HOOK(int, 0, bpf_link_update_map, struct bpf_link *link, struct bpf_map *new_map,
+	 struct bpf_map *old_map)
+LSM_HOOK(int, 0, bpf_link_detach, struct bpf_link *link)
+LSM_HOOK(void, LSM_RET_VOID, bpf_link_free, struct bpf_link *link)
 LSM_HOOK(int, 0, bpf_token_create, struct bpf_token *token, union bpf_attr *attr,
 	 const struct path *path)
 LSM_HOOK(void, LSM_RET_VOID, bpf_token_free, struct bpf_token *token)

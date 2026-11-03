@@ -366,6 +366,19 @@ static int lsm_bpf_token_alloc(struct bpf_token *token)
 {
 	return lsm_blob_alloc(&token->security, blob_sizes.lbs_bpf_token, GFP_KERNEL);
 }
+
+/**
+ * lsm_bpf_link_alloc - allocate a composite bpf_link blob
+ * @link: the bpf_link that needs a blob
+ *
+ * Allocate the bpf_link blob for all the modules
+ *
+ * Returns 0, or -ENOMEM if memory can't be allocated.
+ */
+static int lsm_bpf_link_alloc(struct bpf_link *link)
+{
+	return lsm_blob_alloc(&link->security, blob_sizes.lbs_bpf_link, GFP_KERNEL);
+}
 #endif /* CONFIG_BPF_SYSCALL */
 
 /**
@@ -5407,6 +5420,21 @@ int security_bpf_prog(struct bpf_prog *prog)
 }
 
 /**
+ * security_bpf_link() - Check if access to a BPF link is allowed
+ * @link: BPF link
+ *
+ * Do a check when the kernel generates and returns a file descriptor for a
+ * BPF link, be it as part of creating the link, through BPF_LINK_GET_FD_BY_ID
+ * or by opening a link pinned in BPF FS.
+ *
+ * Return: Returns 0 if permission is granted.
+ */
+int security_bpf_link(struct bpf_link *link)
+{
+	return call_int_hook(bpf_link, link);
+}
+
+/**
  * security_bpf_map_create() - Check if BPF map creation is allowed
  * @map: BPF map object
  * @attr: BPF syscall attributes used to create BPF map
@@ -5459,6 +5487,83 @@ int security_bpf_prog_load(struct bpf_prog *prog, union bpf_attr *attr,
 	if (unlikely(rc))
 		security_bpf_prog_free(prog);
 	return rc;
+}
+
+/**
+ * security_bpf_link_create() - Check if BPF link creation is allowed
+ * @link: BPF link object
+ * @kernel: whether or not call originated from kernel
+ *
+ * Do a check when the kernel creates a new BPF link, right before the link
+ * attaches its BPF program (or struct_ops map) to the target. The link's
+ * type, attach type, program and type-specific target are all set up at
+ * this point. This is also the point where the LSM blob is allocated for
+ * LSMs that need them.
+ *
+ * Return: Returns 0 on success, error on failure.
+ */
+int security_bpf_link_create(struct bpf_link *link, bool kernel)
+{
+	int rc;
+
+	rc = lsm_bpf_link_alloc(link);
+	if (unlikely(rc))
+		return rc;
+
+	rc = call_int_hook(bpf_link_create, link, kernel);
+	if (unlikely(rc))
+		security_bpf_link_free(link);
+	return rc;
+}
+
+/**
+ * security_bpf_link_update() - Check if a BPF link's program may be replaced
+ * @link: BPF link object
+ * @new_prog: BPF program to attach through the link
+ * @old_prog: BPF program expected to be attached so far, NULL if not checked
+ *
+ * Do a check when the kernel is asked to replace the BPF program behind a
+ * BPF link through BPF_LINK_UPDATE.
+ *
+ * Return: Returns 0 if permission is granted.
+ */
+int security_bpf_link_update(struct bpf_link *link, struct bpf_prog *new_prog,
+			     struct bpf_prog *old_prog)
+{
+	return call_int_hook(bpf_link_update, link, new_prog, old_prog);
+}
+
+/**
+ * security_bpf_link_update_map() - Check if a BPF link's map may be replaced
+ * @link: BPF link object
+ * @new_map: BPF struct_ops map to attach through the link
+ * @old_map: BPF struct_ops map expected to be attached so far, NULL if not
+ * checked
+ *
+ * Do a check when the kernel is asked to replace the struct_ops map behind
+ * a BPF link through BPF_LINK_UPDATE.
+ *
+ * Return: Returns 0 if permission is granted.
+ */
+int security_bpf_link_update_map(struct bpf_link *link, struct bpf_map *new_map,
+				 struct bpf_map *old_map)
+{
+	return call_int_hook(bpf_link_update_map, link, new_map, old_map);
+}
+
+/**
+ * security_bpf_link_detach() - Check if a BPF link may be detached
+ * @link: BPF link object
+ *
+ * Do a check when the kernel is asked to detach a BPF link from its target
+ * through BPF_LINK_DETACH, which leaves the link object behind in a
+ * defunct state.
+ *
+ * Return: Returns 0 if permission is granted.
+ */
+int security_bpf_link_detach(struct bpf_link *link)
+{
+	return call_int_hook(bpf_link_detach, link);
 }
 
 /**
@@ -5543,6 +5648,20 @@ void security_bpf_prog_free(struct bpf_prog *prog)
 	call_void_hook(bpf_prog_free, prog);
 	kfree(prog->aux->security);
 	prog->aux->security = NULL;
+}
+
+/**
+ * security_bpf_link_free() - Free a BPF link's LSM blob
+ * @link: BPF link
+ *
+ * Clean up the security information stored inside a BPF link. Called once
+ * for every link that went through security_bpf_link_create().
+ */
+void security_bpf_link_free(struct bpf_link *link)
+{
+	call_void_hook(bpf_link_free, link);
+	kfree(link->security);
+	link->security = NULL;
 }
 
 /**

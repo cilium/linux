@@ -3273,6 +3273,7 @@ void bpf_link_init_sleepable(struct bpf_link *link, enum bpf_link_type type,
 	atomic64_set(&link->refcnt, 1);
 	link->type = type;
 	link->sleepable = sleepable;
+	link->primed = false;
 	link->id = 0;
 	link->ops = ops;
 	link->prog = prog;
@@ -3365,6 +3366,12 @@ static void bpf_link_free(struct bpf_link *link)
 	const struct bpf_link_ops *ops = link->ops;
 
 	bpf_link_free_id(link->id);
+	/* Only links that went through bpf_link_prime() were announced to
+	 * the LSM. Kernel-internal ones, like trampoline shim links or the
+	 * per-member links of a struct_ops map, were not.
+	 */
+	if (link->primed)
+		security_bpf_link_free(link);
 	/* detach BPF program, clean up used resources */
 	if (link->prog)
 		ops->release(link);
@@ -3537,23 +3544,36 @@ static int bpf_link_alloc_id(struct bpf_link *link)
  * bpf_link_settle() kernel code using bpf_link doesn't have to perform
  * expensive (and potentially failing) roll back operations in a rare case
  * that file, FD, or ID can't be allocated.
- * @kernel says whether the link is created on behalf of a kernel-originated
- * bpf(2) call (see bpfptr_t::is_kernel) rather than one from user space.
+ * This is also where the LSM gets to see the link, before it is attached,
+ * so everything describing the link (its program, target, etc.) must be
+ * set up by the time it is primed. @kernel says whether the link is created
+ * on behalf of a kernel-originated bpf(2) call (see bpfptr_t::is_kernel)
+ * rather than one from user space.
  */
 int bpf_link_prime(struct bpf_link *link, struct bpf_link_primer *primer,
 		   bool kernel)
 {
 	struct file *file;
-	int fd, id;
+	int fd, id, err;
+
+	err = security_bpf_link_create(link, kernel);
+	if (err)
+		return err;
+	err = security_bpf_link(link);
+	if (err)
+		goto err_free_sec;
 
 	fd = get_unused_fd_flags(O_CLOEXEC);
-	if (fd < 0)
-		return fd;
+	if (fd < 0) {
+		err = fd;
+		goto err_free_sec;
+	}
 
 	id = bpf_link_alloc_id(link);
 	if (id < 0) {
 		put_unused_fd(fd);
-		return id;
+		err = id;
+		goto err_free_sec;
 	}
 
 	file = anon_inode_getfile("bpf_link",
@@ -3562,14 +3582,19 @@ int bpf_link_prime(struct bpf_link *link, struct bpf_link_primer *primer,
 	if (IS_ERR(file)) {
 		bpf_link_free_id(id);
 		put_unused_fd(fd);
-		return PTR_ERR(file);
+		err = PTR_ERR(file);
+		goto err_free_sec;
 	}
 
 	primer->link = link;
 	primer->file = file;
 	primer->fd = fd;
 	primer->id = id;
+	link->primed = true;
 	return 0;
+err_free_sec:
+	security_bpf_link_free(link);
+	return err;
 }
 
 int bpf_link_settle(struct bpf_link_primer *primer)
@@ -3586,6 +3611,12 @@ int bpf_link_settle(struct bpf_link_primer *primer)
 
 int bpf_link_new_fd(struct bpf_link *link)
 {
+	int ret;
+
+	ret = security_bpf_link(link);
+	if (ret < 0)
+		return ret;
+
 	return anon_inode_getfd("bpf-link",
 				link->ops->poll ? &bpf_link_fops_poll : &bpf_link_fops,
 				link, O_CLOEXEC);
@@ -6019,7 +6050,9 @@ static int link_update_map(struct bpf_link *link, union bpf_attr *attr)
 		goto out_put;
 	}
 
-	ret = link->ops->update_map(link, new_map, old_map);
+	ret = security_bpf_link_update_map(link, new_map, old_map);
+	if (!ret)
+		ret = link->ops->update_map(link, new_map, old_map);
 
 	if (old_map)
 		bpf_map_put(old_map);
@@ -6071,11 +6104,16 @@ static int link_update(union bpf_attr *attr)
 		goto out_put_progs;
 	}
 
-	if (link->ops->update_prog)
-		ret = link->ops->update_prog(link, new_prog, old_prog);
-	else
+	if (!link->ops->update_prog) {
 		ret = -EINVAL;
+		goto out_put_progs;
+	}
 
+	ret = security_bpf_link_update(link, new_prog, old_prog);
+	if (ret)
+		goto out_put_progs;
+
+	ret = link->ops->update_prog(link, new_prog, old_prog);
 out_put_progs:
 	if (old_prog)
 		bpf_prog_put(old_prog);
@@ -6100,10 +6138,13 @@ static int link_detach(union bpf_attr *attr)
 	if (IS_ERR(link))
 		return PTR_ERR(link);
 
-	if (link->ops->detach)
-		ret = link->ops->detach(link);
-	else
+	if (!link->ops->detach) {
 		ret = -EOPNOTSUPP;
+	} else {
+		ret = security_bpf_link_detach(link);
+		if (!ret)
+			ret = link->ops->detach(link);
+	}
 
 	bpf_link_put_direct(link);
 	return ret;

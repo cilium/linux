@@ -2326,17 +2326,26 @@ static inline void securityfs_remove(struct dentry *dentry)
 union bpf_attr;
 struct bpf_map;
 struct bpf_prog;
+struct bpf_link;
 struct bpf_token;
 #ifdef CONFIG_SECURITY
 extern int security_bpf(int cmd, union bpf_attr *attr, unsigned int size, bool kernel);
 extern int security_bpf_map(struct bpf_map *map, fmode_t fmode);
 extern int security_bpf_prog(struct bpf_prog *prog);
+extern int security_bpf_link(struct bpf_link *link);
 extern int security_bpf_map_create(struct bpf_map *map, union bpf_attr *attr,
 				   struct bpf_token *token, bool kernel);
 extern void security_bpf_map_free(struct bpf_map *map);
 extern int security_bpf_prog_load(struct bpf_prog *prog, union bpf_attr *attr,
 				  struct bpf_token *token, bool kernel);
 extern void security_bpf_prog_free(struct bpf_prog *prog);
+extern int security_bpf_link_create(struct bpf_link *link, bool kernel);
+extern int security_bpf_link_update(struct bpf_link *link, struct bpf_prog *new_prog,
+				    struct bpf_prog *old_prog);
+extern int security_bpf_link_update_map(struct bpf_link *link, struct bpf_map *new_map,
+					struct bpf_map *old_map);
+extern int security_bpf_link_detach(struct bpf_link *link);
+extern void security_bpf_link_free(struct bpf_link *link);
 extern int security_bpf_token_create(struct bpf_token *token, union bpf_attr *attr,
 				     const struct path *path);
 extern void security_bpf_token_free(struct bpf_token *token);
@@ -2359,6 +2368,11 @@ static inline int security_bpf_prog(struct bpf_prog *prog)
 	return 0;
 }
 
+static inline int security_bpf_link(struct bpf_link *link)
+{
+	return 0;
+}
+
 static inline int security_bpf_map_create(struct bpf_map *map, union bpf_attr *attr,
 					  struct bpf_token *token, bool kernel)
 {
@@ -2375,6 +2389,31 @@ static inline int security_bpf_prog_load(struct bpf_prog *prog, union bpf_attr *
 }
 
 static inline void security_bpf_prog_free(struct bpf_prog *prog)
+{ }
+
+static inline int security_bpf_link_create(struct bpf_link *link, bool kernel)
+{
+	return 0;
+}
+
+static inline int security_bpf_link_update(struct bpf_link *link, struct bpf_prog *new_prog,
+					   struct bpf_prog *old_prog)
+{
+	return 0;
+}
+
+static inline int security_bpf_link_update_map(struct bpf_link *link, struct bpf_map *new_map,
+					       struct bpf_map *old_map)
+{
+	return 0;
+}
+
+static inline int security_bpf_link_detach(struct bpf_link *link)
+{
+	return 0;
+}
+
+static inline void security_bpf_link_free(struct bpf_link *link)
 { }
 
 static inline int security_bpf_token_create(struct bpf_token *token, union bpf_attr *attr,
