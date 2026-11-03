@@ -3116,30 +3116,31 @@ int cgroup_bpf_struct_ops_attach(struct bpf_map *map, const union bpf_attr *attr
 	if (attr->link_create.cgroup.relative_fd && !(flags & BPF_F_LINK))
 		return -EINVAL;
 
+	cgrp = cgroup_get_from_fd(attr->link_create.target_fd);
+	if (IS_ERR(cgrp))
+		return PTR_ERR(cgrp);
+
 	link = kzalloc_obj(*link, GFP_USER);
-	if (!link)
+	if (!link) {
+		cgroup_put(cgrp);
 		return -ENOMEM;
+	}
 
 	bpf_link_init(&link->link, BPF_LINK_TYPE_STRUCT_OPS,
 		      &cgroup_struct_ops_link_ops, NULL,
 		      attr->link_create.attach_type);
-
-	err = bpf_link_prime(&link->link, &link_primer);
-	if (err) {
-		kfree(link);
-		return err;
-	}
-
-	cgrp = cgroup_get_from_fd(attr->link_create.target_fd);
-	if (IS_ERR(cgrp)) {
-		err = PTR_ERR(cgrp);
-		goto cleanup;
-	}
-
 	bpf_map_inc(map);
 	link->map = map;
 	link->cgroup = cgrp;
 	init_waitqueue_head(&link->wait_hup);
+
+	err = bpf_link_prime(&link->link, &link_primer);
+	if (err) {
+		cgroup_put(cgrp);
+		bpf_map_put(map);
+		kfree(link);
+		return err;
+	}
 
 	atype = bpf_struct_ops_map_cgroup_atype(map);
 	progs = &cgrp->bpf.progs[atype];
@@ -3187,15 +3188,11 @@ int cgroup_bpf_struct_ops_attach(struct bpf_map *map, const union bpf_attr *attr
 
 unlock:
 	cgroup_unlock();
-
-cleanup:
 	kfree(pl);
-	if (link->cgroup) {
-		cgroup_put(link->cgroup);
-		link->cgroup = NULL;
-		bpf_map_put(link->map);
-		link->map = NULL;
-	}
+	cgroup_put(link->cgroup);
+	link->cgroup = NULL;
+	bpf_map_put(link->map);
+	link->map = NULL;
 	bpf_link_cleanup(&link_primer);
 	return err;
 }

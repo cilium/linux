@@ -3860,6 +3860,9 @@ static int bpf_tracing_prog_attach(struct bpf_prog *prog,
 		goto out_unlock;
 	}
 
+	link->tgt_prog = tgt_prog;
+	link->trampoline = tr;
+
 	err = bpf_link_prime(&link->link.link, &link_primer);
 	if (err)
 		goto out_unlock;
@@ -3870,9 +3873,6 @@ static int bpf_tracing_prog_attach(struct bpf_prog *prog,
 		link = NULL;
 		goto out_unlock;
 	}
-
-	link->tgt_prog = tgt_prog;
-	link->trampoline = tr;
 
 	/* Always clear the trampoline and target prog from prog->aux to make
 	 * sure the original attach destination is not kept alive after a

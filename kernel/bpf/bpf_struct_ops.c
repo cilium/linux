@@ -1510,12 +1510,12 @@ int bpf_struct_ops_link_create(union bpf_attr *attr)
 	}
 	bpf_link_init(&link->link, BPF_LINK_TYPE_STRUCT_OPS, &bpf_struct_ops_map_lops, NULL,
 		      attr->link_create.attach_type);
+	link->map = map;
+	init_waitqueue_head(&link->wait_hup);
 
 	err = bpf_link_prime(&link->link, &link_primer);
 	if (err)
 		goto err_out;
-
-	init_waitqueue_head(&link->wait_hup);
 
 	/* Hold the update_mutex such that the subsystem cannot
 	 * do link->ops->detach() before the link is fully initialized.
@@ -1524,11 +1524,12 @@ int bpf_struct_ops_link_create(union bpf_attr *attr)
 	err = st_map->st_ops_desc->st_ops->reg(st_map->kvalue.data, &link->link);
 	if (err) {
 		mutex_unlock(&update_mutex);
+		/* The map reference is still owned by this function. */
+		link->map = NULL;
 		bpf_link_cleanup(&link_primer);
 		link = NULL;
 		goto err_out;
 	}
-	link->map = map;
 	mutex_unlock(&update_mutex);
 
 	return bpf_link_settle(&link_primer);

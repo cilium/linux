@@ -2894,10 +2894,6 @@ int bpf_kprobe_multi_link_attach(const union bpf_attr *attr, struct bpf_prog *pr
 	bpf_link_init(&link->link, BPF_LINK_TYPE_KPROBE_MULTI,
 		      &bpf_kprobe_multi_link_lops, prog, attr->link_create.attach_type);
 
-	err = bpf_link_prime(&link->link, &link_primer);
-	if (err)
-		goto error;
-
 	if (!(flags & BPF_F_KPROBE_MULTI_RETURN))
 		link->fp.entry_handler = kprobe_multi_link_handler;
 	if ((flags & BPF_F_KPROBE_MULTI_RETURN) || is_kprobe_session(prog))
@@ -2922,6 +2918,10 @@ int bpf_kprobe_multi_link_attach(const union bpf_attr *attr, struct bpf_prog *pr
 		       bpf_kprobe_multi_cookie_swap,
 		       link);
 	}
+
+	err = bpf_link_prime(&link->link, &link_primer);
+	if (err)
+		goto error;
 
 	err = get_modules_for_addrs(&link->mods, addrs, cnt);
 	if (err < 0) {
@@ -3913,14 +3913,13 @@ int bpf_tracing_multi_attach(struct bpf_prog *prog, const union bpf_attr *attr)
 
 	bpf_link_init(&link->link, BPF_LINK_TYPE_TRACING_MULTI,
 		      &bpf_tracing_multi_link_lops, prog, prog->expected_attach_type);
+	link->nodes_cnt = cnt;
+	link->cookies = cookies;
+	link->fexits = fexits;
 
 	err = bpf_link_prime(&link->link, &link_primer);
 	if (err)
 		goto error;
-
-	link->nodes_cnt = cnt;
-	link->cookies = cookies;
-	link->fexits = fexits;
 
 	err = bpf_trampoline_multi_attach(prog, ids, link);
 	kvfree(ids);

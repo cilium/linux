@@ -581,18 +581,20 @@ int bpf_iter_link_attach(const union bpf_attr *attr, bpfptr_t uattr,
 		      attr->link_create.attach_type);
 	link->tinfo = tinfo;
 
-	err = bpf_link_prime(&link->link, &link_primer);
-	if (err) {
-		kfree(link);
-		return err;
-	}
-
 	if (tinfo->reg_info->attach_target) {
 		err = tinfo->reg_info->attach_target(prog, &linfo, &link->aux);
 		if (err) {
-			bpf_link_cleanup(&link_primer);
+			kfree(link);
 			return err;
 		}
+	}
+
+	err = bpf_link_prime(&link->link, &link_primer);
+	if (err) {
+		if (tinfo->reg_info->detach_target)
+			tinfo->reg_info->detach_target(&link->aux);
+		kfree(link);
+		return err;
 	}
 
 	return bpf_link_settle(&link_primer);
