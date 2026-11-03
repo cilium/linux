@@ -2392,7 +2392,7 @@ static inline void bpf_module_put(const void *data, struct module *owner)
 	else
 		module_put(owner);
 }
-int bpf_struct_ops_link_create(union bpf_attr *attr);
+int bpf_struct_ops_link_create(union bpf_attr *attr, bool kernel);
 int bpf_prog_assoc_struct_ops(struct bpf_prog *prog, struct bpf_map *map);
 void bpf_prog_disassoc_struct_ops(struct bpf_prog *prog);
 void *bpf_prog_get_assoc_struct_ops(const struct bpf_prog_aux *aux);
@@ -2448,7 +2448,7 @@ static inline int bpf_struct_ops_map_sys_lookup_elem(struct bpf_map *map,
 {
 	return -EINVAL;
 }
-static inline int bpf_struct_ops_link_create(union bpf_attr *attr)
+static inline int bpf_struct_ops_link_create(union bpf_attr *attr, bool kernel)
 {
 	return -EOPNOTSUPP;
 }
@@ -3084,7 +3084,8 @@ void bpf_link_init_sleepable(struct bpf_link *link, enum bpf_link_type type,
 void bpf_tramp_link_init(struct bpf_tramp_link *link, enum bpf_link_type type,
 			 const struct bpf_link_ops *ops, struct bpf_prog *prog,
 			 enum bpf_attach_type attach_type, u64 cookie);
-int bpf_link_prime(struct bpf_link *link, struct bpf_link_primer *primer);
+int bpf_link_prime(struct bpf_link *link, struct bpf_link_primer *primer,
+		   bool kernel);
 int bpf_link_settle(struct bpf_link_primer *primer);
 void bpf_link_cleanup(struct bpf_link_primer *primer);
 void bpf_link_inc(struct bpf_link *link);
@@ -3520,7 +3521,7 @@ static inline void bpf_tramp_link_init(struct bpf_tramp_link *link, enum bpf_lin
 }
 
 static inline int bpf_link_prime(struct bpf_link *link,
-				 struct bpf_link_primer *primer)
+				 struct bpf_link_primer *primer, bool kernel)
 {
 	return -EOPNOTSUPP;
 }
@@ -3856,7 +3857,7 @@ int sock_map_prog_detach(const union bpf_attr *attr, enum bpf_prog_type ptype);
 int sock_map_update_elem_sys(struct bpf_map *map, void *key, void *value, u64 flags);
 int sock_map_bpf_prog_query(const union bpf_attr *attr,
 			    union bpf_attr __user *uattr);
-int sock_map_link_create(const union bpf_attr *attr, struct bpf_prog *prog);
+int sock_map_link_create(const union bpf_attr *attr, struct bpf_prog *prog, bool kernel);
 
 void sock_map_unhash(struct sock *sk);
 void sock_map_destroy(struct sock *sk);
@@ -3960,7 +3961,8 @@ static inline int sock_map_bpf_prog_query(const union bpf_attr *attr,
 	return -EINVAL;
 }
 
-static inline int sock_map_link_create(const union bpf_attr *attr, struct bpf_prog *prog)
+static inline int sock_map_link_create(const union bpf_attr *attr, struct bpf_prog *prog,
+				       bool kernel)
 {
 	return -EOPNOTSUPP;
 }

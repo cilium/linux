@@ -589,7 +589,7 @@ int bpf_iter_link_attach(const union bpf_attr *attr, bpfptr_t uattr,
 		}
 	}
 
-	err = bpf_link_prime(&link->link, &link_primer);
+	err = bpf_link_prime(&link->link, &link_primer, uattr.is_kernel);
 	if (err) {
 		if (tinfo->reg_info->detach_target)
 			tinfo->reg_info->detach_target(&link->aux);

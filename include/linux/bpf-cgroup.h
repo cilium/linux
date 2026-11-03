@@ -122,7 +122,8 @@ static inline bool cgroup_bpf_is_struct_ops_atype(enum cgroup_bpf_attach_type at
 	return atype == CGROUP_TCP_SOCK_OPS;
 }
 void cgroup_bpf_struct_ops_register(int atype, u32 type_id, void *cfi_stubs, bool mult_trace);
-int cgroup_bpf_struct_ops_attach(struct bpf_map *map, const union bpf_attr *attr);
+int cgroup_bpf_struct_ops_attach(struct bpf_map *map, const union bpf_attr *attr,
+				 bool kernel);
 
 void __init cgroup_bpf_lifetime_notifier_init(void);
 
@@ -425,7 +426,8 @@ int cgroup_bpf_prog_attach(const union bpf_attr *attr,
 			   enum bpf_prog_type ptype, struct bpf_prog *prog);
 int cgroup_bpf_prog_detach(const union bpf_attr *attr,
 			   enum bpf_prog_type ptype);
-int cgroup_bpf_link_attach(const union bpf_attr *attr, struct bpf_prog *prog);
+int cgroup_bpf_link_attach(const union bpf_attr *attr, struct bpf_prog *prog,
+			   bool kernel);
 int cgroup_bpf_prog_query(const union bpf_attr *attr,
 			  union bpf_attr __user *uattr, u32 uattr_size);
 
@@ -452,7 +454,7 @@ static inline int cgroup_bpf_prog_detach(const union bpf_attr *attr,
 }
 
 static inline int cgroup_bpf_link_attach(const union bpf_attr *attr,
-					 struct bpf_prog *prog)
+					 struct bpf_prog *prog, bool kernel)
 {
 	return -EINVAL;
 }
@@ -494,7 +496,8 @@ static inline void cgroup_bpf_struct_ops_register(int atype, u32 type_id, void *
 {
 }
 static inline int cgroup_bpf_struct_ops_attach(struct bpf_map *map,
-					       const union bpf_attr *attr)
+					       const union bpf_attr *attr,
+					       bool kernel)
 {
 	return -EOPNOTSUPP;
 }

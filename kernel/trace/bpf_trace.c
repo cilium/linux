@@ -2790,7 +2790,8 @@ static int addrs_check_error_injection_list(unsigned long *addrs, u32 cnt)
 	return 0;
 }
 
-int bpf_kprobe_multi_link_attach(const union bpf_attr *attr, struct bpf_prog *prog)
+int bpf_kprobe_multi_link_attach(const union bpf_attr *attr, struct bpf_prog *prog,
+				 bool kernel)
 {
 	struct bpf_kprobe_multi_link *link = NULL;
 	struct bpf_link_primer link_primer;
@@ -2919,7 +2920,7 @@ int bpf_kprobe_multi_link_attach(const union bpf_attr *attr, struct bpf_prog *pr
 		       link);
 	}
 
-	err = bpf_link_prime(&link->link, &link_primer);
+	err = bpf_link_prime(&link->link, &link_primer, kernel);
 	if (err)
 		goto error;
 
@@ -2946,7 +2947,8 @@ error:
 	return err;
 }
 #else /* !CONFIG_FPROBE */
-int bpf_kprobe_multi_link_attach(const union bpf_attr *attr, struct bpf_prog *prog)
+int bpf_kprobe_multi_link_attach(const union bpf_attr *attr, struct bpf_prog *prog,
+				 bool kernel)
 {
 	return -EOPNOTSUPP;
 }
@@ -3261,7 +3263,8 @@ static int bpf_uprobe_multi_get_path(const union bpf_attr *attr, struct path *pa
 	return user_path_at(AT_FDCWD, upath, LOOKUP_FOLLOW, path);
 }
 
-int bpf_uprobe_multi_link_attach(const union bpf_attr *attr, struct bpf_prog *prog)
+int bpf_uprobe_multi_link_attach(const union bpf_attr *attr, struct bpf_prog *prog,
+				 bool kernel)
 {
 	struct bpf_uprobe_multi_link *link = NULL;
 	unsigned long __user *uref_ctr_offsets;
@@ -3394,7 +3397,7 @@ int bpf_uprobe_multi_link_attach(const union bpf_attr *attr, struct bpf_prog *pr
 		}
 	}
 
-	err = bpf_link_prime(&link->link, &link_primer);
+	err = bpf_link_prime(&link->link, &link_primer, kernel);
 	if (err)
 		goto error_unregister;
 
@@ -3413,7 +3416,8 @@ error_path_put:
 	return err;
 }
 #else /* !CONFIG_UPROBES */
-int bpf_uprobe_multi_link_attach(const union bpf_attr *attr, struct bpf_prog *prog)
+int bpf_uprobe_multi_link_attach(const union bpf_attr *attr, struct bpf_prog *prog,
+				 bool kernel)
 {
 	return -EOPNOTSUPP;
 }
@@ -3850,7 +3854,8 @@ static int check_dup_ids(u32 *ids, u64 *cookies, u32 cnt)
 	return err;
 }
 
-int bpf_tracing_multi_attach(struct bpf_prog *prog, const union bpf_attr *attr)
+int bpf_tracing_multi_attach(struct bpf_prog *prog, const union bpf_attr *attr,
+			     bool kernel)
 {
 	struct bpf_tracing_multi_link *link = NULL;
 	struct bpf_tramp_node *fexits = NULL;
@@ -3917,7 +3922,7 @@ int bpf_tracing_multi_attach(struct bpf_prog *prog, const union bpf_attr *attr)
 	link->cookies = cookies;
 	link->fexits = fexits;
 
-	err = bpf_link_prime(&link->link, &link_primer);
+	err = bpf_link_prime(&link->link, &link_primer, kernel);
 	if (err)
 		goto error;
 
@@ -3939,7 +3944,8 @@ error:
 
 #else
 
-int bpf_tracing_multi_attach(struct bpf_prog *prog, const union bpf_attr *attr)
+int bpf_tracing_multi_attach(struct bpf_prog *prog, const union bpf_attr *attr,
+			     bool kernel)
 {
 	return -EOPNOTSUPP;
 }

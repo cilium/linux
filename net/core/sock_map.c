@@ -1873,7 +1873,7 @@ static const struct bpf_link_ops sock_map_link_ops = {
 	.show_fdinfo = sock_map_link_show_fdinfo,
 };
 
-int sock_map_link_create(const union bpf_attr *attr, struct bpf_prog *prog)
+int sock_map_link_create(const union bpf_attr *attr, struct bpf_prog *prog, bool kernel)
 {
 	struct bpf_link_primer link_primer;
 	struct sockmap_link *sockmap_link;
@@ -1903,7 +1903,7 @@ int sock_map_link_create(const union bpf_attr *attr, struct bpf_prog *prog)
 		      attach_type);
 	sockmap_link->map = map;
 
-	ret = bpf_link_prime(&sockmap_link->link, &link_primer);
+	ret = bpf_link_prime(&sockmap_link->link, &link_primer, kernel);
 	if (ret) {
 		kfree(sockmap_link);
 		goto out;

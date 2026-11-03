@@ -468,7 +468,8 @@ out_unlock:
 	return err;
 }
 
-int netns_bpf_link_create(const union bpf_attr *attr, struct bpf_prog *prog)
+int netns_bpf_link_create(const union bpf_attr *attr, struct bpf_prog *prog,
+			  bool kernel)
 {
 	enum netns_bpf_attach_type netns_type;
 	struct bpf_link_primer link_primer;
@@ -499,7 +500,7 @@ int netns_bpf_link_create(const union bpf_attr *attr, struct bpf_prog *prog)
 	net_link->net = net;
 	net_link->netns_type = netns_type;
 
-	err = bpf_link_prime(&net_link->link, &link_primer);
+	err = bpf_link_prime(&net_link->link, &link_primer, kernel);
 	if (err) {
 		kfree(net_link);
 		goto out_put_net;

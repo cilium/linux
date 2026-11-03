@@ -1697,7 +1697,8 @@ static const struct bpf_link_ops bpf_cgroup_link_lops = {
 	 BPF_F_PREORDER |	\
 	 BPF_F_LINK)
 
-int cgroup_bpf_link_attach(const union bpf_attr *attr, struct bpf_prog *prog)
+int cgroup_bpf_link_attach(const union bpf_attr *attr, struct bpf_prog *prog,
+			   bool kernel)
 {
 	struct bpf_link_primer link_primer;
 	struct bpf_cgroup_link *link;
@@ -1720,7 +1721,7 @@ int cgroup_bpf_link_attach(const union bpf_attr *attr, struct bpf_prog *prog)
 		      prog, attr->link_create.attach_type);
 	link->cgroup = cgrp;
 
-	err = bpf_link_prime(&link->link, &link_primer);
+	err = bpf_link_prime(&link->link, &link_primer, kernel);
 	if (err) {
 		kfree(link);
 		goto out_put_cgroup;
@@ -3094,7 +3095,8 @@ static const struct bpf_link_ops cgroup_struct_ops_link_ops = {
 	.poll = cgroup_struct_ops_link_poll,
 };
 
-int cgroup_bpf_struct_ops_attach(struct bpf_map *map, const union bpf_attr *attr)
+int cgroup_bpf_struct_ops_attach(struct bpf_map *map, const union bpf_attr *attr,
+				 bool kernel)
 {
 	u32 flags = attr->link_create.flags;
 	u32 pl_flags = (flags & BPF_F_PREORDER) | BPF_F_ALLOW_MULTI;
@@ -3134,7 +3136,7 @@ int cgroup_bpf_struct_ops_attach(struct bpf_map *map, const union bpf_attr *attr
 	link->cgroup = cgrp;
 	init_waitqueue_head(&link->wait_hup);
 
-	err = bpf_link_prime(&link->link, &link_primer);
+	err = bpf_link_prime(&link->link, &link_primer, kernel);
 	if (err) {
 		cgroup_put(cgrp);
 		bpf_map_put(map);

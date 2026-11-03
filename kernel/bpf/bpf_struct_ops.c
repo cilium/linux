@@ -1470,7 +1470,7 @@ static const struct bpf_link_ops bpf_struct_ops_map_lops = {
 	.poll = bpf_struct_ops_map_link_poll,
 };
 
-int bpf_struct_ops_link_create(union bpf_attr *attr)
+int bpf_struct_ops_link_create(union bpf_attr *attr, bool kernel)
 {
 	struct bpf_struct_ops_link *link = NULL;
 	struct bpf_link_primer link_primer;
@@ -1492,7 +1492,7 @@ int bpf_struct_ops_link_create(union bpf_attr *attr)
 
 	cgroup_atype = st_map->st_ops_desc->st_ops->cgroup_atype;
 	if (cgroup_atype) {
-		err = cgroup_bpf_struct_ops_attach(map, attr);
+		err = cgroup_bpf_struct_ops_attach(map, attr, kernel);
 		bpf_map_put(map);
 		return err;
 	}
@@ -1513,7 +1513,7 @@ int bpf_struct_ops_link_create(union bpf_attr *attr)
 	link->map = map;
 	init_waitqueue_head(&link->wait_hup);
 
-	err = bpf_link_prime(&link->link, &link_primer);
+	err = bpf_link_prime(&link->link, &link_primer, kernel);
 	if (err)
 		goto err_out;
 

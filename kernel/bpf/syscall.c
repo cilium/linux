@@ -3537,8 +3537,11 @@ static int bpf_link_alloc_id(struct bpf_link *link)
  * bpf_link_settle() kernel code using bpf_link doesn't have to perform
  * expensive (and potentially failing) roll back operations in a rare case
  * that file, FD, or ID can't be allocated.
+ * @kernel says whether the link is created on behalf of a kernel-originated
+ * bpf(2) call (see bpfptr_t::is_kernel) rather than one from user space.
  */
-int bpf_link_prime(struct bpf_link *link, struct bpf_link_primer *primer)
+int bpf_link_prime(struct bpf_link *link, struct bpf_link_primer *primer,
+		   bool kernel)
 {
 	struct file *file;
 	int fd, id;
@@ -3674,7 +3677,8 @@ static int bpf_tracing_prog_attach(struct bpf_prog *prog,
 				   int tgt_prog_fd,
 				   u32 btf_id,
 				   u64 bpf_cookie,
-				   enum bpf_attach_type attach_type)
+				   enum bpf_attach_type attach_type,
+				   bool kernel)
 {
 	struct bpf_link_primer link_primer;
 	struct bpf_prog *tgt_prog = NULL;
@@ -3863,7 +3867,7 @@ static int bpf_tracing_prog_attach(struct bpf_prog *prog,
 	link->tgt_prog = tgt_prog;
 	link->trampoline = tr;
 
-	err = bpf_link_prime(&link->link.link, &link_primer);
+	err = bpf_link_prime(&link->link.link, &link_primer, kernel);
 	if (err)
 		goto out_unlock;
 
@@ -4297,7 +4301,8 @@ static const struct bpf_link_ops bpf_perf_link_lops = {
 	.show_fdinfo = bpf_perf_link_show_fdinfo,
 };
 
-static int bpf_perf_link_attach(const union bpf_attr *attr, struct bpf_prog *prog)
+static int bpf_perf_link_attach(const union bpf_attr *attr, struct bpf_prog *prog,
+				bool kernel)
 {
 	struct bpf_link_primer link_primer;
 	struct bpf_perf_link *link;
@@ -4321,7 +4326,7 @@ static int bpf_perf_link_attach(const union bpf_attr *attr, struct bpf_prog *pro
 		      attr->link_create.attach_type);
 	link->perf_file = perf_file;
 
-	err = bpf_link_prime(&link->link, &link_primer);
+	err = bpf_link_prime(&link->link, &link_primer, kernel);
 	if (err) {
 		kfree(link);
 		goto out_put_file;
@@ -4343,7 +4348,8 @@ out_put_file:
 	return err;
 }
 #else
-static int bpf_perf_link_attach(const union bpf_attr *attr, struct bpf_prog *prog)
+static int bpf_perf_link_attach(const union bpf_attr *attr, struct bpf_prog *prog,
+				bool kernel)
 {
 	return -EOPNOTSUPP;
 }
@@ -4351,7 +4357,7 @@ static int bpf_perf_link_attach(const union bpf_attr *attr, struct bpf_prog *pro
 
 static int bpf_raw_tp_link_attach(struct bpf_prog *prog,
 				  const char __user *user_tp_name, u64 cookie,
-				  enum bpf_attach_type attach_type)
+				  enum bpf_attach_type attach_type, bool kernel)
 {
 	struct bpf_link_primer link_primer;
 	struct bpf_raw_tp_link *link;
@@ -4374,7 +4380,7 @@ static int bpf_raw_tp_link_attach(struct bpf_prog *prog,
 			tp_name = prog->aux->attach_func_name;
 			break;
 		}
-		return bpf_tracing_prog_attach(prog, 0, 0, 0, attach_type);
+		return bpf_tracing_prog_attach(prog, 0, 0, 0, attach_type, kernel);
 	case BPF_PROG_TYPE_RAW_TRACEPOINT:
 	case BPF_PROG_TYPE_RAW_TRACEPOINT_WRITABLE:
 		if (strncpy_from_user(buf, user_tp_name, sizeof(buf) - 1) < 0)
@@ -4406,7 +4412,7 @@ static int bpf_raw_tp_link_attach(struct bpf_prog *prog,
 	link->btp = btp;
 	link->cookie = cookie;
 
-	err = bpf_link_prime(&link->link, &link_primer);
+	err = bpf_link_prime(&link->link, &link_primer, kernel);
 	if (err) {
 		kfree(link);
 		goto out_put_btp;
@@ -4427,7 +4433,7 @@ out_put_btp:
 
 #define BPF_RAW_TRACEPOINT_OPEN_LAST_FIELD raw_tracepoint.cookie
 
-static int bpf_raw_tracepoint_open(const union bpf_attr *attr)
+static int bpf_raw_tracepoint_open(const union bpf_attr *attr, bpfptr_t uattr)
 {
 	struct bpf_prog *prog;
 	void __user *tp_name;
@@ -4443,7 +4449,8 @@ static int bpf_raw_tracepoint_open(const union bpf_attr *attr)
 
 	tp_name = u64_to_user_ptr(attr->raw_tracepoint.name);
 	cookie = attr->raw_tracepoint.cookie;
-	fd = bpf_raw_tp_link_attach(prog, tp_name, cookie, prog->expected_attach_type);
+	fd = bpf_raw_tp_link_attach(prog, tp_name, cookie, prog->expected_attach_type,
+				    uattr.is_kernel);
 	if (fd < 0)
 		bpf_prog_put(prog);
 	return fd;
@@ -5862,6 +5869,7 @@ static int link_create(union bpf_attr *attr, bpfptr_t uattr, struct bpf_common_a
 		       bpfptr_t uattr_common, u32 size_common)
 {
 	struct netlink_ext_ack extack = {};
+	bool kernel = uattr.is_kernel;
 	struct bpf_verifier_log *log;
 	struct bpf_log_attr attr_log;
 	struct bpf_prog *prog;
@@ -5871,7 +5879,7 @@ static int link_create(union bpf_attr *attr, bpfptr_t uattr, struct bpf_common_a
 		return -EINVAL;
 
 	if (attr->link_create.attach_type == BPF_STRUCT_OPS)
-		return bpf_struct_ops_link_create(attr);
+		return bpf_struct_ops_link_create(attr, kernel);
 
 	log = bpf_log_attr_create_vlog(&attr_log, attr_common, uattr_common, size_common);
 	if (IS_ERR(log))
@@ -5900,14 +5908,15 @@ static int link_create(union bpf_attr *attr, bpfptr_t uattr, struct bpf_common_a
 	case BPF_PROG_TYPE_CGROUP_DEVICE:
 	case BPF_PROG_TYPE_CGROUP_SYSCTL:
 	case BPF_PROG_TYPE_CGROUP_SOCKOPT:
-		ret = cgroup_bpf_link_attach(attr, prog);
+		ret = cgroup_bpf_link_attach(attr, prog, kernel);
 		break;
 	case BPF_PROG_TYPE_EXT:
 		ret = bpf_tracing_prog_attach(prog,
 					      attr->link_create.target_fd,
 					      attr->link_create.target_btf_id,
 					      attr->link_create.tracing.cookie,
-					      attr->link_create.attach_type);
+					      attr->link_create.attach_type,
+					      kernel);
 		break;
 	case BPF_PROG_TYPE_LSM:
 	case BPF_PROG_TYPE_TRACING:
@@ -5917,56 +5926,57 @@ static int link_create(union bpf_attr *attr, bpfptr_t uattr, struct bpf_common_a
 		}
 		if (prog->expected_attach_type == BPF_TRACE_RAW_TP)
 			ret = bpf_raw_tp_link_attach(prog, NULL, attr->link_create.tracing.cookie,
-						     attr->link_create.attach_type);
+						     attr->link_create.attach_type, kernel);
 		else if (prog->expected_attach_type == BPF_TRACE_ITER)
 			ret = bpf_iter_link_attach(attr, uattr, prog);
 		else if (prog->expected_attach_type == BPF_LSM_CGROUP)
-			ret = cgroup_bpf_link_attach(attr, prog);
+			ret = cgroup_bpf_link_attach(attr, prog, kernel);
 		else if (is_tracing_multi(prog->expected_attach_type))
-			ret = bpf_tracing_multi_attach(prog, attr);
+			ret = bpf_tracing_multi_attach(prog, attr, kernel);
 		else
 			ret = bpf_tracing_prog_attach(prog,
 						      attr->link_create.target_fd,
 						      attr->link_create.target_btf_id,
 						      attr->link_create.tracing.cookie,
-						      attr->link_create.attach_type);
+						      attr->link_create.attach_type,
+						      kernel);
 		break;
 	case BPF_PROG_TYPE_FLOW_DISSECTOR:
 	case BPF_PROG_TYPE_SK_LOOKUP:
-		ret = netns_bpf_link_create(attr, prog);
+		ret = netns_bpf_link_create(attr, prog, kernel);
 		break;
 	case BPF_PROG_TYPE_SK_MSG:
 	case BPF_PROG_TYPE_SK_SKB:
-		ret = sock_map_link_create(attr, prog);
+		ret = sock_map_link_create(attr, prog, kernel);
 		break;
 #ifdef CONFIG_NET
 	case BPF_PROG_TYPE_XDP:
-		ret = bpf_xdp_link_attach(attr, prog, &extack);
+		ret = bpf_xdp_link_attach(attr, prog, &extack, kernel);
 		break;
 	case BPF_PROG_TYPE_SCHED_CLS:
 		if (attr->link_create.attach_type == BPF_TCX_INGRESS ||
 		    attr->link_create.attach_type == BPF_TCX_EGRESS)
-			ret = tcx_link_attach(attr, prog);
+			ret = tcx_link_attach(attr, prog, kernel);
 		else
-			ret = netkit_link_attach(attr, prog);
+			ret = netkit_link_attach(attr, prog, kernel);
 		break;
 	case BPF_PROG_TYPE_NETFILTER:
-		ret = bpf_nf_link_attach(attr, prog);
+		ret = bpf_nf_link_attach(attr, prog, kernel);
 		break;
 #endif
 	case BPF_PROG_TYPE_PERF_EVENT:
 	case BPF_PROG_TYPE_TRACEPOINT:
-		ret = bpf_perf_link_attach(attr, prog);
+		ret = bpf_perf_link_attach(attr, prog, kernel);
 		break;
 	case BPF_PROG_TYPE_KPROBE:
 		if (attr->link_create.attach_type == BPF_PERF_EVENT)
-			ret = bpf_perf_link_attach(attr, prog);
+			ret = bpf_perf_link_attach(attr, prog, kernel);
 		else if (attr->link_create.attach_type == BPF_TRACE_KPROBE_MULTI ||
 			 attr->link_create.attach_type == BPF_TRACE_KPROBE_SESSION)
-			ret = bpf_kprobe_multi_link_attach(attr, prog);
+			ret = bpf_kprobe_multi_link_attach(attr, prog, kernel);
 		else if (attr->link_create.attach_type == BPF_TRACE_UPROBE_MULTI ||
 			 attr->link_create.attach_type == BPF_TRACE_UPROBE_SESSION)
-			ret = bpf_uprobe_multi_link_attach(attr, prog);
+			ret = bpf_uprobe_multi_link_attach(attr, prog, kernel);
 		break;
 	default:
 		bpf_log(log, "Invalid prog type.\n");
@@ -6524,7 +6534,7 @@ static int __sys_bpf(enum bpf_cmd cmd, bpfptr_t uattr, unsigned int size,
 		err = bpf_obj_get_info_by_fd(&attr, uattr.user);
 		break;
 	case BPF_RAW_TRACEPOINT_OPEN:
-		err = bpf_raw_tracepoint_open(&attr);
+		err = bpf_raw_tracepoint_open(&attr, uattr);
 		break;
 	case BPF_BTF_LOAD:
 		if (size >= offsetofend(union bpf_attr, btf_log_true_size))

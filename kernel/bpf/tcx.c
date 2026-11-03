@@ -299,15 +299,15 @@ static int tcx_link_init(struct tcx_link *tcx,
 			 struct bpf_link_primer *link_primer,
 			 const union bpf_attr *attr,
 			 struct net_device *dev,
-			 struct bpf_prog *prog)
+			 struct bpf_prog *prog, bool kernel)
 {
 	bpf_link_init(&tcx->link, BPF_LINK_TYPE_TCX, &tcx_link_lops, prog,
 		      attr->link_create.attach_type);
 	tcx->dev = dev;
-	return bpf_link_prime(&tcx->link, link_primer);
+	return bpf_link_prime(&tcx->link, link_primer, kernel);
 }
 
-int tcx_link_attach(const union bpf_attr *attr, struct bpf_prog *prog)
+int tcx_link_attach(const union bpf_attr *attr, struct bpf_prog *prog, bool kernel)
 {
 	struct net *net = current->nsproxy->net_ns;
 	struct bpf_link_primer link_primer;
@@ -326,7 +326,7 @@ int tcx_link_attach(const union bpf_attr *attr, struct bpf_prog *prog)
 		ret = -ENOMEM;
 		goto out;
 	}
-	ret = tcx_link_init(tcx, &link_primer, attr, dev, prog);
+	ret = tcx_link_init(tcx, &link_primer, attr, dev, prog, kernel);
 	if (ret) {
 		kfree(tcx);
 		goto out;

@@ -10911,7 +10911,7 @@ static const struct bpf_link_ops bpf_xdp_link_lops = {
 };
 
 int bpf_xdp_link_attach(const union bpf_attr *attr, struct bpf_prog *prog,
-			struct netlink_ext_ack *extack)
+			struct netlink_ext_ack *extack, bool kernel)
 {
 	struct net *net = current->nsproxy->net_ns;
 	struct bpf_link_primer link_primer;
@@ -10938,7 +10938,7 @@ int bpf_xdp_link_attach(const union bpf_attr *attr, struct bpf_prog *prog,
 	link->dev = dev;
 	link->flags = attr->link_create.flags;
 
-	err = bpf_link_prime(&link->link, &link_primer);
+	err = bpf_link_prime(&link->link, &link_primer, kernel);
 	if (err) {
 		kfree(link);
 		goto unlock;

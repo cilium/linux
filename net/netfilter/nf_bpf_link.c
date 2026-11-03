@@ -207,7 +207,7 @@ static int bpf_nf_check_pf_and_hooks(const union bpf_attr *attr)
 	return 0;
 }
 
-int bpf_nf_link_attach(const union bpf_attr *attr, struct bpf_prog *prog)
+int bpf_nf_link_attach(const union bpf_attr *attr, struct bpf_prog *prog, bool kernel)
 {
 	struct net *net = current->nsproxy->net_ns;
 	struct bpf_link_primer link_primer;
@@ -240,7 +240,7 @@ int bpf_nf_link_attach(const union bpf_attr *attr, struct bpf_prog *prog)
 	link->dead = false;
 	link->defrag_hook = NULL;
 
-	err = bpf_link_prime(&link->link, &link_primer);
+	err = bpf_link_prime(&link->link, &link_primer, kernel);
 	if (err) {
 		kfree(link);
 		return err;

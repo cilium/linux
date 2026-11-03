@@ -989,15 +989,15 @@ static int netkit_link_init(struct netkit_link *nkl,
 			    struct bpf_link_primer *link_primer,
 			    const union bpf_attr *attr,
 			    struct net_device *dev,
-			    struct bpf_prog *prog)
+			    struct bpf_prog *prog, bool kernel)
 {
 	bpf_link_init(&nkl->link, BPF_LINK_TYPE_NETKIT,
 		      &netkit_link_lops, prog, attr->link_create.attach_type);
 	nkl->dev = dev;
-	return bpf_link_prime(&nkl->link, link_primer);
+	return bpf_link_prime(&nkl->link, link_primer, kernel);
 }
 
-int netkit_link_attach(const union bpf_attr *attr, struct bpf_prog *prog)
+int netkit_link_attach(const union bpf_attr *attr, struct bpf_prog *prog, bool kernel)
 {
 	struct bpf_link_primer link_primer;
 	struct netkit_link *nkl;
@@ -1017,7 +1017,7 @@ int netkit_link_attach(const union bpf_attr *attr, struct bpf_prog *prog)
 		ret = -ENOMEM;
 		goto out;
 	}
-	ret = netkit_link_init(nkl, &link_primer, attr, dev, prog);
+	ret = netkit_link_init(nkl, &link_primer, attr, dev, prog, kernel);
 	if (ret) {
 		kfree(nkl);
 		goto out;

@@ -794,9 +794,12 @@ int bpf_get_perf_event_info(const struct perf_event *event, u32 *prog_id,
 			    u32 *fd_type, const char **buf,
 			    u64 *probe_offset, u64 *probe_addr,
 			    unsigned long *missed);
-int bpf_kprobe_multi_link_attach(const union bpf_attr *attr, struct bpf_prog *prog);
-int bpf_uprobe_multi_link_attach(const union bpf_attr *attr, struct bpf_prog *prog);
-int bpf_tracing_multi_attach(struct bpf_prog *prog, const union bpf_attr *attr);
+int bpf_kprobe_multi_link_attach(const union bpf_attr *attr, struct bpf_prog *prog,
+				 bool kernel);
+int bpf_uprobe_multi_link_attach(const union bpf_attr *attr, struct bpf_prog *prog,
+				 bool kernel);
+int bpf_tracing_multi_attach(struct bpf_prog *prog, const union bpf_attr *attr,
+			     bool kernel);
 #else
 static inline unsigned int trace_call_bpf(struct trace_event_call *call, void *ctx)
 {
@@ -845,17 +848,20 @@ static inline int bpf_get_perf_event_info(const struct perf_event *event,
 	return -EOPNOTSUPP;
 }
 static inline int
-bpf_kprobe_multi_link_attach(const union bpf_attr *attr, struct bpf_prog *prog)
+bpf_kprobe_multi_link_attach(const union bpf_attr *attr, struct bpf_prog *prog,
+			     bool kernel)
 {
 	return -EOPNOTSUPP;
 }
 static inline int
-bpf_uprobe_multi_link_attach(const union bpf_attr *attr, struct bpf_prog *prog)
+bpf_uprobe_multi_link_attach(const union bpf_attr *attr, struct bpf_prog *prog,
+			     bool kernel)
 {
 	return -EOPNOTSUPP;
 }
 static inline int
-bpf_tracing_multi_attach(struct bpf_prog *prog, const union bpf_attr *attr)
+bpf_tracing_multi_attach(struct bpf_prog *prog, const union bpf_attr *attr,
+			 bool kernel)
 {
 	return -EOPNOTSUPP;
 }

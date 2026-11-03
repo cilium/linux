@@ -161,7 +161,7 @@ static inline enum tcx_action_base tcx_action_code(struct sk_buff *skb,
 
 #if defined(CONFIG_NET_XGRESS) && defined(CONFIG_BPF_SYSCALL)
 int tcx_prog_attach(const union bpf_attr *attr, struct bpf_prog *prog);
-int tcx_link_attach(const union bpf_attr *attr, struct bpf_prog *prog);
+int tcx_link_attach(const union bpf_attr *attr, struct bpf_prog *prog, bool kernel);
 int tcx_prog_detach(const union bpf_attr *attr, struct bpf_prog *prog);
 void tcx_uninstall(struct net_device *dev, bool ingress);
 
@@ -182,7 +182,7 @@ static inline int tcx_prog_attach(const union bpf_attr *attr,
 }
 
 static inline int tcx_link_attach(const union bpf_attr *attr,
-				  struct bpf_prog *prog)
+				  struct bpf_prog *prog, bool kernel)
 {
 	return -EINVAL;
 }
