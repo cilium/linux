@@ -525,6 +525,16 @@ BTF_ID(func, bpf_remove_dentry_xattr)
 BTF_SET_END(bpf_fs_kfunc_lsm_only_ids)
 
 BTF_ID_LIST_SINGLE(bpf_inode_init_xattr_ids, func, bpf_inode_init_xattr)
+BTF_ID_LIST_SINGLE(bpf_get_task_exe_file_ids, func, bpf_get_task_exe_file)
+
+/*
+ * Hooks called under task_lock() of a task that their program can pass to
+ * bpf_get_task_exe_file(), which takes task_lock() itself.
+ */
+BTF_SET_START(task_locked_hooks)
+BTF_ID(func, bpf_lsm_ptrace_access_check)
+BTF_ID(func, bpf_lsm_task_setrlimit)
+BTF_SET_END(task_locked_hooks)
 
 BTF_SET_START(bpf_inode_init_xattr_hooks)
 BTF_ID(func, bpf_lsm_inode_init_security)
@@ -545,6 +555,9 @@ static int bpf_fs_kfuncs_filter(const struct bpf_prog *prog, u32 kfunc_id)
 		return 0;
 	}
 	if (prog->type == BPF_PROG_TYPE_LSM) {
+		if (kfunc_id == bpf_get_task_exe_file_ids[0] &&
+		    btf_id_set_contains(&task_locked_hooks, prog->aux->attach_btf_id))
+			return -EACCES;
 		if (btf_id_set_contains(&bpf_fs_kfunc_lsm_only_ids, kfunc_id) &&
 		    !bpf_lsm_has_d_inode_locked(prog) &&
 		    !bpf_lsm_has_d_inode_unlocked(prog))
