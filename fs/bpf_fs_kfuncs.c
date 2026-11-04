@@ -498,6 +498,34 @@ __bpf_kfunc struct inode *bpf_real_data_inode(struct file *file)
 	return d_real_inode(file_dentry(file));
 }
 
+/**
+ * bpf_dget_parent - get a reference on the parent of a dentry
+ * @dentry: dentry whose parent to get a reference on
+ *
+ * Get a reference on the parent directory of *dentry*, which keeps the
+ * parent valid even if *dentry* is renamed away and the parent removed
+ * meanwhile. The returned dentry must be released with bpf_dput().
+ *
+ * The parent of a root dentry is the dentry itself.
+ *
+ * Return: A referenced pointer to the parent of *dentry*.
+ */
+__bpf_kfunc struct dentry *bpf_dget_parent(struct dentry *dentry)
+{
+	return dget_parent(dentry);
+}
+
+/**
+ * bpf_dput - put a reference on a dentry
+ * @dentry: dentry to put a reference on
+ *
+ * Put a reference on a dentry acquired with bpf_dget_parent().
+ */
+__bpf_kfunc void bpf_dput(struct dentry *dentry)
+{
+	dput(dentry);
+}
+
 __bpf_kfunc_end_defs();
 
 BTF_KFUNCS_START(bpf_fs_kfunc_set_ids)
@@ -509,6 +537,8 @@ BTF_ID_FLAGS(func, bpf_get_file_xattr, KF_SLEEPABLE)
 BTF_ID_FLAGS(func, bpf_set_dentry_xattr, KF_SLEEPABLE)
 BTF_ID_FLAGS(func, bpf_remove_dentry_xattr, KF_SLEEPABLE)
 BTF_ID_FLAGS(func, bpf_real_data_inode, KF_SLEEPABLE | KF_RET_NULL)
+BTF_ID_FLAGS(func, bpf_dget_parent, KF_ACQUIRE | KF_SLEEPABLE)
+BTF_ID_FLAGS(func, bpf_dput, KF_RELEASE | KF_SLEEPABLE)
 BTF_ID_FLAGS(func, bpf_inode_init_xattr)
 #ifdef CONFIG_NET
 BTF_ID_FLAGS(func, bpf_sock_read_xattr, KF_RCU)

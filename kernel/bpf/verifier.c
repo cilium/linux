@@ -15588,6 +15588,17 @@ static int check_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 	if (err < 0)
 		return err;
 
+	/*
+	 * The lock state of an acquired dentry, unlike the hook's own ones,
+	 * is not known to bpf_lsm_has_d_inode_locked().
+	 */
+	if ((meta.func_id == special_kfunc_list[KF_bpf_set_dentry_xattr] ||
+	     meta.func_id == special_kfunc_list[KF_bpf_remove_dentry_xattr]) &&
+	    reg_is_referenced(env, &regs[BPF_REG_1])) {
+		verbose(env, "%s() cannot take an acquired dentry\n", func_name);
+		return -EINVAL;
+	}
+
 	err = mark_raw_stack(env, &meta, insn_idx);
 	if (err)
 		return err;
