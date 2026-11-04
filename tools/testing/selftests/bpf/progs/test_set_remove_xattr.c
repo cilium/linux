@@ -31,9 +31,13 @@ static inline bool name_match_foo(const char *name)
 	return !bpf_strncmp(name_buf, sizeof(xattr_foo), xattr_foo);
 }
 
-/* Test bpf_set_dentry_xattr and bpf_remove_dentry_xattr */
-SEC("lsm.s/inode_getxattr")
-int BPF_PROG(test_inode_getxattr, struct dentry *dentry, char *name)
+/* Test bpf_set_dentry_xattr and bpf_remove_dentry_xattr. inode_rename is
+ * called without the lock of old_dentry's inode, unlike inode_getxattr,
+ * which nfsd calls with it held shared.
+ */
+SEC("lsm.s/inode_rename")
+int BPF_PROG(test_inode_rename, struct inode *old_dir, struct dentry *dentry,
+	     struct inode *new_dir, struct dentry *new_dentry)
 {
 	struct bpf_dynptr value_ptr;
 	__u32 pid;
@@ -41,10 +45,6 @@ int BPF_PROG(test_inode_getxattr, struct dentry *dentry, char *name)
 
 	pid = bpf_get_current_pid_tgid() >> 32;
 	if (pid != monitored_pid)
-		return 0;
-
-	/* Only do the following for security.bpf.foo */
-	if (!name_match_foo(name))
 		return 0;
 
 	bpf_dynptr_from_mem(read_value, sizeof(read_value), 0, &value_ptr);

@@ -93,6 +93,14 @@ extern int bpf_remove_dentry_xattr(struct dentry *dentry, const char *name__str)
 
 /*
  * Description
+ *  Returns a referenced pointer to the parent of a dentry, which must be
+ *  released with bpf_dput()
+ */
+extern struct dentry *bpf_dget_parent(struct dentry *dentry) __ksym __weak;
+extern void bpf_dput(struct dentry *dentry) __ksym __weak;
+
+/*
+ * Description
  *  Attach a xattr to an inode that is being created, from a program on the
  *  inode_init_security LSM hook. *xattrs* and *xattr_count* must be the
  *  hook's own arguments, passed through unmodified.

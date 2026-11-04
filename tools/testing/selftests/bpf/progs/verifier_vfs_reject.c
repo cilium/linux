@@ -9,6 +9,7 @@
 
 #include "bpf_misc.h"
 #include "bpf_experimental.h"
+#include "bpf_kfuncs.h"
 
 static char buf[PATH_MAX];
 
@@ -192,4 +193,52 @@ int BPF_PROG(inode_rename, struct inode *old_dir, struct dentry *old_dentry,
 		return -EACCES;
 	return 0;
 }
+SEC("lsm/ptrace_access_check")
+__failure __msg("calling kernel function bpf_get_task_exe_file is not allowed")
+int BPF_PROG(get_task_exe_file_under_task_lock, struct task_struct *child,
+	     unsigned int mode)
+{
+	struct file *acquired;
+
+	/* ptrace_access_check is called under task_lock() of child. */
+	acquired = bpf_get_task_exe_file(child);
+	if (!acquired)
+		return 0;
+
+	bpf_put_file(acquired);
+	return 0;
+}
+
+char xattr_value[] = "hello";
+
+SEC("lsm.s/inode_getxattr")
+__failure __msg("calling kernel function bpf_set_dentry_xattr is not allowed")
+int BPF_PROG(set_dentry_xattr_unknown_lock_state, struct dentry *dentry,
+	     const char *name)
+{
+	struct bpf_dynptr value_ptr;
+
+	/* nfsd calls inode_getxattr with the inode lock held shared. */
+	bpf_dynptr_from_mem(xattr_value, sizeof(xattr_value), 0, &value_ptr);
+	bpf_set_dentry_xattr(dentry, "security.bpf.foo", &value_ptr, 0);
+	return 0;
+}
+
+SEC("lsm.s/inode_rename")
+__failure __msg("bpf_set_dentry_xattr() cannot take an acquired dentry")
+int BPF_PROG(set_dentry_xattr_parent, struct inode *old_dir,
+	     struct dentry *old_dentry, struct inode *new_dir,
+	     struct dentry *new_dentry)
+{
+	struct bpf_dynptr value_ptr;
+	struct dentry *parent;
+
+	/* The parent's inode lock is held by the caller of inode_rename. */
+	bpf_dynptr_from_mem(xattr_value, sizeof(xattr_value), 0, &value_ptr);
+	parent = bpf_dget_parent(old_dentry);
+	bpf_set_dentry_xattr(parent, "security.bpf.foo", &value_ptr, 0);
+	bpf_dput(parent);
+	return 0;
+}
+
 char _license[] SEC("license") = "GPL";

@@ -2,6 +2,7 @@
 /* Copyright (c) 2023 Meta Platforms, Inc. and affiliates. */
 
 #include <stdlib.h>
+#include <sys/stat.h>
 #include <sys/types.h>
 #include <sys/xattr.h>
 #include <linux/fsverity.h>
@@ -9,9 +10,12 @@
 #include <test_progs.h>
 #include "test_get_xattr.skel.h"
 #include "test_set_remove_xattr.skel.h"
+#include "test_dget_parent.skel.h"
 #include "test_fsverity.skel.h"
 
 static const char testfile[] = "/tmp/test_progs_fs_kfuncs";
+static const char testfile_renamed[] = "/tmp/test_progs_fs_kfuncs_renamed";
+static const char testdir[] = "/tmp/test_progs_fs_kfuncs_dir";
 
 static void test_get_xattr(const char *name, const char *value, bool allow_access)
 {
@@ -92,23 +96,23 @@ static void set_foo(struct test_set_remove_xattr *skel)
 		  "setxattr foo");
 }
 
-static void validate_bar_match(struct test_set_remove_xattr *skel)
+static void validate_bar_match(struct test_set_remove_xattr *skel, const char *path)
 {
 	char value_out[32];
 	int err;
 
-	err = getxattr(testfile, skel->rodata->xattr_bar, value_out, sizeof(value_out));
+	err = getxattr(path, skel->rodata->xattr_bar, value_out, sizeof(value_out));
 	ASSERT_EQ(err, sizeof(skel->data->value_bar), "getxattr size bar");
 	ASSERT_EQ(strncmp(value_out, skel->data->value_bar, sizeof(skel->data->value_bar)), 0,
 		  "strncmp value_bar");
 }
 
-static void validate_bar_removed(struct test_set_remove_xattr *skel)
+static void validate_bar_removed(struct test_set_remove_xattr *skel, const char *path)
 {
 	char value_out[32];
 	int err;
 
-	err = getxattr(testfile, skel->rodata->xattr_bar, value_out, sizeof(value_out));
+	err = getxattr(path, skel->rodata->xattr_bar, value_out, sizeof(value_out));
 	ASSERT_LT(err, 0, "getxattr size bar should fail");
 }
 
@@ -146,19 +150,22 @@ static void test_set_remove_xattr(void)
 	if (!ASSERT_OK(err, "test_set_remove_xattr__attach"))
 		goto out;
 
-	/* First, test not _locked version of the kfuncs with getxattr. */
+	/* First, test not _locked version of the kfuncs with rename. */
 
-	/* Read security.bpf.foo and trigger test_inode_getxattr. This
-	 * bpf program will set security.bpf.bar to "world".
+	/* Rename the file and trigger test_inode_rename. This bpf program
+	 * will set security.bpf.bar to "world".
 	 */
-	read_and_validate_foo(skel);
-	validate_bar_match(skel);
+	if (!ASSERT_OK(rename(testfile, testfile_renamed), "rename"))
+		goto out;
+	validate_bar_match(skel, testfile_renamed);
 
-	/* Read security.bpf.foo and trigger test_inode_getxattr again.
-	 * This will remove xattr security.bpf.bar.
+	/* Rename it back and trigger test_inode_rename again. This will
+	 * remove xattr security.bpf.bar.
 	 */
+	if (!ASSERT_OK(rename(testfile_renamed, testfile), "rename back"))
+		goto out;
+	validate_bar_removed(skel, testfile);
 	read_and_validate_foo(skel);
-	validate_bar_removed(skel);
 
 	ASSERT_TRUE(skel->bss->set_security_bpf_bar_success, "set_security_bpf_bar_success");
 	ASSERT_TRUE(skel->bss->remove_security_bpf_bar_success, "remove_security_bpf_bar_success");
@@ -171,13 +178,13 @@ static void test_set_remove_xattr(void)
 	 * bpf program will set security.bpf.bar to "world".
 	 */
 	set_foo(skel);
-	validate_bar_match(skel);
+	validate_bar_match(skel, testfile);
 
 	/* Set security.bpf.foo and trigger test_inode_setxattr again.
 	 * This will remove xattr security.bpf.bar.
 	 */
 	set_foo(skel);
-	validate_bar_removed(skel);
+	validate_bar_removed(skel, testfile);
 
 	ASSERT_TRUE(skel->bss->locked_set_security_bpf_bar_success,
 		    "locked_set_security_bpf_bar_success");
@@ -191,7 +198,54 @@ static void test_set_remove_xattr(void)
 out:
 	close(fd);
 	test_set_remove_xattr__destroy(skel);
+	remove(testfile_renamed);
 	remove(testfile);
+}
+
+static void test_dget_parent(void)
+{
+	static const char value[] = "hello";
+	struct test_dget_parent *skel = NULL;
+	char file[64];
+	int fd = -1, err;
+
+	snprintf(file, sizeof(file), "%s/file", testdir);
+	if (!ASSERT_OK(mkdir(testdir, 0755), "mkdir"))
+		return;
+
+	err = setxattr(testdir, "security.bpf.dir", value, sizeof(value), 0);
+	if (err && errno == EOPNOTSUPP) {
+		printf("%s:SKIP:local fs doesn't support xattr (%d)\n"
+		       "To run this test, make sure /tmp filesystem supports xattr.\n",
+		       __func__, errno);
+		test__skip();
+		goto out;
+	}
+	if (!ASSERT_OK(err, "setxattr"))
+		goto out;
+
+	skel = test_dget_parent__open_and_load();
+	if (!ASSERT_OK_PTR(skel, "test_dget_parent__open_and_load"))
+		goto out;
+
+	skel->bss->monitored_pid = getpid();
+	err = test_dget_parent__attach(skel);
+	if (!ASSERT_OK(err, "test_dget_parent__attach"))
+		goto out;
+
+	/* Trigger security_inode_create, which reads the label of testdir */
+	fd = open(file, O_CREAT | O_RDWR, 0644);
+	if (!ASSERT_GE(fd, 0, "create_file"))
+		goto out;
+
+	ASSERT_EQ(skel->bss->parent_xattr_len, sizeof(value), "parent_xattr_len");
+	ASSERT_STREQ(skel->bss->parent_xattr, value, "parent_xattr");
+out:
+	if (fd >= 0)
+		close(fd);
+	test_dget_parent__destroy(skel);
+	remove(file);
+	rmdir(testdir);
 }
 
 #ifndef SHA256_DIGEST_SIZE
@@ -285,6 +339,9 @@ void test_fs_kfuncs(void)
 
 	if (test__start_subtest("set_remove_xattr"))
 		test_set_remove_xattr();
+
+	if (test__start_subtest("dget_parent"))
+		test_dget_parent();
 
 	if (test__start_subtest("fsverity"))
 		test_fsverity();
