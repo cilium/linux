@@ -515,7 +515,10 @@ BTF_ID_FLAGS(func, bpf_sock_read_xattr, KF_RCU)
 #endif
 BTF_KFUNCS_END(bpf_fs_kfunc_set_ids)
 
-/* Side-effecting kfuncs that stay exclusive to LSM programs. */
+/*
+ * Side-effecting kfuncs that stay exclusive to LSM programs, and to the
+ * hooks in which the lock state of d_inode is known.
+ */
 BTF_SET_START(bpf_fs_kfunc_lsm_only_ids)
 BTF_ID(func, bpf_set_dentry_xattr)
 BTF_ID(func, bpf_remove_dentry_xattr)
@@ -526,6 +529,8 @@ BTF_ID_LIST_SINGLE(bpf_inode_init_xattr_ids, func, bpf_inode_init_xattr)
 BTF_SET_START(bpf_inode_init_xattr_hooks)
 BTF_ID(func, bpf_lsm_inode_init_security)
 BTF_SET_END(bpf_inode_init_xattr_hooks)
+
+static bool bpf_lsm_has_d_inode_unlocked(const struct bpf_prog *prog);
 
 static int bpf_fs_kfuncs_filter(const struct bpf_prog *prog, u32 kfunc_id)
 {
@@ -539,8 +544,13 @@ static int bpf_fs_kfuncs_filter(const struct bpf_prog *prog, u32 kfunc_id)
 			return -EACCES;
 		return 0;
 	}
-	if (prog->type == BPF_PROG_TYPE_LSM)
+	if (prog->type == BPF_PROG_TYPE_LSM) {
+		if (btf_id_set_contains(&bpf_fs_kfunc_lsm_only_ids, kfunc_id) &&
+		    !bpf_lsm_has_d_inode_locked(prog) &&
+		    !bpf_lsm_has_d_inode_unlocked(prog))
+			return -EACCES;
 		return 0;
+	}
 	if (prog->type != BPF_PROG_TYPE_STRUCT_OPS)
 		return -EACCES;
 	/* ->st_ops is unset during the cfg pass; enforced once it is set. */
@@ -559,8 +569,11 @@ static int bpf_fs_kfuncs_filter(const struct bpf_prog *prog, u32 kfunc_id)
  * Some hooks already locked d_inode, while some hooks have not locked
  * d_inode. Therefore, we need different kfuncs for different hooks.
  * Specifically, hooks in the following list (d_inode_locked_hooks)
- * should call bpf_[set|remove]_dentry_xattr_locked; while other hooks
- * should call bpf_[set|remove]_dentry_xattr.
+ * should call bpf_[set|remove]_dentry_xattr_locked; while hooks in
+ * d_inode_unlocked_hooks should call bpf_[set|remove]_dentry_xattr.
+ * Other hooks are called with d_inode locked at some call sites and
+ * unlocked at others, or with locks held that d_inode's lock must not
+ * nest in, so neither kfunc may be called there.
  */
 BTF_SET_START(d_inode_locked_hooks)
 BTF_ID(func, bpf_lsm_inode_post_removexattr)
@@ -573,9 +586,30 @@ BTF_ID(func, bpf_lsm_inode_setxattr)
 BTF_ID(func, bpf_lsm_inode_unlink)
 BTF_SET_END(d_inode_locked_hooks)
 
+BTF_SET_START(d_inode_unlocked_hooks)
+BTF_ID(func, bpf_lsm_inode_create)
+BTF_ID(func, bpf_lsm_inode_mknod)
+BTF_ID(func, bpf_lsm_inode_readlink)
+BTF_ID(func, bpf_lsm_inode_rename)
+BTF_ID(func, bpf_lsm_inode_symlink)
+#ifdef CONFIG_SECURITY_PATH
+BTF_ID(func, bpf_lsm_path_link)
+BTF_ID(func, bpf_lsm_path_mkdir)
+BTF_ID(func, bpf_lsm_path_rename)
+BTF_ID(func, bpf_lsm_path_rmdir)
+BTF_ID(func, bpf_lsm_path_symlink)
+BTF_ID(func, bpf_lsm_path_unlink)
+#endif
+BTF_SET_END(d_inode_unlocked_hooks)
+
 bool bpf_lsm_has_d_inode_locked(const struct bpf_prog *prog)
 {
 	return btf_id_set_contains(&d_inode_locked_hooks, prog->aux->attach_btf_id);
+}
+
+static bool bpf_lsm_has_d_inode_unlocked(const struct bpf_prog *prog)
+{
+	return btf_id_set_contains(&d_inode_unlocked_hooks, prog->aux->attach_btf_id);
 }
 
 static const struct btf_kfunc_id_set bpf_fs_kfunc_set = {
