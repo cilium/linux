@@ -2872,6 +2872,13 @@ void sock_pfree(struct sk_buff *skb)
 }
 EXPORT_SYMBOL(sock_pfree);
 
+void sock_pfree_ref(struct sk_buff *skb)
+{
+	DEBUG_NET_WARN_ON_ONCE(!sk_fullsock(skb->sk));
+	sock_gen_put(skb->sk);
+}
+EXPORT_SYMBOL(sock_pfree_ref);
+
 void skb_release_prefetched_sk(struct sk_buff *skb, struct sock *sk,
 			       bool refcounted)
 {
