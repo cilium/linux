@@ -62,6 +62,8 @@ static const int bpf2a64[] = {
 	[BPF_REG_9] = A64_R(22),
 	/* read-only frame pointer to access stack */
 	[BPF_REG_FP] = A64_R(25),
+	/* names the stack arguments only, no encoder takes this for a register */
+	[BPF_REG_PARAMS] = 0xff,
 	/* callee saved register for the pointer to the stack in arena */
 	[BPF_REG_ARENA_SP] = A64_R(23),
 	/* temporary registers for BPF JIT */
@@ -1257,6 +1259,12 @@ static int emit_lse_atomic(const struct bpf_insn *insn, struct jit_ctx *ctx)
 	const s16 off = insn->off;
 	u8 reg = dst;
 
+	/* The read-modify-write atomics are emitted in 32 or 64 bits only */
+	if (BPF_SIZE(code) != BPF_W && !isdw) {
+		pr_err_once("unknown atomic size %02x\n", code);
+		return -EINVAL;
+	}
+
 	/*
 	 * The arena base with the offset first and the arena offset zero
 	 * extended onto it, see emit_arena_ldst()
@@ -1339,6 +1347,19 @@ static int emit_ll_sc_atomic(const struct bpf_insn *insn, struct jit_ctx *ctx)
 	if (BPF_MODE(code) == BPF_PROBE_ATOMIC) {
 		/* ll_sc based atomics don't support unsafe pointers yet. */
 		pr_err_once("unknown atomic opcode %02x\n", code);
+		return -EINVAL;
+	}
+
+	/* The read-modify-write atomics are emitted in 32 or 64 bits only */
+	if (BPF_SIZE(code) != BPF_W && !isdw) {
+		pr_err_once("unknown atomic size %02x\n", code);
+		return -EINVAL;
+	}
+
+	/* The fetch variants keep the operand in BPF_REG_AX */
+	if ((imm & BPF_FETCH) && imm != BPF_XCHG && imm != BPF_CMPXCHG &&
+	    (insn->src_reg == BPF_REG_AX || insn->dst_reg == BPF_REG_AX)) {
+		pr_err_once("atomic fetch with BPF_REG_AX\n");
 		return -EINVAL;
 	}
 
@@ -1826,26 +1847,29 @@ static void emit_stack_arg_load(u8 dst, s16 bpf_off, struct jit_ctx *ctx)
 		emit(A64_LDR64I(dst, A64_FP, (idx - NR_STACK_ARG_REGS) * sizeof(u64) + 16), ctx);
 }
 
-static void emit_stack_arg_store(u8 src_a64, s16 bpf_off, struct jit_ctx *ctx)
-{
-	int idx = -bpf_off / sizeof(u64) - 1;
-
-	if (idx < NR_STACK_ARG_REGS)
-		emit(A64_MOV(1, stack_arg_reg[idx], src_a64), ctx);
-	else
-		emit(A64_STR64I(src_a64, A64_SP, (idx - NR_STACK_ARG_REGS) * sizeof(u64)), ctx);
-}
-
-static void emit_stack_arg_store_imm(s32 imm, s16 bpf_off, const u8 tmp, struct jit_ctx *ctx)
+/* An argument beyond the registers has to be within the area the prologue set up */
+static int emit_stack_arg_store(u8 src_a64, s16 bpf_off, struct jit_ctx *ctx)
 {
 	int idx = -bpf_off / sizeof(u64) - 1;
 
 	if (idx < NR_STACK_ARG_REGS) {
-		emit_a64_mov_i(1, stack_arg_reg[idx], imm, ctx);
-	} else {
-		emit_a64_mov_i(1, tmp, imm, ctx);
-		emit(A64_STR64I(tmp, A64_SP, (idx - NR_STACK_ARG_REGS) * sizeof(u64)), ctx);
+		emit(A64_MOV(1, stack_arg_reg[idx], src_a64), ctx);
+		return 0;
 	}
+	idx -= NR_STACK_ARG_REGS;
+	if ((idx + 1) * sizeof(u64) > ctx->stack_arg_size)
+		return -EINVAL;
+	emit(A64_STR64I(src_a64, A64_SP, idx * sizeof(u64)), ctx);
+	return 0;
+}
+
+static int emit_stack_arg_store_imm(s32 imm, s16 bpf_off, const u8 tmp, struct jit_ctx *ctx)
+{
+	int idx = -bpf_off / sizeof(u64) - 1;
+	u8 reg = idx < NR_STACK_ARG_REGS ? stack_arg_reg[idx] : tmp;
+
+	emit_a64_mov_i(1, reg, imm, ctx);
+	return idx < NR_STACK_ARG_REGS ? 0 : emit_stack_arg_store(reg, bpf_off, ctx);
 }
 
 /*
@@ -2013,6 +2037,9 @@ static int build_insn(const struct bpf_verifier_env *env, const struct bpf_insn 
 		case 32:
 			emit(A64_SXTW(is64, dst, src), ctx);
 			break;
+		default:
+			pr_err_once("unknown mov offset %d\n", insn->off);
+			return -EINVAL;
 		}
 		break;
 	/* dst = dst OP src */
@@ -2091,6 +2118,9 @@ static int build_insn(const struct bpf_verifier_env *env, const struct bpf_insn 
 		case 64:
 			emit(A64_REV64(dst, dst), ctx);
 			break;
+		default:
+			pr_err_once("unknown byte swap width %d\n", imm);
+			return -EINVAL;
 		}
 		break;
 emit_bswap_uxt:
@@ -2106,6 +2136,9 @@ emit_bswap_uxt:
 		case 64:
 			/* nop */
 			break;
+		default:
+			pr_err_once("unknown byte swap width %d\n", imm);
+			return -EINVAL;
 		}
 		break;
 	/* dst = imm */
@@ -2463,7 +2496,7 @@ emit_cond_jmp:
 	case BPF_LDX | BPF_MEM | BPF_H:
 	case BPF_LDX | BPF_MEM | BPF_B:
 	case BPF_LDX | BPF_MEM | BPF_DW:
-		if (insn->src_reg == BPF_REG_PARAMS) {
+		if (is_stack_arg_ldx(insn)) {
 			emit_stack_arg_load(dst, off, ctx);
 			break;
 		}
@@ -2531,8 +2564,10 @@ emit_cond_jmp:
 	case BPF_ST | BPF_MEM | BPF_H:
 	case BPF_ST | BPF_MEM | BPF_B:
 	case BPF_ST | BPF_MEM | BPF_DW:
-		if (insn->dst_reg == BPF_REG_PARAMS) {
-			emit_stack_arg_store_imm(imm, off, tmp, ctx);
+		if (is_stack_arg_st(insn)) {
+			ret = emit_stack_arg_store_imm(imm, off, tmp, ctx);
+			if (ret)
+				return ret;
 			break;
 		}
 		fallthrough;
@@ -2558,8 +2593,10 @@ emit_cond_jmp:
 	case BPF_STX | BPF_MEM | BPF_H:
 	case BPF_STX | BPF_MEM | BPF_B:
 	case BPF_STX | BPF_MEM | BPF_DW:
-		if (insn->dst_reg == BPF_REG_PARAMS) {
-			emit_stack_arg_store(src, off, ctx);
+		if (is_stack_arg_stx(insn)) {
+			ret = emit_stack_arg_store(src, off, ctx);
+			if (ret)
+				return ret;
 			break;
 		}
 		fallthrough;
