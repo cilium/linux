@@ -24400,6 +24400,12 @@ int bpf_check_attach_target(struct bpf_verifier_log *log,
 			bpf_log(log, "Only fentry can attach to %s, which can unwind\n", tname);
 			return -EINVAL;
 		}
+		/* bpf_throw() does not find the main prog above the trampoline that called it */
+		if (subprog && aux->func && aux->func[subprog]->aux->might_throw &&
+		    !prog_extension && prog->expected_attach_type != BPF_TRACE_FENTRY) {
+			bpf_log(log, "Only fentry can attach to %s, which might throw\n", tname);
+			return -EINVAL;
+		}
 		/* What it takes of the stack is not counted, see bpf_insert_recursion_checks() */
 		if (aux->func && aux->func[subprog]->aux->in_recursion) {
 			bpf_log(log, "Cannot attach to %s, which is called in a recursion\n", tname);
