@@ -538,6 +538,36 @@ int arena_ptr_add_arena_ptr(void *ctx)
 }
 
 /*
+ * Tests that a 64-bit shift of an arena pointer by 32 or more, which leaves
+ * none of its 32 bits, is not turned into a 32-bit shift by that count.
+ */
+SEC("syscall")
+__success __retval(0)
+int arena_ptr_shift_by_32_or_more(void *ctx)
+{
+	__u64 lsh, rsh, arsh;
+
+	/* Needed for the verifier to link the arena to the subprog. */
+	volatile char __arena *base = arena_base(&arena);
+
+	asm volatile (
+		"%[lsh] = 8192;"
+		"%[lsh] = addr_space_cast(%[lsh], 0, 1);"
+		"%[rsh] = %[lsh];"
+		"%[arsh] = %[lsh];"
+		"%[lsh] <<= 40;"
+		"%[rsh] >>= 32;"
+		"%[arsh] s>>= 63;"
+		: [lsh] "=&r"(lsh),
+		  [rsh] "=&r"(rsh),
+		  [arsh] "=&r"(arsh)
+		: "r"(base)
+		:
+	);
+	return lsh || rsh || arsh;
+}
+
+/*
  * Tests that one insn cannot be reached with a register holding a scalar
  * on one path and an arena pointer on the other.
  */
