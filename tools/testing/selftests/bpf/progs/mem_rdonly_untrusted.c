@@ -109,7 +109,7 @@ int stx_not_ok(void *ctx)
 
 SEC("socket")
 __failure
-__msg("cannot write into rdonly_untrusted_mem")
+__msg("rdonly_untrusted_mem is not allowed")
 int atomic_not_ok(void *ctx)
 {
 	int v, *p;
@@ -122,7 +122,7 @@ int atomic_not_ok(void *ctx)
 
 SEC("socket")
 __failure
-__msg("cannot write into rdonly_untrusted_mem")
+__msg("rdonly_untrusted_mem is not allowed")
 int atomic_rmw_not_ok(void *ctx)
 {
 	long v, *p;
