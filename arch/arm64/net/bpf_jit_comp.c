@@ -95,6 +95,9 @@ struct jit_ctx {
 	bool fp_used;
 	bool priv_sp_used;
 	bool write;
+	bool bhb_done;
+	u8 nr_bhb_insn;
+	__le32 bhb_insn[8];
 	unsigned long *tb;
 };
 
@@ -1470,7 +1473,7 @@ static void build_plt(struct jit_ctx *ctx)
 }
 
 /* Clobbers BPF registers 1-4, aka x0-x3 */
-static void __maybe_unused build_bhb_mitigation(struct jit_ctx *ctx)
+static void emit_bhb_mitigation(struct jit_ctx *ctx)
 {
 	const u8 r1 = bpf2a64[BPF_REG_1]; /* aka x0 */
 	u8 k = get_spectre_bhb_loop_value();
@@ -1511,6 +1514,30 @@ static void __maybe_unused build_bhb_mitigation(struct jit_ctx *ctx)
 			pr_err_once("Firmware mitigation enabled with unknown conduit\n");
 		}
 	}
+}
+
+/*
+ * A CPU that comes up late can change the mitigation. Decide once per program,
+ * so that the epilogue is written the way it was sized.
+ */
+static void build_bhb_mitigation(struct jit_ctx *ctx)
+{
+	int i;
+
+	if (!ctx->bhb_done) {
+		struct jit_ctx tmp = { .image = ctx->bhb_insn, .write = true };
+
+		emit_bhb_mitigation(&tmp);
+		/* A BRK makes validate_code() refuse the image */
+		if (WARN_ON_ONCE(tmp.idx > ARRAY_SIZE(ctx->bhb_insn))) {
+			ctx->bhb_insn[0] = cpu_to_le32(AARCH64_BREAK_FAULT);
+			tmp.idx = 1;
+		}
+		ctx->nr_bhb_insn = tmp.idx;
+		ctx->bhb_done = true;
+	}
+	for (i = 0; i < ctx->nr_bhb_insn; i++)
+		emit(le32_to_cpu(ctx->bhb_insn[i]), ctx);
 }
 
 static void build_epilogue(struct jit_ctx *ctx, bool was_classic, bool unwind)
