@@ -1448,8 +1448,8 @@ asm (
  *      .quad dummy_tramp
  *
  * when a long jump trampoline is attached, target is filled with the
- * trampoline address, and when the trampoline is removed, target is
- * restored to dummy_tramp address.
+ * trampoline address. It stays when the trampoline is removed: nothing
+ * branches to the plt then, see bpf_arch_text_poke().
  */
 static void build_plt(struct jit_ctx *ctx)
 {
@@ -3785,7 +3785,8 @@ static int gen_branch_or_nop(enum aarch64_insn_branch_type type, void *ip,
  *      target:
  *              .quad dummy_tramp // plt target
  *
- * This is also the state when no trampoline is attached.
+ * This is also the state when no trampoline is attached, but for the plt
+ * target, which keeps the address of the last long-jump trampoline.
  *
  * When a short-jump bpf trampoline is attached, the patchsite is patched
  * to a bl instruction to the trampoline directly:
@@ -3818,8 +3819,9 @@ static int gen_branch_or_nop(enum aarch64_insn_branch_type type, void *ip,
  *      target:
  *              .quad <long-jump bpf trampoline address> // plt target
  *
- * The dummy_tramp is used to prevent another CPU from jumping to unknown
- * locations during the patching process, making the patching process easier.
+ * The dummy_tramp is only what the target holds before the first long jump:
+ * it returns behind a bl to the plt, which is not where a jump to the plt of
+ * an extended prog has to go, so the target never goes back to it.
  */
 int bpf_arch_text_poke(void *ip, enum bpf_text_poke_type old_t,
 		       enum bpf_text_poke_type new_t, void *old_addr,
@@ -3835,7 +3837,6 @@ int bpf_arch_text_poke(void *ip, enum bpf_text_poke_type old_t,
 	enum aarch64_insn_branch_type branch_type;
 	char namebuf[KSYM_NAME_LEN];
 	void *image = NULL;
-	u64 plt_target = 0ULL;
 	bool poking_bpf_entry;
 
 	if (!bpf_address_lookup((unsigned long)ip, &size, &offset, namebuf))
@@ -3877,39 +3878,6 @@ int bpf_arch_text_poke(void *ip, enum bpf_text_poke_type old_t,
 	if (gen_branch_or_nop(branch_type, ip, new_addr, plt, &new_insn) < 0)
 		return -EFAULT;
 
-	if (is_long_jump(ip, new_addr))
-		plt_target = (u64)new_addr;
-	else if (is_long_jump(ip, old_addr))
-		/* if the old target is a long jump and the new target is not,
-		 * restore the plt target to dummy_tramp, so there is always a
-		 * legal and harmless address stored in plt target, and we'll
-		 * never jump from plt to an unknown place.
-		 */
-		plt_target = (u64)&dummy_tramp;
-
-	/*
-	 * non-zero plt_target indicates we're patching a bpf prog,
-	 * which is read only. The prog may share its page in the bpf
-	 * prog pack with other progs, so write the aligned target
-	 * through the text patching fixmap without flipping the
-	 * page permissions to avoid racing with concurrent pokers.
-	 *
-	 * since plt target points to either the new trampoline
-	 * or dummy_tramp, even if another CPU reads the old plt
-	 * target value before fetching the bl instruction to plt,
-	 * it will be brought back by dummy_tramp, so no barrier is
-	 * required here.
-	 */
-	if (plt_target &&
-	    aarch64_insn_write_literal_u64(&plt->target, plt_target))
-		return -EFAULT;
-
-	/* if the old target and the new target are both long jumps, no
-	 * patching is required
-	 */
-	if (old_insn == new_insn)
-		return 0;
-
 	mutex_lock(&text_mutex);
 	if (aarch64_insn_read(ip, &replaced)) {
 		ret = -EFAULT;
@@ -3918,6 +3886,23 @@ int bpf_arch_text_poke(void *ip, enum bpf_text_poke_type old_t,
 
 	if (replaced != old_insn) {
 		ret = -EFAULT;
+		goto out;
+	}
+
+	/*
+	 * Write the plt target before the patch site branches to the plt. It
+	 * is never set back: a CPU on its way through the plt has to find the
+	 * old target, which stays valid for it like the old image does.
+	 */
+	if (is_long_jump(ip, new_addr) &&
+	    aarch64_insn_write_literal_u64(&plt->target, (u64)new_addr)) {
+		ret = -EFAULT;
+		goto out;
+	}
+
+	/* Both are long jumps: the plt target was all there is to change */
+	if (old_insn == new_insn) {
+		ret = 0;
 		goto out;
 	}
 
