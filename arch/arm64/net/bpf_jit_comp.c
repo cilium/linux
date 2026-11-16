@@ -786,7 +786,7 @@ static bool emit_mul_const(bool is64, u8 dst, u8 tmp, s32 imm, struct jit_ctx *c
 }
 
 /* generated main prog prologue:
- *      bti c // if CONFIG_ARM64_BTI_KERNEL
+ *      bti jc // if CONFIG_ARM64_BTI_KERNEL
  *      mov x9, lr
  *      nop  // POKE_OFFSET
  *      paciasp // if CONFIG_ARM64_PTR_AUTH_KERNEL
@@ -795,6 +795,7 @@ static bool emit_mul_const(bool is64, u8 dst, u8 tmp, s32 imm, struct jit_ctx *c
  *      stp xzr, x26, [sp, #-16]!
  *      mov x26, sp
  *      // PROLOGUE_OFFSET
+ *      bti j // if CONFIG_ARM64_BTI_KERNEL, the tail call lands here
  *	// save callee-saved registers
  */
 static void prepare_bpf_tail_call_cnt(struct jit_ctx *ctx)
@@ -1629,7 +1630,7 @@ static void build_epilogue(struct jit_ctx *ctx, bool was_classic, bool unwind)
 #define BPF_ARENA_ACCESS           BIT(21)
 #define BPF_ARENA_WRITE            BIT(22)
 #define BPF_FIXUP_REG_MASK	GENMASK(31, 27)
-#define DONT_CLEAR 5 /* Unused ARM64 register from BPF's POV */
+#define DONT_CLEAR 5 /* x5 is no BPF register, a load never has it for a destination */
 
 bool ex_handler_bpf(const struct exception_table_entry *ex,
 		    struct pt_regs *regs)

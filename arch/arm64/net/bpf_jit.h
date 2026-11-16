@@ -309,7 +309,7 @@
 
 /* Logical (immediate) */
 #define A64_LOGIC_IMM(sf, Rd, Rn, imm, type) ({ \
-	u64 imm64 = (sf) ? (u64)imm : (u64)(u32)imm; \
+	u64 imm64 = (sf) ? (u64)(imm) : (u64)(u32)(imm); \
 	aarch64_insn_gen_logical_immediate(AARCH64_INSN_LOGIC_##type, \
 		A64_VARIANT(sf), Rn, Rd, imm64); \
 })
