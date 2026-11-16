@@ -2914,6 +2914,14 @@ skip_init_ctx:
 	if (WARN_ON_ONCE(ctx.idx > ctx.max_idx))
 		goto out_free_hdr;
 
+	/* A shorter extra pass leaves the end of the first image behind its own */
+	if (extra_pass) {
+		int i, plt_words = PLT_TARGET_SIZE / AARCH64_INSN_SIZE;
+
+		for (i = ctx.idx + plt_words; i < ctx.max_idx + plt_words; i++)
+			ctx.image[i] = cpu_to_le32(AARCH64_BREAK_FAULT);
+	}
+
 	/* Extra pass to validate JITed code. */
 	if (validate_ctx(&ctx))
 		goto out_free_hdr;
