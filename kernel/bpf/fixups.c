@@ -2301,9 +2301,19 @@ int bpf_do_misc_fixups(struct bpf_verifier_env *env)
 			goto next_insn;
 		}
 
-		if (env->insn_aux_data[i].needs_zext)
-			/* Convert BPF_CLASS(insn->code) == BPF_ALU64 to 32-bit ALU */
-			insn->code = BPF_ALU | BPF_OP(insn->code) | BPF_SRC(insn->code);
+		if (env->insn_aux_data[i].needs_zext) {
+			u8 op = BPF_OP(insn->code);
+
+			/*
+			 * Convert BPF_CLASS(insn->code) == BPF_ALU64 to 32-bit ALU. A
+			 * shift by 32 or more leaves nothing of the 32 bits.
+			 */
+			if ((op == BPF_LSH || op == BPF_RSH || op == BPF_ARSH) &&
+			    BPF_SRC(insn->code) == BPF_K && insn->imm >= 32)
+				*insn = BPF_MOV32_IMM(insn->dst_reg, 0);
+			else
+				insn->code = BPF_ALU | op | BPF_SRC(insn->code);
+		}
 
 		/* Make sdiv/smod divide-by-minus-one exceptions impossible. */
 		if ((insn->code == (BPF_ALU64 | BPF_MOD | BPF_K) ||
