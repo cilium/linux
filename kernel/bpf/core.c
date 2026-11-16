@@ -1453,14 +1453,16 @@ bpf_jit_binary_pack_alloc(unsigned int proglen, u8 **image_ptr,
 int bpf_jit_binary_pack_finalize(struct bpf_binary_header *ro_header,
 				 struct bpf_binary_header *rw_header)
 {
+	u32 size = rw_header->size;
 	void *ptr;
 
-	ptr = bpf_arch_text_copy(ro_header, rw_header, rw_header->size);
+	ptr = bpf_arch_text_copy(ro_header, rw_header, size);
 
 	kvfree(rw_header);
 
+	/* The size never made it into ro_header then */
 	if (IS_ERR(ptr)) {
-		bpf_prog_pack_free(ro_header, ro_header->size);
+		bpf_prog_pack_free(ro_header, size);
 		return PTR_ERR(ptr);
 	}
 	return 0;
