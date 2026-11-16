@@ -3512,6 +3512,10 @@ static int prepare_trampoline(struct jit_ctx *ctx, struct bpf_tramp_image *im,
 	emit(A64_STR64I(A64_R(19), A64_SP, regs_off), ctx);
 	emit(A64_STR64I(A64_R(20), A64_SP, regs_off + 8), ctx);
 
+	/* A prog that is skipped for recursion leaves no return value */
+	if (flags & BPF_TRAMP_F_RET_FENTRY_RET)
+		emit(A64_STR64I(A64_ZR, A64_SP, retval_off), ctx);
+
 	if (flags & BPF_TRAMP_F_CALL_ORIG) {
 		/* for the first pass, assume the worst case */
 		if (!ctx->image)
