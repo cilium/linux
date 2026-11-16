@@ -162,6 +162,7 @@ u32 aarch64_insn_decode_register(enum aarch64_insn_register_type type,
 		shift = 10;
 		break;
 	case AARCH64_INSN_REGTYPE_RM:
+	case AARCH64_INSN_REGTYPE_RS:
 		shift = 16;
 		break;
 	default:
@@ -886,9 +887,9 @@ static u32 aarch64_insn_encode_cas_order(enum aarch64_insn_mem_order_type type,
 	return insn;
 }
 
-u32 aarch64_insn_gen_cas(enum aarch64_insn_register result,
+u32 aarch64_insn_gen_cas(enum aarch64_insn_register value,
 			 enum aarch64_insn_register address,
-			 enum aarch64_insn_register value,
+			 enum aarch64_insn_register result,
 			 enum aarch64_insn_size_type size,
 			 enum aarch64_insn_mem_order_type order)
 {
@@ -910,13 +911,13 @@ u32 aarch64_insn_gen_cas(enum aarch64_insn_register result,
 	insn = aarch64_insn_encode_cas_order(order, insn);
 
 	insn = aarch64_insn_encode_register(AARCH64_INSN_REGTYPE_RT, insn,
-					    result);
+					    value);
 
 	insn = aarch64_insn_encode_register(AARCH64_INSN_REGTYPE_RN, insn,
 					    address);
 
 	return aarch64_insn_encode_register(AARCH64_INSN_REGTYPE_RS, insn,
-					    value);
+					    result);
 }
 
 u32 aarch64_insn_gen_add_sub_imm(enum aarch64_insn_register dst,
@@ -1826,6 +1827,13 @@ u32 aarch64_insn_gen_mrs(enum aarch64_insn_register result,
 			 enum aarch64_insn_system_register sysreg)
 {
 	u32 insn = aarch64_insn_get_mrs_value();
+
+	/* o0:op1:CRn:CRm:op2, bit 20 is part of the opcode */
+	if (sysreg & ~GENMASK(14, 0)) {
+		pr_err("%s: unknown system register encoding %d\n", __func__,
+		       sysreg);
+		return AARCH64_BREAK_FAULT;
+	}
 
 	insn &= ~GENMASK(19, 0);
 	insn |= sysreg << 5;
