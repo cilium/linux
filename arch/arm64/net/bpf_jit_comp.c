@@ -81,6 +81,7 @@ static const int bpf2a64[] = {
 struct jit_ctx {
 	const struct bpf_prog *prog;
 	int idx;
+	int max_idx; /* instructions the image has room for */
 	int epilogue_offset;
 	int *offset;
 	int exentry_idx;
@@ -114,17 +115,22 @@ struct bpf_plt {
 #define PRIV_STACK_GUARD_SZ    16
 #define PRIV_STACK_GUARD_VAL   0xEB9F12345678eb9fULL
 
+/* Write an instruction to a place in the image that was sized for one */
+static inline void emit_at(const u32 insn, int idx, struct jit_ctx *ctx)
+{
+	if (ctx->image && ctx->write && idx < ctx->max_idx)
+		ctx->image[idx] = cpu_to_le32(insn);
+}
+
 static inline void emit(const u32 insn, struct jit_ctx *ctx)
 {
-	if (ctx->image != NULL && ctx->write)
-		ctx->image[ctx->idx] = cpu_to_le32(insn);
-
+	emit_at(insn, ctx->idx, ctx);
 	ctx->idx++;
 }
 
 static inline void emit_u32_data(const u32 data, struct jit_ctx *ctx)
 {
-	if (ctx->image != NULL && ctx->write)
+	if (ctx->image && ctx->write && ctx->idx < ctx->max_idx)
 		ctx->image[ctx->idx] = (__force __le32)data;
 
 	ctx->idx++;
@@ -1084,10 +1090,8 @@ static int emit_bpf_tail_call(struct jit_ctx *ctx)
 	const u8 prg = bpf2a64[TMP_REG_2];
 	const u8 tcc = bpf2a64[TMP_REG_3];
 	const u8 ptr = bpf2a64[TCCNT_PTR];
+	int branch1, branch2, branch3;
 	size_t off;
-	__le32 *branch1 = NULL;
-	__le32 *branch2 = NULL;
-	__le32 *branch3 = NULL;
 
 	/* The struct offsets fit the immediate forms, the count fits cmp */
 	BUILD_BUG_ON(offsetof(struct bpf_array, map.max_entries) % 4 ||
@@ -1104,7 +1108,7 @@ static int emit_bpf_tail_call(struct jit_ctx *ctx)
 	off = offsetof(struct bpf_array, map.max_entries);
 	emit(A64_LDR32I(tmp, r2, off), ctx);
 	emit(A64_CMP(0, r3, tmp), ctx);
-	branch1 = ctx->image + ctx->idx;
+	branch1 = ctx->idx;
 	emit(A64_NOP, ctx);
 
 	/*
@@ -1113,7 +1117,7 @@ static int emit_bpf_tail_call(struct jit_ctx *ctx)
 	 */
 	emit(A64_LDR64I(tcc, ptr, 0), ctx);
 	emit(A64_CMP_I(1, tcc, MAX_TAIL_CALL_CNT), ctx);
-	branch2 = ctx->image + ctx->idx;
+	branch2 = ctx->idx;
 	emit(A64_NOP, ctx);
 
 	/* (*tail_call_cnt_ptr)++; */
@@ -1126,7 +1130,7 @@ static int emit_bpf_tail_call(struct jit_ctx *ctx)
 	off = offsetof(struct bpf_array, ptrs);
 	emit(A64_ADD_I(1, tmp, r2, off), ctx);
 	emit(A64_LDR64_UXTW3(prg, tmp, r3), ctx);
-	branch3 = ctx->image + ctx->idx;
+	branch3 = ctx->idx;
 	emit(A64_NOP, ctx);
 
 	/* Update tail_call_cnt if the slot is populated. */
@@ -1147,16 +1151,9 @@ static int emit_bpf_tail_call(struct jit_ctx *ctx)
 	emit(A64_ADD_I(1, tmp, tmp, sizeof(u32) * PROLOGUE_OFFSET), ctx);
 	emit(A64_BR(tmp), ctx);
 
-	if (ctx->image) {
-		off = &ctx->image[ctx->idx] - branch1;
-		*branch1 = cpu_to_le32(A64_B_(A64_COND_CS, off));
-
-		off = &ctx->image[ctx->idx] - branch2;
-		*branch2 = cpu_to_le32(A64_B_(A64_COND_CS, off));
-
-		off = &ctx->image[ctx->idx] - branch3;
-		*branch3 = cpu_to_le32(A64_CBZ(1, prg, off));
-	}
+	emit_at(A64_B_(A64_COND_CS, ctx->idx - branch1), branch1, ctx);
+	emit_at(A64_B_(A64_COND_CS, ctx->idx - branch2), branch2, ctx);
+	emit_at(A64_CBZ(1, prg, ctx->idx - branch3), branch3, ctx);
 
 	return 0;
 }
@@ -1468,7 +1465,8 @@ static void build_plt(struct jit_ctx *ctx)
 	emit(A64_LDR64LIT(tmp, 2 * AARCH64_INSN_SIZE), ctx);
 	emit(A64_BR(tmp), ctx);
 
-	if (ctx->image)
+	/* The image has room for the target behind max_idx instructions */
+	if (ctx->image && ctx->idx <= ctx->max_idx)
 		plt->target = (u64)&dummy_tramp;
 }
 
@@ -1525,7 +1523,11 @@ static void build_bhb_mitigation(struct jit_ctx *ctx)
 	int i;
 
 	if (!ctx->bhb_done) {
-		struct jit_ctx tmp = { .image = ctx->bhb_insn, .write = true };
+		struct jit_ctx tmp = {
+			.image = ctx->bhb_insn,
+			.max_idx = ARRAY_SIZE(ctx->bhb_insn),
+			.write = true,
+		};
 
 		emit_bhb_mitigation(&tmp);
 		/* A BRK makes validate_code() refuse the image */
@@ -1662,6 +1664,12 @@ static int add_exception_handler(const struct bpf_insn *insn,
 	    WARN_ON_ONCE(ctx->exentry_idx >= ctx->prog->aux->num_exentries))
 		return -EINVAL;
 
+	/* The dry pass only counts */
+	if (!ctx->write) {
+		ctx->exentry_idx++;
+		return 0;
+	}
+
 	ex = &ctx->prog->aux->extable[ctx->exentry_idx];
 	pc = (unsigned long)&ctx->ro_image[ctx->idx - 1];
 
@@ -1745,6 +1753,12 @@ static int add_unwind_exentry(struct jit_ctx *ctx, int pad)
 	if (!ctx->prog->aux->extable ||
 	    WARN_ON_ONCE(ctx->exentry_idx >= ctx->prog->aux->num_exentries))
 		return -EINVAL;
+
+	/* The dry pass only counts */
+	if (!ctx->write) {
+		ctx->exentry_idx++;
+		return 0;
+	}
 
 	ex = &ctx->prog->aux->extable[ctx->exentry_idx];
 	ins_offset = (long)&ctx->ro_image[ret_addr] - 1 - (long)&ex->insn;
@@ -2800,6 +2814,7 @@ struct bpf_prog *bpf_int_jit_compile(struct bpf_verifier_env *env, struct bpf_pr
 	ctx.epilogue_offset = ctx.idx;
 	build_epilogue(&ctx, was_classic, false);
 	build_plt(&ctx);
+	ctx.max_idx = ctx.idx;
 
 	extable_align = __alignof__(struct exception_table_entry);
 	extable_size = prog->aux->num_exentries *
@@ -2857,6 +2872,10 @@ skip_init_ctx:
 
 	build_epilogue(&ctx, was_classic, false);
 	build_plt(&ctx);
+
+	/* No pass may be longer than the one that sized the image */
+	if (WARN_ON_ONCE(ctx.idx > ctx.max_idx))
+		goto out_free_hdr;
 
 	/* Extra pass to validate JITed code. */
 	if (validate_ctx(&ctx))
@@ -3019,7 +3038,7 @@ static void invoke_bpf_prog(struct jit_ctx *ctx, struct bpf_tramp_image *im,
 			    int retval_off, int run_ctx_off, bool save_ret)
 {
 	void *skip;
-	__le32 *branch;
+	int branch;
 	u64 enter_prog;
 	u64 exit_prog;
 	struct bpf_prog *p = node->link->prog;
@@ -3059,7 +3078,7 @@ static void invoke_bpf_prog(struct jit_ctx *ctx, struct bpf_tramp_image *im,
 	/* if (__bpf_prog_enter(prog) == 0)
 	 *         goto skip_exec_of_prog;
 	 */
-	branch = ctx->image + ctx->idx;
+	branch = ctx->idx;
 	emit(A64_NOP, ctx);
 
 	emit(A64_ADD_I(1, A64_R(0), A64_SP, bargs_off), ctx);
@@ -3071,10 +3090,7 @@ static void invoke_bpf_prog(struct jit_ctx *ctx, struct bpf_tramp_image *im,
 	if (save_ret)
 		emit(A64_STR64I(A64_R(0), A64_SP, retval_off), ctx);
 
-	if (ctx->image) {
-		int offset = &ctx->image[ctx->idx] - branch;
-		*branch = cpu_to_le32(A64_CBZ(1, A64_R(0), offset));
-	}
+	emit_at(A64_CBZ(1, A64_R(0), ctx->idx - branch), branch, ctx);
 
 	/* arg1: prog */
 	emit(A64_MOV(1, A64_R(0), A64_R(19)), ctx);
@@ -3090,7 +3106,7 @@ static void invoke_bpf_prog(struct jit_ctx *ctx, struct bpf_tramp_image *im,
 
 static void invoke_bpf_mod_ret(struct jit_ctx *ctx, struct bpf_tramp_image *im,
 			       struct bpf_tramp_nodes *tn, int bargs_off,
-			       int retval_off, int run_ctx_off, __le32 **branches)
+			       int retval_off, int run_ctx_off, int *branches)
 {
 	int i;
 
@@ -3108,7 +3124,7 @@ static void invoke_bpf_mod_ret(struct jit_ctx *ctx, struct bpf_tramp_image *im,
 		/* Save the location of branch, and generate a nop.
 		 * This nop will be replaced with a cbnz later.
 		 */
-		branches[i] = ctx->image + ctx->idx;
+		branches[i] = ctx->idx;
 		emit(A64_NOP, ctx);
 	}
 }
@@ -3327,7 +3343,7 @@ static int prepare_trampoline(struct jit_ctx *ctx, struct bpf_tramp_image *im,
 	struct bpf_tramp_nodes *fexit = &tnodes[BPF_TRAMP_FEXIT];
 	struct bpf_tramp_nodes *fmod_ret = &tnodes[BPF_TRAMP_MODIFY_RETURN];
 	bool save_ret;
-	__le32 **branches = NULL;
+	int *branches = NULL;
 	bool is_struct_ops = is_struct_ops_tramp(fentry);
 	int cookie_off, cookie_cnt, cookie_bargs_off;
 	int fsession_cnt = bpf_fsession_cnt(tnodes);
@@ -3499,7 +3515,7 @@ static int prepare_trampoline(struct jit_ctx *ctx, struct bpf_tramp_image *im,
 	}
 
 	if (fmod_ret->nr_nodes) {
-		branches = kcalloc(fmod_ret->nr_nodes, sizeof(__le32 *),
+		branches = kcalloc(fmod_ret->nr_nodes, sizeof(*branches),
 				   GFP_KERNEL);
 		if (!branches)
 			return -ENOMEM;
@@ -3520,10 +3536,9 @@ static int prepare_trampoline(struct jit_ctx *ctx, struct bpf_tramp_image *im,
 	}
 
 	/* update the branches saved in invoke_bpf_mod_ret with cbnz */
-	for (i = 0; i < fmod_ret->nr_nodes && ctx->image != NULL; i++) {
-		int offset = &ctx->image[ctx->idx] - branches[i];
-		*branches[i] = cpu_to_le32(A64_CBNZ(1, A64_R(10), offset));
-	}
+	for (i = 0; i < fmod_ret->nr_nodes; i++)
+		emit_at(A64_CBNZ(1, A64_R(10), ctx->idx - branches[i]),
+			branches[i], ctx);
 
 	/* set the "is_return" flag for fsession */
 	func_meta |= (1ULL << BPF_TRAMP_IS_RETURN_SHIFT);
@@ -3652,6 +3667,7 @@ int arch_prepare_bpf_trampoline(struct bpf_tramp_image *im, void *ro_image,
 		.image = image,
 		.ro_image = ro_image,
 		.idx = 0,
+		.max_idx = size / AARCH64_INSN_SIZE,
 		.write = true,
 	};
 
@@ -3661,14 +3677,15 @@ int arch_prepare_bpf_trampoline(struct bpf_tramp_image *im, void *ro_image,
 	if (ret)
 		goto out;
 	ret = prepare_trampoline(&ctx, im, tnodes, func_addr, m, &aaux, flags);
+	if (ret < 0)
+		goto out;
 
-	if (ret > 0 && validate_code(&ctx) < 0) {
+	if (WARN_ON_ONCE(ctx.idx > ctx.max_idx) || validate_code(&ctx) < 0) {
 		ret = -EINVAL;
 		goto out;
 	}
 
-	if (ret > 0)
-		ret *= AARCH64_INSN_SIZE;
+	ret *= AARCH64_INSN_SIZE;
 
 	tmp = bpf_arch_text_copy(ro_image, image, size);
 	if (IS_ERR(tmp)) {
