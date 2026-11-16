@@ -15,6 +15,7 @@
 #include <linux/filter.h>
 #include <linux/memory.h>
 #include <linux/printk.h>
+#include <linux/scs.h>
 #include <linux/slab.h>
 
 #include <asm/asm-extable.h>
@@ -870,6 +871,9 @@ static void push_callee_regs(struct jit_ctx *ctx)
 		emit(A64_PUSH(A64_R(23), A64_R(24), A64_SP), ctx);
 		emit(A64_PUSH(A64_R(25), A64_R(26), A64_SP), ctx);
 		emit(A64_PUSH(A64_R(27), A64_R(28), A64_SP), ctx);
+		/* bpf_throw() does not return, the callback rewinds x18 */
+		if (scs_is_enabled())
+			emit(A64_PUSH(A64_R(18), A64_ZR, A64_SP), ctx);
 		ctx->fp_used = true;
 	} else {
 		find_used_callee_regs(ctx);
@@ -899,6 +903,8 @@ static void pop_callee_regs(struct jit_ctx *ctx)
 	 * two cases.
 	 */
 	if (aux->exception_boundary || aux->exception_cb) {
+		if (scs_is_enabled())
+			emit(A64_POP(A64_R(18), A64_ZR, A64_SP), ctx);
 		emit(A64_POP(A64_R(27), A64_R(28), A64_SP), ctx);
 		emit(A64_POP(A64_R(25), A64_R(26), A64_SP), ctx);
 		emit(A64_POP(A64_R(23), A64_R(24), A64_SP), ctx);
@@ -1029,9 +1035,10 @@ static int build_prologue(struct jit_ctx *ctx, bool ebpf_from_cbpf)
 		 * callee-saved registers. The exception callback will not push
 		 * anything and re-use the main program's stack.
 		 *
-		 * 12 registers are on the stack
+		 * 12 registers are on the stack, and the shadow call stack
+		 * pointer of the main program with its pad if there is one
 		 */
-		emit(A64_SUB_I(1, A64_SP, A64_FP, 96), ctx);
+		emit(A64_SUB_I(1, A64_SP, A64_FP, scs_is_enabled() ? 112 : 96), ctx);
 		/* The callback may use its own BPF stack, set up fp for it. */
 		ctx->fp_used = true;
 	}
