@@ -5216,6 +5216,17 @@ static bool is_arena_reg(struct bpf_verifier_env *env, int regno)
 	return reg->type == PTR_TO_ARENA;
 }
 
+/*
+ * check_ptr_alignment() only sees the offset from the base. The ring buffer
+ * is the one source of PTR_TO_MEM whose base is known to be aligned.
+ */
+static bool is_unaligned_mem_reg(struct bpf_verifier_env *env, int regno)
+{
+	const struct bpf_reg_state *reg = reg_state(env, regno);
+
+	return base_type(reg->type) == PTR_TO_MEM && !(reg->type & MEM_RINGBUF);
+}
+
 static bool is_load_acq_unsafe(struct bpf_verifier_env *env, int regno,
 			       struct bpf_insn *insn)
 {
@@ -5249,6 +5260,8 @@ static bool atomic_ptr_type_ok(struct bpf_verifier_env *env, int regno,
 	if (is_arena_reg(env, regno))
 		return bpf_jit_supports_insn(insn, true);
 	if (is_load_acq_unsafe(env, regno, insn))
+		return false;
+	if (is_unaligned_mem_reg(env, regno) && BPF_SIZE(insn->code) != BPF_B)
 		return false;
 	return true;
 }
