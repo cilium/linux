@@ -1604,6 +1604,10 @@ static int bpf_jit_blind_insn(const struct bpf_insn *from,
 	if (from->dst_reg == BPF_REG_AX || from->src_reg == BPF_REG_AX)
 		goto out;
 
+	/* The second half of a constant load goes the way of the first, in aux[0] */
+	if (!from->code && aux[0].dst_reg == BPF_REG_AX)
+		goto out;
+
 	if (from->imm == 0 &&
 	    (from->code == (BPF_ALU   | BPF_MOV | BPF_K) ||
 	     from->code == (BPF_ALU64 | BPF_MOV | BPF_K))) {
