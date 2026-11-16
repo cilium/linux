@@ -132,7 +132,7 @@ enum aarch64_insn_special_register {
 	AARCH64_INSN_SPCLREG_SPSR_FIQ	= 0xE21B,
 	AARCH64_INSN_SPCLREG_SPSR_EL3	= 0xF200,
 	AARCH64_INSN_SPCLREG_ELR_EL3	= 0xF201,
-	AARCH64_INSN_SPCLREG_SP_EL2	= 0xF210
+	AARCH64_INSN_SPCLREG_SP_EL2	= 0xF208
 };
 
 enum aarch64_insn_system_register {
@@ -265,23 +265,6 @@ enum aarch64_insn_logic_type {
 	AARCH64_INSN_LOGIC_EON,
 	AARCH64_INSN_LOGIC_AND_SETFLAGS,
 	AARCH64_INSN_LOGIC_BIC_SETFLAGS
-};
-
-enum aarch64_insn_prfm_type {
-	AARCH64_INSN_PRFM_TYPE_PLD,
-	AARCH64_INSN_PRFM_TYPE_PLI,
-	AARCH64_INSN_PRFM_TYPE_PST,
-};
-
-enum aarch64_insn_prfm_target {
-	AARCH64_INSN_PRFM_TARGET_L1,
-	AARCH64_INSN_PRFM_TARGET_L2,
-	AARCH64_INSN_PRFM_TARGET_L3,
-};
-
-enum aarch64_insn_prfm_policy {
-	AARCH64_INSN_PRFM_POLICY_KEEP,
-	AARCH64_INSN_PRFM_POLICY_STRM,
 };
 
 enum aarch64_insn_adr_type {
@@ -589,7 +572,6 @@ static __always_inline bool aarch64_insn_uses_literal(u32 insn)
 	       aarch64_insn_is_prfm_lit(insn);
 }
 
-enum aarch64_insn_encoding_class aarch64_get_insn_class(u32 insn);
 u64 aarch64_insn_decode_immediate(enum aarch64_insn_imm_type type, u32 insn);
 u32 aarch64_insn_encode_immediate(enum aarch64_insn_imm_type type,
 				  u32 insn, u64 imm);
@@ -611,6 +593,10 @@ u32 aarch64_insn_gen_cond_branch_imm(unsigned long pc, unsigned long addr,
 static __always_inline u32
 aarch64_insn_gen_hint(enum aarch64_insn_hint_cr_op op)
 {
+	/* CRm:op2 in place, as the enum has it */
+	if (op & ~0xFE0)
+		return AARCH64_BREAK_FAULT;
+
 	return aarch64_insn_get_hint_value() | op;
 }
 
@@ -730,9 +716,9 @@ u32 aarch64_insn_gen_atomic_ld_op(enum aarch64_insn_register result,
 				  enum aarch64_insn_size_type size,
 				  enum aarch64_insn_mem_atomic_op op,
 				  enum aarch64_insn_mem_order_type order);
-u32 aarch64_insn_gen_cas(enum aarch64_insn_register result,
+u32 aarch64_insn_gen_cas(enum aarch64_insn_register value,
 			 enum aarch64_insn_register address,
-			 enum aarch64_insn_register value,
+			 enum aarch64_insn_register result,
 			 enum aarch64_insn_size_type size,
 			 enum aarch64_insn_mem_order_type order);
 u32 aarch64_insn_gen_dmb(enum aarch64_insn_mb_type type);
