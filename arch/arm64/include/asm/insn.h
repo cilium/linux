@@ -370,6 +370,7 @@ __AARCH64_INSN_FUNCS(ldr_reg,	0x3FE0EC00, 0x38606800)
 __AARCH64_INSN_FUNCS(signed_ldr_reg, 0X3FE0FC00, 0x38A0E800)
 __AARCH64_INSN_FUNCS(ldr_imm,	0x3FC00000, 0x39400000)
 __AARCH64_INSN_FUNCS(ldr_lit,	0xBF000000, 0x18000000)
+__AARCH64_INSN_FUNCS(simd_ldr_lit,	0x3F000000, 0x1C000000)
 __AARCH64_INSN_FUNCS(ldrsw_lit,	0xFF000000, 0x98000000)
 __AARCH64_INSN_FUNCS(exclusive,	0x3F800000, 0x08000000)
 __AARCH64_INSN_FUNCS(load_acq,  0x3FDFFC00, 0x08DFFC00)
@@ -435,6 +436,8 @@ __AARCH64_INSN_FUNCS(cbnz,	0x7F000000, 0x35000000)
 __AARCH64_INSN_FUNCS(tbz,	0x7F000000, 0x36000000)
 __AARCH64_INSN_FUNCS(tbnz,	0x7F000000, 0x37000000)
 __AARCH64_INSN_FUNCS(bcond,	0xFF000000, 0x54000000)
+__AARCH64_INSN_FUNCS(cb_cond,	0x7E000000, 0x74000000)
+__AARCH64_INSN_FUNCS(ret_auth_pc,	0xFFC0001F, 0x5500001F)
 __AARCH64_INSN_FUNCS(svc,	0xFFE0001F, 0xD4000001)
 __AARCH64_INSN_FUNCS(hvc,	0xFFE0001F, 0xD4000002)
 __AARCH64_INSN_FUNCS(smc,	0xFFE0001F, 0xD4000003)
@@ -447,6 +450,9 @@ __AARCH64_INSN_FUNCS(blr,	0xFFFFFC1F, 0xD63F0000)
 __AARCH64_INSN_FUNCS(blr_auth,	0xFEFFF800, 0xD63F0800)
 __AARCH64_INSN_FUNCS(ret,	0xFFFFFC1F, 0xD65F0000)
 __AARCH64_INSN_FUNCS(ret_auth,	0xFFFFFBFF, 0xD65F0BFF)
+__AARCH64_INSN_FUNCS(ret_auth_pc_reg,	0xFFFFFBE0, 0xD65F0BE0)
+__AARCH64_INSN_FUNCS(aut_pc,	0xFFC0001F, 0xF380001F)
+__AARCH64_INSN_FUNCS(pac_pc,	0xFFFFDBFF, 0xDAC183FE)
 __AARCH64_INSN_FUNCS(eret,	0xFFFFFFFF, 0xD69F03E0)
 __AARCH64_INSN_FUNCS(eret_auth,	0xFFFFFBFF, 0xD69F0BFF)
 __AARCH64_INSN_FUNCS(mrs,	0xFFF00000, 0xD5300000)
@@ -496,10 +502,13 @@ static __always_inline bool aarch64_insn_is_branch(u32 insn)
 	       aarch64_insn_is_bl(insn) ||
 	       aarch64_insn_is_cbz(insn) ||
 	       aarch64_insn_is_cbnz(insn) ||
+	       aarch64_insn_is_cb_cond(insn) ||
 	       aarch64_insn_is_tbz(insn) ||
 	       aarch64_insn_is_tbnz(insn) ||
 	       aarch64_insn_is_ret(insn) ||
 	       aarch64_insn_is_ret_auth(insn) ||
+	       aarch64_insn_is_ret_auth_pc(insn) ||
+	       aarch64_insn_is_ret_auth_pc_reg(insn) ||
 	       aarch64_insn_is_br(insn) ||
 	       aarch64_insn_is_br_auth(insn) ||
 	       aarch64_insn_is_blr(insn) ||
@@ -574,6 +583,7 @@ static __always_inline bool aarch64_insn_uses_literal(u32 insn)
 	/* ldr/ldrsw (literal), prfm */
 
 	return aarch64_insn_is_ldr_lit(insn) ||
+	       aarch64_insn_is_simd_ldr_lit(insn) ||
 	       aarch64_insn_is_ldrsw_lit(insn) ||
 	       aarch64_insn_is_adr_adrp(insn) ||
 	       aarch64_insn_is_prfm_lit(insn);
