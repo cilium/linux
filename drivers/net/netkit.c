@@ -53,15 +53,19 @@ static __always_inline int
 netkit_run(const struct bpf_mprog_entry *entry, struct sk_buff *skb,
 	   enum netkit_action ret)
 {
+	struct bpf_net_context *bpf_net_ctx = bpf_net_ctx_get();
+	struct sk_buff *prev = bpf_net_ctx->sk_assign_skb;
 	const struct bpf_mprog_fp *fp;
 	const struct bpf_prog *prog;
 
+	bpf_net_ctx->sk_assign_skb = skb;
 	bpf_mprog_foreach_prog(entry, fp, prog) {
 		bpf_compute_data_pointers(skb);
 		ret = bpf_prog_run(prog, skb);
 		if (ret != NETKIT_NEXT)
 			break;
 	}
+	bpf_net_ctx->sk_assign_skb = prev;
 	return ret;
 }
 
