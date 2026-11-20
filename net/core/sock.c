@@ -2871,6 +2871,15 @@ void sock_pfree(struct sk_buff *skb)
 	sock_gen_put(sk);
 }
 EXPORT_SYMBOL(sock_pfree);
+
+void skb_release_prefetched_sk(struct sk_buff *skb, struct sock *sk,
+			       bool refcounted)
+{
+	if (refcounted)
+		sock_gen_put(sk);
+	skb_orphan(skb);
+}
+EXPORT_SYMBOL_GPL(skb_release_prefetched_sk);
 #endif /* CONFIG_INET */
 
 /*

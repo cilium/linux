@@ -2027,6 +2027,8 @@ static inline void sock_put(struct sock *sk)
  * (TCP_TIMEWAIT, TCP_NEW_SYN_RECV, ESTABLISHED...)
  */
 void sock_gen_put(struct sock *sk);
+void skb_release_prefetched_sk(struct sk_buff *skb, struct sock *sk,
+			       bool refcounted);
 
 int __sk_receive_skb(struct sock *sk, struct sk_buff *skb, const int nested,
 		     unsigned int trim_cap, bool refcounted);
