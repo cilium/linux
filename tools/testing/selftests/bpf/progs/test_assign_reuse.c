@@ -22,6 +22,11 @@ union {
 } headers;
 
 const volatile __u16 dest_port;
+const volatile bool check_redirect;
+__u64 assign_calls;
+__u64 assign_errors;
+__u64 redirected_packets;
+__u64 redirected_sockets;
 
 struct {
 	__uint(type, BPF_MAP_TYPE_SOCKMAP);
@@ -74,7 +79,15 @@ assign_sk(struct __sk_buff *skb)
 		return TC_ACT_SHOT;
 	ret = bpf_sk_assign(skb, sk, 0);
 	bpf_sk_release(sk);
-	return ret ? TC_ACT_SHOT : TC_ACT_OK;
+	if (!check_redirect)
+		return ret ? TC_ACT_SHOT : TC_ACT_OK;
+	__sync_fetch_and_add(&assign_calls, 1);
+	if (ret) {
+		__sync_fetch_and_add(&assign_errors, 1);
+		return TC_ACT_SHOT;
+	}
+	skb->mark = 1;
+	return bpf_redirect(skb->ifindex, BPF_F_INGRESS);
 }
 
 static bool
@@ -109,6 +122,13 @@ int tc_main(struct __sk_buff *skb)
 	void *data_end = (void *)(long)skb->data_end;
 	void *data = (void *)(long)skb->data;
 	struct ethhdr *eth;
+
+	if (check_redirect && skb->mark == 1) {
+		if (skb->sk)
+			__sync_fetch_and_add(&redirected_sockets, 1);
+		__sync_fetch_and_add(&redirected_packets, 1);
+		return TC_ACT_SHOT;
+	}
 
 	eth = (struct ethhdr *)(data);
 	if (eth + 1 > data_end)

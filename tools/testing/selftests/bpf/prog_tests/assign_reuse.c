@@ -171,6 +171,75 @@ cleanup:
 	free_fds(fd_sv, 1);
 }
 
+static void run_assign_redirect(int family, const char *ip)
+{
+	bool hook_created = false, tc_attached = false;
+	DECLARE_LIBBPF_OPTS(bpf_tc_hook, tc_hook,
+		.ifindex = LOOPBACK,
+		.attach_point = BPF_TC_INGRESS,
+	);
+	DECLARE_LIBBPF_OPTS(bpf_tc_opts, tc_opts,
+		.handle = 1,
+		.priority = 1,
+	);
+	struct test_assign_reuse *skel;
+	int server = -1, ret, i;
+	const int zero = 0;
+	__u64 fd_val;
+
+	skel = test_assign_reuse__open();
+	if (!ASSERT_OK_PTR(skel, "skel_open"))
+		goto cleanup;
+	skel->rodata->dest_port = PORT;
+	skel->rodata->check_redirect = true;
+	if (!ASSERT_OK(test_assign_reuse__load(skel), "skel_load"))
+		goto cleanup;
+	server = start_server(family, SOCK_DGRAM, ip, PORT, 100);
+	if (!ASSERT_GE(server, 0, "start_server"))
+		goto cleanup;
+	fd_val = server;
+	ret = bpf_map_update_elem(bpf_map__fd(skel->maps.sk_map), &zero,
+				  &fd_val, BPF_NOEXIST);
+	if (!ASSERT_OK(ret, "sk_map_update"))
+		goto cleanup;
+	ret = bpf_tc_hook_create(&tc_hook);
+	if (ret == 0)
+		hook_created = true;
+	ret = ret == -EEXIST ? 0 : ret;
+	if (!ASSERT_OK(ret, "bpf_tc_hook_create"))
+		goto cleanup;
+	tc_opts.prog_fd = bpf_program__fd(skel->progs.tc_main);
+	if (!ASSERT_OK(bpf_tc_attach(&tc_hook, &tc_opts), "bpf_tc_attach"))
+		goto cleanup;
+	tc_attached = true;
+
+	ASSERT_EQ(echo_test_udp(server), EAGAIN, "redirect_dropped");
+	for (i = 0; i < 1000; i++) {
+		if (__atomic_load_n(&skel->bss->redirected_packets,
+				    __ATOMIC_ACQUIRE))
+			break;
+		usleep(1000);
+	}
+	ASSERT_EQ(skel->bss->assign_calls, 1, "assign_calls");
+	ASSERT_EQ(skel->bss->assign_errors, 0, "assign_errors");
+	ASSERT_EQ(skel->bss->redirected_packets, 1, "redirected_packets");
+	ASSERT_EQ(skel->bss->redirected_sockets, 0, "redirected_sockets");
+cleanup:
+	if (tc_attached) {
+		tc_opts.flags = 0;
+		tc_opts.prog_fd = 0;
+		tc_opts.prog_id = 0;
+		ASSERT_OK(bpf_tc_detach(&tc_hook, &tc_opts), "bpf_tc_detach");
+	}
+	if (hook_created) {
+		tc_hook.attach_point = BPF_TC_INGRESS | BPF_TC_EGRESS;
+		bpf_tc_hook_destroy(&tc_hook);
+	}
+	if (server >= 0)
+		close(server);
+	test_assign_reuse__destroy(skel);
+}
+
 void test_assign_reuse(void)
 {
 	struct nstoken *tok = NULL;
@@ -190,6 +259,10 @@ void test_assign_reuse(void)
 		run_assign_reuse(AF_INET, SOCK_DGRAM, "127.0.0.1", PORT);
 	if (test__start_subtest("udpv6"))
 		run_assign_reuse(AF_INET6, SOCK_DGRAM, "::1", PORT);
+	if (test__start_subtest("ipv4_redirect"))
+		run_assign_redirect(AF_INET, "127.0.0.1");
+	if (test__start_subtest("ipv6_redirect"))
+		run_assign_redirect(AF_INET6, "::1");
 
 cleanup:
 	close_netns(tok);
