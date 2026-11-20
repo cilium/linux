@@ -8111,24 +8111,37 @@ static const struct bpf_func_proto bpf_tcp_gen_syncookie_proto = {
 	.arg5_type	= ARG_MEM_SIZE,
 };
 
+static bool bpf_sk_assign_netkit(const struct sk_buff *skb)
+{
+	struct bpf_net_context *bpf_net_ctx = bpf_net_ctx_get();
+
+	return bpf_net_ctx && bpf_net_ctx->sk_assign_skb == skb;
+}
+
 BPF_CALL_3(bpf_sk_assign, struct sk_buff *, skb, struct sock *, sk, u64, flags)
 {
+	bool owned = bpf_sk_assign_netkit(skb);
+
 	if (!sk || flags != 0)
 		return -EINVAL;
-	if (!skb_at_tc_ingress(skb))
+	if (owned) {
+		if (!sk_fullsock(sk) || (skb->sk && !skb->destructor))
+			return -EOPNOTSUPP;
+	} else if (!skb_at_tc_ingress(skb)) {
 		return -EOPNOTSUPP;
+	}
 	if (unlikely(dev_net(skb->dev) != sock_net(sk)))
 		return -ENETUNREACH;
 	if (sk_unhashed(sk) ||
 	    (sk_fullsock(sk) && !sk_is_tcp(sk) && !sk_is_udp(sk)))
 		return -EOPNOTSUPP;
-	if (sk_is_refcounted(sk) &&
+	if ((owned || sk_is_refcounted(sk)) &&
 	    unlikely(!refcount_inc_not_zero_acquire(&sk->sk_refcnt)))
 		return -ENOENT;
 
 	skb_orphan(skb);
 	skb->sk = sk;
-	skb->destructor = sock_pfree;
+	skb->destructor = owned ? sock_pfree_ref : sock_pfree;
 
 	return 0;
 }

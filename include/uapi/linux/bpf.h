@@ -4611,7 +4611,10 @@ union bpf_attr {
  *		**bpf_clone_redirect**\ () or other methods outside of BPF may
  *		interfere with successful delivery to the socket.
  *
- *		This operation is only valid from TC ingress path.
+ *		This operation is valid from TC ingress and from netkit
+ *		programs. In netkit programs, only full sockets are accepted,
+ *		and the *skb* then holds a reference on *sk* until the receive
+ *		path consumes it or the *skb* is freed.
  *
  *		The *flags* argument must be zero.
  *	Return
@@ -4624,8 +4627,9 @@ union bpf_attr {
  *		**-ENETUNREACH** if the socket is unreachable (wrong netns).
  *
  *		**-EOPNOTSUPP** if the operation is not supported, for example
- *		a call from outside of TC ingress, or a socket that is not a
- *		TCP or UDP socket.
+ *		a call from outside of TC ingress or netkit programs, a socket
+ *		that is not a TCP or UDP socket, or a request or time-wait
+ *		socket in a netkit program.
  *
  * long bpf_sk_assign(struct bpf_sk_lookup *ctx, struct bpf_sock *sk, u64 flags)
  *	Description

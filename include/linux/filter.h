@@ -998,6 +998,7 @@ struct bpf_net_context {
 	struct list_head cpu_map_flush_list;
 	struct list_head dev_map_flush_list;
 	struct list_head xskmap_map_flush_list;
+	struct sk_buff *sk_assign_skb;
 };
 
 static inline struct bpf_net_context *bpf_net_ctx_set(struct bpf_net_context *bpf_net_ctx)
@@ -1007,6 +1008,7 @@ static inline struct bpf_net_context *bpf_net_ctx_set(struct bpf_net_context *bp
 	if (tsk->bpf_net_context != NULL)
 		return NULL;
 	bpf_net_ctx->ri.kern_flags = 0;
+	bpf_net_ctx->sk_assign_skb = NULL;
 
 	tsk->bpf_net_context = bpf_net_ctx;
 	return bpf_net_ctx;
