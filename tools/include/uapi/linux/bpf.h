@@ -4624,7 +4624,8 @@ union bpf_attr {
  *		**-ENETUNREACH** if the socket is unreachable (wrong netns).
  *
  *		**-EOPNOTSUPP** if the operation is not supported, for example
- *		a call from outside of TC ingress.
+ *		a call from outside of TC ingress, or a socket that is not a
+ *		TCP or UDP socket.
  *
  * long bpf_sk_assign(struct bpf_sk_lookup *ctx, struct bpf_sock *sk, u64 flags)
  *	Description

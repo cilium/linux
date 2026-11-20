@@ -446,7 +446,8 @@ static inline
 struct sock *inet_steal_sock(struct net *net, struct sk_buff *skb, int doff,
 			     const __be32 saddr, const __be16 sport,
 			     const __be32 daddr, const __be16 dport,
-			     bool *refcounted, inet_ehashfn_t *ehashfn)
+			     bool *refcounted, inet_ehashfn_t *ehashfn,
+			     u8 protocol)
 {
 	struct sock *sk, *reuse_sk;
 	bool prefetched;
@@ -455,19 +456,24 @@ struct sock *inet_steal_sock(struct net *net, struct sk_buff *skb, int doff,
 	if (!sk)
 		return NULL;
 
-	if (!prefetched || !sk_fullsock(sk))
+	if (!prefetched)
 		return sk;
 
-	if (sk->sk_protocol == IPPROTO_TCP) {
-		if (sk->sk_state != TCP_LISTEN)
-			return sk;
-	} else if (sk->sk_protocol == IPPROTO_UDP) {
-		if (sk->sk_state != TCP_CLOSE)
-			return sk;
-	} else {
+	if (protocol == IPPROTO_TCP) {
+		if (sk->sk_state == TCP_LISTEN)
+			goto reuseport;
+		if (sk_fullsock(sk) &&
+		    unlikely(sk->sk_protocol != IPPROTO_TCP))
+			goto mismatch;
 		return sk;
 	}
 
+	if (!sk_fullsock(sk) || unlikely(sk->sk_protocol != IPPROTO_UDP))
+		goto mismatch;
+	if (sk->sk_state != TCP_CLOSE)
+		return sk;
+
+reuseport:
 	reuse_sk = inet_lookup_reuseport(net, sk, skb, doff,
 					 saddr, sport, daddr, ntohs(dport),
 					 ehashfn);
@@ -480,6 +486,12 @@ struct sock *inet_steal_sock(struct net *net, struct sk_buff *skb, int doff,
 	WARN_ON_ONCE(*refcounted);
 
 	return reuse_sk;
+
+mismatch:
+	if (*refcounted)
+		sock_gen_put(sk);
+	*refcounted = false;
+	return ERR_PTR(-EPROTOTYPE);
 }
 
 static inline struct sock *__inet_lookup_skb(struct sk_buff *skb,
@@ -494,7 +506,7 @@ static inline struct sock *__inet_lookup_skb(struct sk_buff *skb,
 	struct sock *sk;
 
 	sk = inet_steal_sock(net, skb, doff, iph->saddr, sport, iph->daddr, dport,
-			     refcounted, inet_ehashfn);
+			     refcounted, inet_ehashfn, IPPROTO_TCP);
 	if (IS_ERR(sk))
 		return NULL;
 	if (sk)

@@ -106,7 +106,8 @@ static inline
 struct sock *inet6_steal_sock(struct net *net, struct sk_buff *skb, int doff,
 			      const struct in6_addr *saddr, const __be16 sport,
 			      const struct in6_addr *daddr, const __be16 dport,
-			      bool *refcounted, inet6_ehashfn_t *ehashfn)
+			      bool *refcounted, inet6_ehashfn_t *ehashfn,
+			      u8 protocol)
 {
 	struct sock *sk, *reuse_sk;
 	bool prefetched;
@@ -115,19 +116,27 @@ struct sock *inet6_steal_sock(struct net *net, struct sk_buff *skb, int doff,
 	if (!sk)
 		return NULL;
 
-	if (!prefetched || !sk_fullsock(sk))
+	if (!prefetched)
 		return sk;
 
-	if (sk->sk_protocol == IPPROTO_TCP) {
-		if (sk->sk_state != TCP_LISTEN)
-			return sk;
-	} else if (sk->sk_protocol == IPPROTO_UDP) {
-		if (sk->sk_state != TCP_CLOSE)
-			return sk;
-	} else {
+	if (unlikely(sk->sk_family != AF_INET6))
+		goto mismatch;
+
+	if (protocol == IPPROTO_TCP) {
+		if (sk->sk_state == TCP_LISTEN)
+			goto reuseport;
+		if (sk_fullsock(sk) &&
+		    unlikely(sk->sk_protocol != IPPROTO_TCP))
+			goto mismatch;
 		return sk;
 	}
 
+	if (!sk_fullsock(sk) || unlikely(sk->sk_protocol != IPPROTO_UDP))
+		goto mismatch;
+	if (sk->sk_state != TCP_CLOSE)
+		return sk;
+
+reuseport:
 	reuse_sk = inet6_lookup_reuseport(net, sk, skb, doff,
 					  saddr, sport, daddr, ntohs(dport),
 					  ehashfn);
@@ -140,6 +149,12 @@ struct sock *inet6_steal_sock(struct net *net, struct sk_buff *skb, int doff,
 	WARN_ON_ONCE(*refcounted);
 
 	return reuse_sk;
+
+mismatch:
+	if (*refcounted)
+		sock_gen_put(sk);
+	*refcounted = false;
+	return ERR_PTR(-EPROTOTYPE);
 }
 
 static inline struct sock *__inet6_lookup_skb(struct sk_buff *skb, int doff,
@@ -153,7 +168,7 @@ static inline struct sock *__inet6_lookup_skb(struct sk_buff *skb, int doff,
 	struct sock *sk;
 
 	sk = inet6_steal_sock(net, skb, doff, &ip6h->saddr, sport, &ip6h->daddr, dport,
-			      refcounted, inet6_ehashfn);
+			      refcounted, inet6_ehashfn, IPPROTO_TCP);
 	if (IS_ERR(sk))
 		return NULL;
 	if (sk)

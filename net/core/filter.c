@@ -8112,7 +8112,8 @@ BPF_CALL_3(bpf_sk_assign, struct sk_buff *, skb, struct sock *, sk, u64, flags)
 		return -EOPNOTSUPP;
 	if (unlikely(dev_net(skb->dev) != sock_net(sk)))
 		return -ENETUNREACH;
-	if (sk_unhashed(sk))
+	if (sk_unhashed(sk) ||
+	    (sk_fullsock(sk) && !sk_is_tcp(sk) && !sk_is_udp(sk)))
 		return -EOPNOTSUPP;
 	if (sk_is_refcounted(sk) &&
 	    unlikely(!refcount_inc_not_zero_acquire(&sk->sk_refcnt)))
