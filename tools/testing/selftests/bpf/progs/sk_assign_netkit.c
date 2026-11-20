@@ -10,16 +10,45 @@
 #include <bpf/bpf_endian.h>
 #include <bpf/bpf_helpers.h>
 
+enum {
+	AFTER_ASSIGN_PASS,
+	AFTER_ASSIGN_DROP,
+	AFTER_ASSIGN_REDIRECT,
+};
+
 const volatile __u16 dest_port;
 const volatile __u16 proxy_port;
+const volatile bool measure_queue;
+const volatile bool use_proxy_map;
+const volatile __u32 after_assign;
+const volatile __u32 redirect_ifindex;
+__u64 reuse_calls;
+__u64 reuse_errors;
 __u64 listener_assignments;
 __u64 established_assignments;
 __u64 assign_errors;
 __u64 request_rejections;
+__u64 measurement_started;
+__u64 measurement_done;
+__u64 blocked_syns;
 struct bpf_sock_tuple probe_tuple;
 __u32 probe_len;
 __u32 probe_state;
 int probe_result;
+
+struct {
+	__uint(type, BPF_MAP_TYPE_SOCKMAP);
+	__uint(max_entries, 1);
+	__type(key, __u32);
+	__type(value, __u64);
+} proxy_map SEC(".maps");
+
+struct {
+	__uint(type, BPF_MAP_TYPE_REUSEPORT_SOCKARRAY);
+	__uint(max_entries, 2);
+	__type(key, __u32);
+	__type(value, __u64);
+} reuse_map SEC(".maps");
 
 SEC("netkit/peer")
 int assign_socket(struct __sk_buff *skb)
@@ -64,6 +93,18 @@ int assign_socket(struct __sk_buff *skb)
 	}
 	if (th + 1 > data_end || th->dest != bpf_htons(dest_port))
 		return TCX_PASS;
+	if (measure_queue) {
+		skb->mark = 0;
+		if (th->syn && !th->ack) {
+			if (__sync_val_compare_and_swap(&measurement_started, 0, 1)) {
+				__sync_fetch_and_add(&blocked_syns, 1);
+				return TCX_DROP;
+			}
+			skb->mark = 1;
+		} else if (!__sync_val_compare_and_swap(&measurement_done, 0, 0)) {
+			return TCX_DROP;
+		}
+	}
 	if (ipv4) {
 		tuple.ipv4.sport = th->source;
 		tuple.ipv4.dport = th->dest;
@@ -92,12 +133,19 @@ int assign_socket(struct __sk_buff *skb)
 		bpf_sk_release(sk);
 	}
 
-	__builtin_memset(&tuple, 0, sizeof(tuple));
-	if (ipv4)
-		tuple.ipv4.dport = bpf_htons(proxy_port);
-	else
-		tuple.ipv6.dport = bpf_htons(proxy_port);
-	sk = bpf_skc_lookup_tcp(skb, &tuple, len, BPF_F_CURRENT_NETNS, 0);
+	if (use_proxy_map) {
+		__u32 zero = 0;
+
+		sk = bpf_map_lookup_elem(&proxy_map, &zero);
+	} else {
+		__builtin_memset(&tuple, 0, sizeof(tuple));
+		if (ipv4)
+			tuple.ipv4.dport = bpf_htons(proxy_port);
+		else
+			tuple.ipv6.dport = bpf_htons(proxy_port);
+		sk = bpf_skc_lookup_tcp(skb, &tuple, len, BPF_F_CURRENT_NETNS,
+					0);
+	}
 	if (!sk) {
 		__sync_fetch_and_add(&assign_errors, 1);
 		return TCX_DROP;
@@ -110,7 +158,24 @@ assign:
 		__sync_fetch_and_add(&assign_errors, 1);
 		return TCX_DROP;
 	}
+	if (after_assign == AFTER_ASSIGN_DROP)
+		return TCX_DROP;
+	if (after_assign == AFTER_ASSIGN_REDIRECT)
+		return bpf_redirect(redirect_ifindex, 0);
 	return TCX_PASS;
+}
+
+SEC("sk_reuseport")
+int select_second(struct sk_reuseport_md *ctx)
+{
+	__u32 index = 1;
+
+	__sync_fetch_and_add(&reuse_calls, 1);
+	if (bpf_sk_select_reuseport(ctx, &reuse_map, &index, 0)) {
+		__sync_fetch_and_add(&reuse_errors, 1);
+		return SK_DROP;
+	}
+	return SK_PASS;
 }
 
 SEC("tc")
