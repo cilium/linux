@@ -2674,8 +2674,10 @@ int udp_rcv(struct sk_buff *skb)
 
 	sk = inet_steal_sock(net, skb, sizeof(struct udphdr), saddr, uh->source, daddr, uh->dest,
 			     &refcounted, udp_ehashfn);
-	if (IS_ERR(sk))
+	if (IS_ERR(sk)) {
+		sk = NULL;
 		goto no_sk;
+	}
 
 	if (sk) {
 		struct dst_entry *dst = skb_dst(skb);

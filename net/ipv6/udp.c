@@ -1116,8 +1116,10 @@ INDIRECT_CALLABLE_SCOPE int udpv6_rcv(struct sk_buff *skb)
 	/* Check if the socket is already available, e.g. due to early demux */
 	sk = inet6_steal_sock(net, skb, sizeof(struct udphdr), saddr, uh->source, daddr, uh->dest,
 			      &refcounted, udp6_ehashfn);
-	if (IS_ERR(sk))
+	if (IS_ERR(sk)) {
+		sk = NULL;
 		goto no_sk;
+	}
 
 	if (sk) {
 		struct dst_entry *dst = skb_dst(skb);
